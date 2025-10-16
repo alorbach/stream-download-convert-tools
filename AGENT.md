@@ -26,6 +26,7 @@ This repository contains Python-based audio/video tools for downloading and proc
 ### Dependencies
 - Core dependencies listed in `requirements.txt`
 - Uses `yt-dlp` for YouTube downloading (modern fork of youtube-dl)
+- Uses `FFmpeg` for video/audio conversion and modification
 - GUI built with tkinter (included in Python standard library)
 
 ### Project Structure
@@ -34,12 +35,21 @@ audiotools/
 ├── venv/                    # Virtual environment (auto-created, gitignored)
 ├── input/                   # Input CSV files
 │   └── top100.csv          # Sample YouTube links CSV
-├── downloads/              # Downloaded files go here
+├── downloads/              # Downloaded files go here (gitignored)
+├── converted/              # Converted MP3 files (gitignored)
+├── converted_changed/      # Modified audio files (gitignored)
+├── ffmpeg/                 # FFmpeg portable installation (gitignored)
 ├── scripts/                # Python application scripts
-│   └── youtube_downloader.py
+│   ├── youtube_downloader.py     # YouTube downloader with GUI
+│   ├── video_to_mp3_converter.py # Video to MP3 converter with GUI
+│   └── audio_modifier.py         # Audio modifier with GUI
 ├── launchers/              # Launcher scripts
-│   ├── youtube_downloader.bat    # Windows launcher
-│   └── youtube_downloader.sh     # Linux/Mac launcher
+│   ├── youtube_downloader.bat        # Windows launcher
+│   ├── youtube_downloader.sh         # Linux/Mac launcher
+│   ├── video_to_mp3_converter.bat    # Windows launcher
+│   ├── video_to_mp3_converter.sh     # Linux/Mac launcher
+│   ├── audio_modifier.bat            # Windows launcher
+│   └── audio_modifier.sh             # Linux/Mac launcher
 ├── requirements.txt        # Python dependencies
 ├── .gitignore             # Git ignore rules
 ├── AGENT.md               # This file
@@ -90,6 +100,9 @@ The project uses CSV files with YouTube links. Example format from `input/top100
 
 ### External Tools Used
 - **yt-dlp**: YouTube downloading (https://github.com/yt-dlp/yt-dlp)
+- **FFmpeg**: Video/audio conversion and modification (https://ffmpeg.org/)
+  - Windows: Automatically downloaded by video_to_mp3_converter.py and audio_modifier.py
+  - Linux/Mac: User must install manually
 - **tkinter**: GUI framework (included with Python)
 - **csv**: CSV parsing (Python standard library)
 

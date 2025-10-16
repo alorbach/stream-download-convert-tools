@@ -1,0 +1,494 @@
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox, scrolledtext
+import os
+import sys
+import threading
+import subprocess
+import platform
+import urllib.request
+import zipfile
+import shutil
+from pathlib import Path
+
+
+class AudioModifierGUI:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Audio Modifier")
+        self.root.geometry("800x750")
+        
+        self.selected_files = []
+        self.root_dir = os.path.dirname(os.path.dirname(__file__))
+        self.converted_folder = os.path.join(self.root_dir, "converted")
+        self.output_folder = os.path.join(self.root_dir, "converted_changed")
+        self.ffmpeg_folder = os.path.join(self.root_dir, "ffmpeg")
+        self.is_busy = False
+        self.modification_queue = []
+        self.current_index = 0
+        self.ffmpeg_path = None
+        
+        os.makedirs(self.converted_folder, exist_ok=True)
+        os.makedirs(self.output_folder, exist_ok=True)
+        
+        self.setup_ui()
+    
+    def setup_ui(self):
+        top_frame = ttk.LabelFrame(self.root, text="File Selection", padding=10)
+        top_frame.pack(fill='both', expand=True, padx=10, pady=10)
+        
+        btn_frame = ttk.Frame(top_frame)
+        btn_frame.pack(fill='x', pady=5)
+        
+        ttk.Button(btn_frame, text="Select Audio Files", command=self.select_files).pack(side='left', padx=5)
+        ttk.Button(btn_frame, text="Clear Selection", command=self.clear_selection).pack(side='left', padx=5)
+        
+        self.lbl_status = ttk.Label(btn_frame, text="No files selected")
+        self.lbl_status.pack(side='left', padx=10)
+        
+        ttk.Label(top_frame, text="Selected Files:").pack(anchor='w', pady=(10, 5))
+        
+        list_frame = ttk.Frame(top_frame)
+        list_frame.pack(fill='both', expand=True)
+        
+        scrollbar_y = ttk.Scrollbar(list_frame, orient='vertical')
+        scrollbar_x = ttk.Scrollbar(list_frame, orient='horizontal')
+        
+        self.file_listbox = tk.Listbox(
+            list_frame,
+            yscrollcommand=scrollbar_y.set,
+            xscrollcommand=scrollbar_x.set,
+            height=8,
+            selectmode=tk.EXTENDED
+        )
+        
+        scrollbar_y.config(command=self.file_listbox.yview)
+        scrollbar_x.config(command=self.file_listbox.xview)
+        
+        self.file_listbox.grid(row=0, column=0, sticky='nsew')
+        scrollbar_y.grid(row=0, column=1, sticky='ns')
+        scrollbar_x.grid(row=1, column=0, sticky='ew')
+        
+        list_frame.grid_rowconfigure(0, weight=1)
+        list_frame.grid_columnconfigure(0, weight=1)
+        
+        settings_frame = ttk.LabelFrame(self.root, text="Modification Settings", padding=10)
+        settings_frame.pack(fill='x', padx=10, pady=10)
+        
+        ttk.Label(settings_frame, text="Output Folder:").grid(row=0, column=0, sticky='w', pady=5)
+        self.folder_var = tk.StringVar(value=self.output_folder)
+        ttk.Entry(settings_frame, textvariable=self.folder_var, width=50).grid(row=0, column=1, padx=5)
+        ttk.Button(settings_frame, text="Browse", command=self.browse_folder).grid(row=0, column=2)
+        
+        ttk.Label(settings_frame, text="Speed Adjustment (%):").grid(row=1, column=0, sticky='w', pady=5)
+        speed_frame = ttk.Frame(settings_frame)
+        speed_frame.grid(row=1, column=1, sticky='w', padx=5)
+        self.speed_var = tk.StringVar(value="0")
+        speed_spinbox = ttk.Spinbox(speed_frame, textvariable=self.speed_var, from_=-50, to=100, width=10, increment=5)
+        speed_spinbox.pack(side='left')
+        ttk.Label(speed_frame, text=" (-50% to +100%, 0 = no change)").pack(side='left', padx=5)
+        
+        ttk.Label(settings_frame, text="Pitch Adjustment (semitones):").grid(row=2, column=0, sticky='w', pady=5)
+        pitch_frame = ttk.Frame(settings_frame)
+        pitch_frame.grid(row=2, column=1, sticky='w', padx=5)
+        self.pitch_var = tk.StringVar(value="0")
+        pitch_spinbox = ttk.Spinbox(pitch_frame, textvariable=self.pitch_var, from_=-12, to=12, width=10, increment=1)
+        pitch_spinbox.pack(side='left')
+        ttk.Label(pitch_frame, text=" (-12 to +12 semitones, 0 = no change)").pack(side='left', padx=5)
+        
+        ttk.Label(settings_frame, text="Audio Quality:").grid(row=3, column=0, sticky='w', pady=5)
+        self.quality_var = tk.StringVar(value="192k")
+        quality_combo = ttk.Combobox(settings_frame, textvariable=self.quality_var, width=20, state='readonly')
+        quality_combo['values'] = ('128k', '192k', '256k', '320k')
+        quality_combo.grid(row=3, column=1, sticky='w', padx=5)
+        
+        preset_frame = ttk.LabelFrame(self.root, text="Quick Presets", padding=10)
+        preset_frame.pack(fill='x', padx=10, pady=10)
+        
+        btn_preset_frame = ttk.Frame(preset_frame)
+        btn_preset_frame.pack(fill='x')
+        
+        ttk.Button(btn_preset_frame, text="Slower -10%", command=lambda: self.apply_preset(-10, 0)).pack(side='left', padx=2)
+        ttk.Button(btn_preset_frame, text="Faster +10%", command=lambda: self.apply_preset(10, 0)).pack(side='left', padx=2)
+        ttk.Button(btn_preset_frame, text="Pitch -1", command=lambda: self.apply_preset(0, -1)).pack(side='left', padx=2)
+        ttk.Button(btn_preset_frame, text="Pitch +1", command=lambda: self.apply_preset(0, 1)).pack(side='left', padx=2)
+        ttk.Button(btn_preset_frame, text="Reset", command=lambda: self.apply_preset(0, 0)).pack(side='left', padx=2)
+        
+        modify_frame = ttk.Frame(self.root)
+        modify_frame.pack(fill='x', padx=10, pady=10)
+        
+        ttk.Button(modify_frame, text="Modify Audio Files", command=self.start_modification).pack(pady=5)
+        
+        self.progress = ttk.Progressbar(modify_frame, mode='determinate')
+        self.progress.pack(fill='x', pady=5)
+        
+        self.progress_label = ttk.Label(modify_frame, text="")
+        self.progress_label.pack(anchor='w')
+        
+        log_frame = ttk.LabelFrame(self.root, text="Modification Log", padding=10)
+        log_frame.pack(fill='both', expand=True, padx=10, pady=10)
+        
+        self.log_text = scrolledtext.ScrolledText(log_frame, height=12)
+        self.log_text.pack(fill='both', expand=True)
+        
+        info_frame = ttk.Frame(self.root)
+        info_frame.pack(fill='x', padx=10, pady=5)
+        
+        info_text = "Supported formats: MP3, M4A, WAV, OGG, FLAC | Speed: +/- tempo | Pitch: semitones | Requires FFmpeg"
+        ttk.Label(info_frame, text=info_text, font=('Arial', 8)).pack()
+    
+    def apply_preset(self, speed, pitch):
+        self.speed_var.set(str(speed))
+        self.pitch_var.set(str(pitch))
+        self.log(f"[INFO] Applied preset: Speed {speed:+d}%, Pitch {pitch:+d} semitones")
+    
+    def set_busy(self, busy=True, message=""):
+        self.is_busy = busy
+        if busy:
+            self.root.config(cursor="wait")
+            self.progress_label.config(text=message)
+        else:
+            self.root.config(cursor="")
+            self.progress_label.config(text="")
+    
+    def browse_folder(self):
+        folder = filedialog.askdirectory(initialdir=self.folder_var.get())
+        if folder:
+            self.folder_var.set(folder)
+            self.output_folder = folder
+    
+    def select_files(self):
+        files = filedialog.askopenfilenames(
+            title="Select Audio Files",
+            filetypes=[
+                ("Audio Files", "*.mp3 *.m4a *.wav *.ogg *.flac"),
+                ("MP3 Files", "*.mp3"),
+                ("M4A Files", "*.m4a"),
+                ("WAV Files", "*.wav"),
+                ("All Files", "*.*")
+            ],
+            initialdir=self.converted_folder
+        )
+        
+        if files:
+            for file in files:
+                if file not in self.selected_files:
+                    self.selected_files.append(file)
+            
+            self.update_file_list()
+            self.log(f"[INFO] Added {len(files)} file(s) to selection")
+    
+    def clear_selection(self):
+        self.selected_files.clear()
+        self.update_file_list()
+        self.log("[INFO] Selection cleared")
+    
+    def update_file_list(self):
+        self.file_listbox.delete(0, tk.END)
+        
+        for file in self.selected_files:
+            filename = os.path.basename(file)
+            self.file_listbox.insert(tk.END, filename)
+        
+        count = len(self.selected_files)
+        self.lbl_status.config(text=f"{count} file(s) selected")
+    
+    def check_ffmpeg(self):
+        local_ffmpeg = os.path.join(self.ffmpeg_folder, 'bin', 'ffmpeg.exe' if sys.platform == 'win32' else 'ffmpeg')
+        
+        if os.path.exists(local_ffmpeg):
+            self.ffmpeg_path = local_ffmpeg
+            self.log(f"[INFO] Using local FFmpeg: {local_ffmpeg}")
+            return True
+        
+        try:
+            result = subprocess.run(
+                ['ffmpeg', '-version'],
+                capture_output=True,
+                text=True,
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+            )
+            if result.returncode == 0:
+                self.ffmpeg_path = 'ffmpeg'
+                self.log("[INFO] Using system FFmpeg")
+                return True
+        except FileNotFoundError:
+            pass
+        
+        return False
+    
+    def offer_ffmpeg_install(self):
+        system = platform.system()
+        
+        if system == 'Windows':
+            response = messagebox.askyesno(
+                "FFmpeg Not Found",
+                "FFmpeg is required for audio modification but was not found.\n\n"
+                "Would you like to download FFmpeg automatically?\n"
+                "(Portable version, no admin rights needed)\n\n"
+                "This will download approximately 80MB."
+            )
+            
+            if response:
+                self.download_ffmpeg_windows()
+            else:
+                messagebox.showinfo(
+                    "Manual Installation",
+                    "You can download FFmpeg manually from:\n"
+                    "https://ffmpeg.org/download.html\n\n"
+                    "Add it to your system PATH or place it in the\n"
+                    "ffmpeg/bin folder within this project."
+                )
+        else:
+            install_cmd = ""
+            if system == 'Linux':
+                install_cmd = "sudo apt-get install ffmpeg"
+            elif system == 'Darwin':
+                install_cmd = "brew install ffmpeg"
+            
+            messagebox.showerror(
+                "FFmpeg Not Found",
+                f"FFmpeg is required for audio modification.\n\n"
+                f"Please install FFmpeg using:\n"
+                f"{install_cmd}\n\n"
+                f"Or download from: https://ffmpeg.org/download.html"
+            )
+            self.log(f"[ERROR] FFmpeg not found. Install command: {install_cmd}")
+    
+    def download_ffmpeg_windows(self):
+        self.set_busy(True, "Downloading FFmpeg...")
+        self.log("[INFO] Starting FFmpeg download...")
+        
+        thread = threading.Thread(target=self._download_ffmpeg_thread)
+        thread.daemon = True
+        thread.start()
+    
+    def _download_ffmpeg_thread(self):
+        try:
+            ffmpeg_url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+            temp_zip = os.path.join(self.root_dir, "ffmpeg_temp.zip")
+            
+            self.root.after(0, lambda: self.log(f"[INFO] Downloading from: {ffmpeg_url}"))
+            self.root.after(0, lambda: self.log("[INFO] This may take a few minutes..."))
+            
+            def download_progress(block_num, block_size, total_size):
+                if total_size > 0:
+                    percent = int((block_num * block_size / total_size) * 100)
+                    if block_num % 50 == 0:
+                        self.root.after(0, lambda p=percent: self.log(f"[INFO] Download progress: {p}%"))
+            
+            urllib.request.urlretrieve(ffmpeg_url, temp_zip, download_progress)
+            
+            self.root.after(0, lambda: self.log("[INFO] Download complete. Extracting..."))
+            
+            os.makedirs(self.ffmpeg_folder, exist_ok=True)
+            
+            with zipfile.ZipFile(temp_zip, 'r') as zip_ref:
+                for member in zip_ref.namelist():
+                    if '/bin/' in member and member.endswith(('.exe', '.dll')):
+                        filename = os.path.basename(member)
+                        target_path = os.path.join(self.ffmpeg_folder, 'bin', filename)
+                        os.makedirs(os.path.dirname(target_path), exist_ok=True)
+                        
+                        with zip_ref.open(member) as source:
+                            with open(target_path, 'wb') as target:
+                                shutil.copyfileobj(source, target)
+            
+            os.remove(temp_zip)
+            
+            self.root.after(0, lambda: self.log("[SUCCESS] FFmpeg installed successfully!"))
+            self.root.after(0, lambda: messagebox.showinfo(
+                "Success",
+                "FFmpeg has been installed successfully!\n\nYou can now modify audio files."
+            ))
+            self.root.after(0, lambda: self.set_busy(False))
+            
+        except Exception as e:
+            error_msg = str(e)
+            self.root.after(0, lambda msg=error_msg: self.log(f"[ERROR] FFmpeg download failed: {msg}"))
+            self.root.after(0, lambda msg=error_msg: messagebox.showerror(
+                "Download Failed",
+                f"Failed to download FFmpeg:\n{msg}\n\n"
+                "Please download manually from:\n"
+                "https://ffmpeg.org/download.html"
+            ))
+            self.root.after(0, lambda: self.set_busy(False))
+    
+    def start_modification(self):
+        if self.is_busy:
+            messagebox.showwarning("Warning", "Modification already in progress")
+            return
+        
+        if not self.selected_files:
+            messagebox.showwarning("Warning", "Please select at least one audio file")
+            return
+        
+        try:
+            speed_percent = float(self.speed_var.get())
+            pitch_semitones = float(self.pitch_var.get())
+        except ValueError:
+            messagebox.showerror("Error", "Invalid speed or pitch value. Please enter valid numbers.")
+            return
+        
+        if speed_percent < -50 or speed_percent > 100:
+            messagebox.showerror("Error", "Speed adjustment must be between -50% and +100%")
+            return
+        
+        if pitch_semitones < -12 or pitch_semitones > 12:
+            messagebox.showerror("Error", "Pitch adjustment must be between -12 and +12 semitones")
+            return
+        
+        if speed_percent == 0 and pitch_semitones == 0:
+            messagebox.showwarning("Warning", "No modifications specified (both speed and pitch are 0)")
+            return
+        
+        if not self.check_ffmpeg():
+            self.offer_ffmpeg_install()
+            return
+        
+        self.output_folder = self.folder_var.get()
+        os.makedirs(self.output_folder, exist_ok=True)
+        
+        self.modification_queue = self.selected_files.copy()
+        self.current_index = 0
+        
+        self.log(f"[INFO] Starting modification of {len(self.modification_queue)} file(s)")
+        self.log(f"[INFO] Output folder: {self.output_folder}")
+        self.log(f"[INFO] Speed: {speed_percent:+.1f}%, Pitch: {pitch_semitones:+.1f} semitones")
+        self.log(f"[INFO] Audio quality: {self.quality_var.get()}")
+        
+        self.progress['maximum'] = len(self.modification_queue)
+        self.progress['value'] = 0
+        
+        self.set_busy(True, "Modifying...")
+        
+        thread = threading.Thread(target=self._modification_thread, args=(speed_percent, pitch_semitones))
+        thread.daemon = True
+        thread.start()
+    
+    def _modification_thread(self, speed_percent, pitch_semitones):
+        success_count = 0
+        error_count = 0
+        
+        for i, input_file in enumerate(self.modification_queue):
+            self.current_index = i + 1
+            
+            input_path = Path(input_file)
+            basename = input_path.stem
+            extension = input_path.suffix
+            
+            suffix_parts = []
+            if speed_percent != 0:
+                suffix_parts.append(f"speed{speed_percent:+.0f}pct")
+            if pitch_semitones != 0:
+                suffix_parts.append(f"pitch{pitch_semitones:+.0f}st")
+            
+            suffix = "_" + "_".join(suffix_parts) if suffix_parts else "_modified"
+            output_file = os.path.join(self.output_folder, f"{basename}{suffix}{extension}")
+            
+            self.root.after(
+                0,
+                lambda idx=i+1, total=len(self.modification_queue), name=input_path.name:
+                self.set_busy(True, f"Modifying {idx}/{total}: {name}")
+            )
+            
+            self.root.after(
+                0,
+                lambda msg=f"\n[INFO] Modifying ({i+1}/{len(self.modification_queue)}): {input_path.name}":
+                self.log(msg)
+            )
+            
+            try:
+                ffmpeg_cmd = self.ffmpeg_path if self.ffmpeg_path else 'ffmpeg'
+                
+                filters = []
+                
+                if speed_percent != 0:
+                    speed_factor = 1.0 + (speed_percent / 100.0)
+                    filters.append(f"atempo={speed_factor}")
+                
+                if pitch_semitones != 0:
+                    pitch_factor = 2 ** (pitch_semitones / 12.0)
+                    filters.append(f"asetrate=44100*{pitch_factor},aresample=44100")
+                
+                cmd = [
+                    ffmpeg_cmd,
+                    '-i', str(input_file)
+                ]
+                
+                if filters:
+                    filter_str = ','.join(filters)
+                    cmd.extend(['-af', filter_str])
+                
+                cmd.extend([
+                    '-ar', '44100',
+                    '-ac', '2',
+                    '-b:a', self.quality_var.get(),
+                    '-y',
+                    output_file
+                ])
+                
+                process = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+                )
+                
+                if process.returncode == 0:
+                    success_count += 1
+                    self.root.after(
+                        0,
+                        lambda out=output_file:
+                        self.log(f"[SUCCESS] Saved: {os.path.basename(out)}")
+                    )
+                else:
+                    error_count += 1
+                    error_msg = process.stderr if process.stderr else "Unknown error"
+                    self.root.after(
+                        0,
+                        lambda err=error_msg:
+                        self.log(f"[ERROR] Modification failed: {err[:200]}")
+                    )
+                
+            except Exception as e:
+                error_count += 1
+                error_msg = str(e)
+                self.root.after(
+                    0,
+                    lambda msg=error_msg:
+                    self.log(f"[ERROR] Exception: {msg}")
+                )
+            
+            self.root.after(0, lambda v=i+1: self.progress.config(value=v))
+        
+        self.root.after(
+            0,
+            lambda s=success_count, e=error_count:
+            self.log(f"\n[COMPLETE] Modification finished: {s} succeeded, {e} failed")
+        )
+        
+        self.root.after(
+            0,
+            lambda s=success_count, e=error_count:
+            messagebox.showinfo(
+                "Modification Complete",
+                f"Modification finished!\n\nSuccessful: {s}\nFailed: {e}"
+            )
+        )
+        
+        self.root.after(0, lambda: self.set_busy(False))
+    
+    def log(self, message):
+        self.log_text.insert(tk.END, f"{message}\n")
+        self.log_text.see(tk.END)
+
+
+def main():
+    root = tk.Tk()
+    app = AudioModifierGUI(root)
+    root.mainloop()
+
+
+if __name__ == '__main__':
+    main()
+

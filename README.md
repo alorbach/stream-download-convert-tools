@@ -25,6 +25,19 @@ A graphical application for converting video/audio files to MP3 format:
 - Uses FFmpeg for high-quality conversion
 - Automatic FFmpeg installation on Windows (no admin rights needed)
 
+### Audio Modifier (GUI)
+A graphical application for modifying audio files with speed and pitch adjustments:
+- Modify MP3, M4A, WAV, OGG, FLAC files
+- Speed adjustment: -50% to +100% (tempo change without pitch change)
+- Pitch adjustment: -12 to +12 semitones (change pitch without tempo change)
+- Quick preset buttons for common modifications
+- Batch processing with progress tracking
+- Configurable audio quality (128k, 192k, 256k, 320k)
+- Automatic output to converted_changed folder with descriptive suffixes
+- Real-time modification log
+- Uses FFmpeg for high-quality audio processing
+- Automatic FFmpeg installation on Windows (no admin rights needed)
+
 ## Requirements
 
 - Python 3.7 or higher
@@ -49,12 +62,15 @@ A graphical application for converting video/audio files to MP3 format:
 
 3. **Launch Video to MP3 Converter**: Double-click `launchers/video_to_mp3_converter.bat`
 
+4. **Launch Audio Modifier**: Double-click `launchers/audio_modifier.bat`
+
 ### Linux/Mac
 
 1. Make the launcher executable (first time only):
    ```bash
    chmod +x launchers/youtube_downloader.sh
    chmod +x launchers/video_to_mp3_converter.sh
+   chmod +x launchers/audio_modifier.sh
    ```
 
 2. **Basic Launch**:
@@ -70,6 +86,11 @@ A graphical application for converting video/audio files to MP3 format:
 4. **Launch Video to MP3 Converter**:
    ```bash
    ./launchers/video_to_mp3_converter.sh
+   ```
+
+5. **Launch Audio Modifier**:
+   ```bash
+   ./launchers/audio_modifier.sh
    ```
 
 ## How to Use YouTube Downloader
@@ -142,6 +163,63 @@ A graphical application for converting video/audio files to MP3 format:
    - Converted MP3 files are in the `converted/` folder
    - Original video/audio files remain unchanged
 
+## How to Use Audio Modifier
+
+1. **Launch the Application**
+   - Windows: Double-click `launchers/audio_modifier.bat`
+   - Linux/Mac: Run `./launchers/audio_modifier.sh`
+
+2. **FFmpeg Setup (First Time Only)**
+   - Windows: If FFmpeg is not found, the app will offer to download it automatically
+   - Click "Yes" to download (approximately 80MB, no admin rights needed)
+   - Linux/Mac: Install FFmpeg using the command shown in the prompt
+
+3. **Select Audio Files**
+   - Click "Select Audio Files"
+   - Choose one or more audio files (MP3, M4A, WAV, OGG, FLAC)
+   - Files will appear in the selection list
+   - Default folder: `converted/` (where MP3 files are saved)
+
+4. **Configure Modifications**
+   - **Speed Adjustment**: -50% to +100%
+     - Negative values slow down the audio
+     - Positive values speed up the audio
+     - Changes tempo without affecting pitch
+   - **Pitch Adjustment**: -12 to +12 semitones
+     - Negative values lower the pitch
+     - Positive values raise the pitch
+     - 12 semitones = 1 octave
+     - Changes pitch without affecting tempo
+   - **Audio Quality**: Select 128k, 192k, 256k, or 320k
+
+5. **Use Quick Presets** (Optional)
+   - Slower -10%: Reduce speed by 10%
+   - Faster +10%: Increase speed by 10%
+   - Pitch -1: Lower pitch by 1 semitone
+   - Pitch +1: Raise pitch by 1 semitone
+   - Reset: Set both to 0 (no change)
+
+6. **Modify Audio Files**
+   - Click "Modify Audio Files"
+   - Progress bar shows modification progress
+   - Log window displays detailed processing information
+   - Output files are saved with descriptive suffixes
+
+7. **Find Your Files**
+   - Modified audio files are in the `converted_changed/` folder
+   - Filename format: `original_name_speed+10pct_pitch+2st.mp3`
+   - Original audio files remain unchanged
+
+## Examples
+
+### Audio Modification Examples
+- **Slow down a song by 10%**: Speed = -10%, Pitch = 0
+- **Speed up a song by 20%**: Speed = 20%, Pitch = 0
+- **Lower pitch by 1 semitone**: Speed = 0%, Pitch = -1
+- **Raise pitch by 2 semitones**: Speed = 0%, Pitch = 2
+- **Slow down AND lower pitch**: Speed = -10%, Pitch = -2
+- **Speed up AND raise pitch**: Speed = 15%, Pitch = 1
+
 ## CSV File Format
 
 Your CSV file should contain YouTube links. The downloader supports:
@@ -163,15 +241,19 @@ audiotools/
 │   └── top100.csv                      # Sample YouTube links
 ├── downloads/                           # Downloaded videos (auto-created)
 ├── converted/                           # Converted MP3 files (auto-created)
+├── converted_changed/                   # Modified audio files (auto-created)
 ├── ffmpeg/                              # FFmpeg portable (Windows, auto-downloaded)
 ├── scripts/                             # Python scripts
 │   ├── youtube_downloader.py           # YouTube downloader application
-│   └── video_to_mp3_converter.py       # Video to MP3 converter
+│   ├── video_to_mp3_converter.py       # Video to MP3 converter
+│   └── audio_modifier.py               # Audio modifier application
 ├── launchers/                           # Launcher scripts
 │   ├── youtube_downloader.bat          # Windows launcher (YouTube)
 │   ├── youtube_downloader.sh           # Linux/Mac launcher (YouTube)
 │   ├── video_to_mp3_converter.bat      # Windows launcher (Converter)
-│   └── video_to_mp3_converter.sh       # Linux/Mac launcher (Converter)
+│   ├── video_to_mp3_converter.sh       # Linux/Mac launcher (Converter)
+│   ├── audio_modifier.bat              # Windows launcher (Audio Modifier)
+│   └── audio_modifier.sh               # Linux/Mac launcher (Audio Modifier)
 ├── requirements.txt                     # Python dependencies
 ├── .gitignore                           # Git ignore rules
 ├── AGENT.md                             # Developer/agent documentation
@@ -242,10 +324,12 @@ Ensure tkinter is installed with Python:
 - All launchers automatically manage virtual environments
 - Downloaded files are saved to `downloads/` folder by default
 - Converted MP3 files are saved to `converted/` folder by default
+- Modified audio files are saved to `converted_changed/` folder by default
 - The YouTube downloader uses `yt-dlp` which is actively maintained
 - Video to MP3 converter uses FFmpeg for high-quality audio extraction
+- Audio modifier uses FFmpeg for speed and pitch adjustments
 - Filename patterns sanitize special characters automatically
-- Original video files are never modified or deleted during conversion
+- Original video and audio files are never modified or deleted during processing
 
 ## For Developers
 
