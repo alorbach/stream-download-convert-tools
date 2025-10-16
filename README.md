@@ -15,10 +15,24 @@ A graphical application for downloading YouTube videos with advanced features:
 - Visual progress bar and wait cursor during operations
 - Automatic virtual environment management
 
+### Video to MP3 Converter (GUI)
+A graphical application for converting video/audio files to MP3 format:
+- Select multiple video/audio files (MP4, WEBM, M4A, AVI, MOV, MKV, FLV, WMV)
+- Batch conversion with progress tracking
+- Configurable audio quality (128k, 192k, 256k, 320k)
+- Automatic output to converted folder with same basename
+- Real-time conversion log
+- Uses FFmpeg for high-quality conversion
+- Automatic FFmpeg installation on Windows (no admin rights needed)
+
 ## Requirements
 
 - Python 3.7 or higher
-- Internet connection for downloading
+- Internet connection for downloading YouTube videos
+- FFmpeg (required for video to MP3 conversion)
+  - Windows: Automatically downloaded when first needed (no admin rights required)
+  - Linux: `sudo apt-get install ffmpeg`
+  - Mac: `brew install ffmpeg`
 
 ## Installation & Usage
 
@@ -33,11 +47,14 @@ A graphical application for downloading YouTube videos with advanced features:
    launchers\youtube_downloader.bat input\top100.csv
    ```
 
+3. **Launch Video to MP3 Converter**: Double-click `launchers/video_to_mp3_converter.bat`
+
 ### Linux/Mac
 
 1. Make the launcher executable (first time only):
    ```bash
    chmod +x launchers/youtube_downloader.sh
+   chmod +x launchers/video_to_mp3_converter.sh
    ```
 
 2. **Basic Launch**:
@@ -48,6 +65,11 @@ A graphical application for downloading YouTube videos with advanced features:
 3. **Auto-load CSV**:
    ```bash
    ./launchers/youtube_downloader.sh input/top100.csv
+   ```
+
+4. **Launch Video to MP3 Converter**:
+   ```bash
+   ./launchers/video_to_mp3_converter.sh
    ```
 
 ## How to Use YouTube Downloader
@@ -88,6 +110,38 @@ A graphical application for downloading YouTube videos with advanced features:
      - `{Views (Billions)}` - View count
    - Default pattern: `{Rank}_{Song Title}_{Artist}`
 
+## How to Use Video to MP3 Converter
+
+1. **Launch the Application**
+   - Windows: Double-click `launchers/video_to_mp3_converter.bat`
+   - Linux/Mac: Run `./launchers/video_to_mp3_converter.sh`
+
+2. **FFmpeg Setup (First Time Only)**
+   - Windows: If FFmpeg is not found, the app will offer to download it automatically
+   - Click "Yes" to download (approximately 80MB, no admin rights needed)
+   - Linux/Mac: Install FFmpeg using the command shown in the prompt
+
+3. **Select Video/Audio Files**
+   - Click "Select Video Files"
+   - Choose one or more video/audio files (MP4, WEBM, M4A, etc.)
+   - Files will appear in the selection list
+   - Default folder: `downloads/` (where YouTube videos are saved)
+
+4. **Configure Settings** (Optional)
+   - Choose output folder (default: `converted/`)
+   - Select audio quality: 128k, 192k, 256k, or 320k
+   - Higher quality = larger file size
+
+5. **Convert to MP3**
+   - Click "Convert to MP3"
+   - Progress bar shows conversion progress
+   - Log window displays detailed conversion information
+   - Output files saved with same basename as input
+
+6. **Find Your Files**
+   - Converted MP3 files are in the `converted/` folder
+   - Original video/audio files remain unchanged
+
 ## CSV File Format
 
 Your CSV file should contain YouTube links. The downloader supports:
@@ -104,19 +158,24 @@ Example CSV structure (from `input/top100.csv`):
 
 ```
 audiotools/
-├── venv/                           # Virtual environment (auto-created)
-├── input/                          # Input CSV files
-│   └── top100.csv                 # Sample YouTube links
-├── downloads/                      # Downloaded videos (auto-created)
-├── scripts/                        # Python scripts
-│   └── youtube_downloader.py      # Main downloader application
-├── launchers/                      # Launcher scripts
-│   ├── youtube_downloader.bat     # Windows launcher
-│   └── youtube_downloader.sh      # Linux/Mac launcher
-├── requirements.txt                # Python dependencies
-├── .gitignore                      # Git ignore rules
-├── AGENT.md                        # Developer/agent documentation
-└── README.md                       # This file
+├── venv/                                # Virtual environment (auto-created)
+├── input/                               # Input CSV files
+│   └── top100.csv                      # Sample YouTube links
+├── downloads/                           # Downloaded videos (auto-created)
+├── converted/                           # Converted MP3 files (auto-created)
+├── ffmpeg/                              # FFmpeg portable (Windows, auto-downloaded)
+├── scripts/                             # Python scripts
+│   ├── youtube_downloader.py           # YouTube downloader application
+│   └── video_to_mp3_converter.py       # Video to MP3 converter
+├── launchers/                           # Launcher scripts
+│   ├── youtube_downloader.bat          # Windows launcher (YouTube)
+│   ├── youtube_downloader.sh           # Linux/Mac launcher (YouTube)
+│   ├── video_to_mp3_converter.bat      # Windows launcher (Converter)
+│   └── video_to_mp3_converter.sh       # Linux/Mac launcher (Converter)
+├── requirements.txt                     # Python dependencies
+├── .gitignore                           # Git ignore rules
+├── AGENT.md                             # Developer/agent documentation
+└── README.md                            # This file
 ```
 
 ## Advanced Features
@@ -153,18 +212,40 @@ If downloads fail:
 3. Update yt-dlp: The launcher auto-updates dependencies
 4. Some videos may be geo-restricted or require authentication
 
+### Conversion Failures
+If MP3 conversion fails:
+1. Ensure FFmpeg is installed and in system PATH
+2. Check that video files are not corrupted
+3. Try a different audio quality setting
+4. Verify sufficient disk space in output folder
+
 ### GUI Not Showing
 Ensure tkinter is installed with Python:
 - Windows: Included by default
 - Linux: Install with `sudo apt-get install python3-tk`
 - Mac: Included by default
 
+### FFmpeg Not Found
+**Windows**: The application will offer to download FFmpeg automatically (portable version, no admin rights needed).
+
+**Linux/Mac**: If you get "FFmpeg not found" error:
+1. Install FFmpeg using the command shown in the error message
+2. Restart the application
+3. Test: Open terminal and type `ffmpeg -version`
+
+**Manual Installation (all platforms)**:
+1. Download from https://ffmpeg.org/download.html
+2. Add to system PATH, or place in `ffmpeg/bin/` folder within the project
+
 ## Notes
 
 - All launchers automatically manage virtual environments
 - Downloaded files are saved to `downloads/` folder by default
-- The tool uses `yt-dlp` which is actively maintained
+- Converted MP3 files are saved to `converted/` folder by default
+- The YouTube downloader uses `yt-dlp` which is actively maintained
+- Video to MP3 converter uses FFmpeg for high-quality audio extraction
 - Filename patterns sanitize special characters automatically
+- Original video files are never modified or deleted during conversion
 
 ## For Developers
 
