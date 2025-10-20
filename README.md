@@ -7,6 +7,8 @@ Unified audio and video tools for downloading and processing content from YouTub
 ### Stream Download Convert Tools - Unified Application
 A single graphical application with tabbed interface containing three powerful tools:
 
+![Stream Download Convert Tools - Unified Application](docs/samplestart.png)
+
 #### YouTube Downloader Tab
 - Load CSV files containing YouTube links
 - Command-line support for auto-loading CSV files on startup
@@ -15,6 +17,8 @@ A single graphical application with tabbed interface containing three powerful t
 - Customize output filenames using CSV field data
 - Real-time download progress with console output display
 - Visual progress bar and wait cursor during operations
+
+![YouTube Downloader Tab](docs/youtube_downloader.png)
 
 #### Video to MP3 Converter Tab
 - Select multiple video/audio files (MP4, WEBM, M4A, AVI, MOV, MKV, FLV, WMV)
@@ -240,14 +244,16 @@ stream-download-convert-tools/
 ├── converted/                           # Converted MP3 files (auto-created)
 ├── converted_changed/                   # Modified audio files (auto-created)
 ├── ffmpeg/                              # FFmpeg portable (Windows, auto-downloaded)
+├── docs/                                # Documentation and screenshots
+│   └── samplestart.png                 # Application screenshot
 ├── scripts/                             # Python scripts
-│   ├── audio_tools_unified.py          # Unified application (RECOMMENDED)
+│   ├── stream_download_convert_tools_unified.py  # Unified application (RECOMMENDED)
 │   ├── youtube_downloader.py           # Individual YouTube downloader
 │   ├── video_to_mp3_converter.py       # Individual Video to MP3 converter
 │   └── audio_modifier.py               # Individual Audio modifier
 ├── launchers/                           # Launcher scripts
-│   ├── audio_tools_unified.bat         # Windows launcher (Unified - RECOMMENDED)
-│   ├── audio_tools_unified.sh          # Linux/Mac launcher (Unified - RECOMMENDED)
+│   ├── stream_download_convert_tools_unified.bat  # Windows launcher (Unified - RECOMMENDED)
+│   ├── stream_download_convert_tools_unified.sh   # Linux/Mac launcher (Unified - RECOMMENDED)
 │   ├── youtube_downloader.bat          # Windows launcher (YouTube only)
 │   ├── youtube_downloader.sh           # Linux/Mac launcher (YouTube only)
 │   ├── video_to_mp3_converter.bat      # Windows launcher (Converter only)
@@ -256,7 +262,7 @@ stream-download-convert-tools/
 │   └── audio_modifier.sh               # Linux/Mac launcher (Audio Modifier only)
 ├── requirements.txt                     # Python dependencies
 ├── .gitignore                           # Git ignore rules
-├── AGENT.md                             # Developer/agent documentation
+├── AGENTS.md                            # Developer/agent documentation
 └── README.md                            # This file
 ```
 

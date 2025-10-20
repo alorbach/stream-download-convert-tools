@@ -2,6 +2,8 @@
 
 Welcome to Stream Download Convert Tools! This comprehensive guide will help you get the most out of your audio and video processing workflow.
 
+![Stream Download Convert Tools - Unified Application](docs/screenshot.png)
+
 ## Table of Contents
 
 1. [Getting Started](#getting-started)
@@ -48,6 +50,8 @@ You can automatically load a CSV file on startup:
 - Command line: `./launchers/stream_download_convert_tools_unified.sh input/top100.csv`
 
 ## YouTube Downloader
+
+![YouTube Downloader Tab](docs/youtube_downloader.png)
 
 ### Step 1: Prepare Your CSV File
 
@@ -124,6 +128,8 @@ Streams are organized by type:
 
 ## Video to MP3 Converter
 
+![Video to MP3 Converter Tab](docs/video_to_mp3_converter.png)
+
 ### Step 1: Select Video Files
 
 1. Click "Select Video Files" in the Video to MP3 tab
@@ -158,6 +164,8 @@ Streams are organized by type:
 - **Backup**: Original files are never modified
 
 ## Audio Modifier
+
+![Audio Modifier Tab](docs/audio_modifier.png)
 
 ### Step 1: Select Audio Files
 
@@ -207,6 +215,8 @@ Streams are organized by type:
 - **Backup**: Original files are never modified
 
 ## Settings Configuration
+
+![Settings Tab](docs/settings.png)
 
 ### Download Settings
 
