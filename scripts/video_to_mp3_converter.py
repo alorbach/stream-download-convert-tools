@@ -4,31 +4,21 @@ import os
 import sys
 import threading
 import subprocess
-import platform
-import urllib.request
-import zipfile
-import shutil
 from pathlib import Path
 
+# Import shared libraries
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+from lib.base_gui import BaseAudioGUI
 
-class VideoToMP3ConverterGUI:
+
+class VideoToMP3ConverterGUI(BaseAudioGUI):
     def __init__(self, root):
-        self.root = root
-        self.root.title("Video to MP3 Converter")
+        super().__init__(root, "Video to MP3 Converter")
         self.root.geometry("800x700")
         
         self.selected_files = []
-        self.root_dir = os.path.dirname(os.path.dirname(__file__))
-        self.downloads_folder = os.path.join(self.root_dir, "downloads")
-        self.converted_folder = os.path.join(self.root_dir, "converted")
-        self.ffmpeg_folder = os.path.join(self.root_dir, "ffmpeg")
-        self.is_busy = False
         self.conversion_queue = []
         self.current_index = 0
-        self.ffmpeg_path = None
-        
-        os.makedirs(self.downloads_folder, exist_ok=True)
-        os.makedirs(self.converted_folder, exist_ok=True)
         
         self.setup_ui()
     
@@ -75,7 +65,7 @@ class VideoToMP3ConverterGUI:
         settings_frame.pack(fill='x', padx=10, pady=10)
         
         ttk.Label(settings_frame, text="Output Folder:").grid(row=0, column=0, sticky='w', pady=5)
-        self.folder_var = tk.StringVar(value=self.converted_folder)
+        self.folder_var = tk.StringVar(value=self.file_manager.get_folder_path('converted'))
         ttk.Entry(settings_frame, textvariable=self.folder_var, width=50).grid(row=0, column=1, padx=5)
         ttk.Button(settings_frame, text="Browse", command=self.browse_folder).grid(row=0, column=2)
         
@@ -118,22 +108,16 @@ class VideoToMP3ConverterGUI:
             self.progress_label.config(text="")
     
     def browse_folder(self):
-        folder = filedialog.askdirectory(initialdir=self.folder_var.get())
+        folder = super().browse_folder(self.folder_var.get())
         if folder:
             self.folder_var.set(folder)
-            self.converted_folder = folder
+            self.file_manager.set_folder_path('converted', folder)
     
     def select_files(self):
-        files = filedialog.askopenfilenames(
+        files = super().select_files(
             title="Select Video/Audio Files",
-            filetypes=[
-                ("Video/Audio Files", "*.mp4 *.webm *.avi *.mov *.mkv *.flv *.wmv *.m4a"),
-                ("MP4 Files", "*.mp4"),
-                ("WEBM Files", "*.webm"),
-                ("M4A Files", "*.m4a"),
-                ("All Files", "*.*")
-            ],
-            initialdir=self.downloads_folder
+            filetypes=self.file_manager.get_video_filetypes(),
+            initial_dir=self.file_manager.get_folder_path('downloads')
         )
         
         if files:
@@ -160,125 +144,28 @@ class VideoToMP3ConverterGUI:
         self.lbl_status.config(text=f"{count} file(s) selected")
     
     def check_ffmpeg(self):
-        local_ffmpeg = os.path.join(self.ffmpeg_folder, 'bin', 'ffmpeg.exe' if sys.platform == 'win32' else 'ffmpeg')
-        
-        if os.path.exists(local_ffmpeg):
-            self.ffmpeg_path = local_ffmpeg
-            self.log(f"[INFO] Using local FFmpeg: {local_ffmpeg}")
-            return True
-        
-        try:
-            result = subprocess.run(
-                ['ffmpeg', '-version'],
-                capture_output=True,
-                text=True,
-                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
-            )
-            if result.returncode == 0:
-                self.ffmpeg_path = 'ffmpeg'
-                self.log("[INFO] Using system FFmpeg")
-                return True
-        except FileNotFoundError:
-            pass
-        
-        return False
+        return super().check_ffmpeg()
     
     def offer_ffmpeg_install(self):
-        system = platform.system()
-        
-        if system == 'Windows':
-            response = messagebox.askyesno(
-                "FFmpeg Not Found",
-                "FFmpeg is required for conversion but was not found.\n\n"
-                "Would you like to download FFmpeg automatically?\n"
-                "(Portable version, no admin rights needed)\n\n"
-                "This will download approximately 80MB."
-            )
-            
-            if response:
-                self.download_ffmpeg_windows()
-            else:
-                messagebox.showinfo(
-                    "Manual Installation",
-                    "You can download FFmpeg manually from:\n"
-                    "https://ffmpeg.org/download.html\n\n"
-                    "Add it to your system PATH or place it in the\n"
-                    "ffmpeg/bin folder within this project."
-                )
-        else:
-            install_cmd = ""
-            if system == 'Linux':
-                install_cmd = "sudo apt-get install ffmpeg"
-            elif system == 'Darwin':
-                install_cmd = "brew install ffmpeg"
-            
-            messagebox.showerror(
-                "FFmpeg Not Found",
-                f"FFmpeg is required for conversion.\n\n"
-                f"Please install FFmpeg using:\n"
-                f"{install_cmd}\n\n"
-                f"Or download from: https://ffmpeg.org/download.html"
-            )
-            self.log(f"[ERROR] FFmpeg not found. Install command: {install_cmd}")
+        return super().offer_ffmpeg_install()
     
     def download_ffmpeg_windows(self):
         self.set_busy(True, "Downloading FFmpeg...")
-        self.log("[INFO] Starting FFmpeg download...")
         
-        thread = threading.Thread(target=self._download_ffmpeg_thread)
-        thread.daemon = True
-        thread.start()
-    
-    def _download_ffmpeg_thread(self):
-        try:
-            ffmpeg_url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
-            temp_zip = os.path.join(self.root_dir, "ffmpeg_temp.zip")
-            
-            self.root.after(0, lambda: self.log(f"[INFO] Downloading from: {ffmpeg_url}"))
-            self.root.after(0, lambda: self.log("[INFO] This may take a few minutes..."))
-            
-            def download_progress(block_num, block_size, total_size):
-                if total_size > 0:
-                    percent = int((block_num * block_size / total_size) * 100)
-                    if block_num % 50 == 0:
-                        self.root.after(0, lambda p=percent: self.log(f"[INFO] Download progress: {p}%"))
-            
-            urllib.request.urlretrieve(ffmpeg_url, temp_zip, download_progress)
-            
-            self.root.after(0, lambda: self.log("[INFO] Download complete. Extracting..."))
-            
-            os.makedirs(self.ffmpeg_folder, exist_ok=True)
-            
-            with zipfile.ZipFile(temp_zip, 'r') as zip_ref:
-                for member in zip_ref.namelist():
-                    if '/bin/' in member and member.endswith(('.exe', '.dll')):
-                        filename = os.path.basename(member)
-                        target_path = os.path.join(self.ffmpeg_folder, 'bin', filename)
-                        os.makedirs(os.path.dirname(target_path), exist_ok=True)
-                        
-                        with zip_ref.open(member) as source:
-                            with open(target_path, 'wb') as target:
-                                shutil.copyfileobj(source, target)
-            
-            os.remove(temp_zip)
-            
-            self.root.after(0, lambda: self.log("[SUCCESS] FFmpeg installed successfully!"))
-            self.root.after(0, lambda: messagebox.showinfo(
-                "Success",
-                "FFmpeg has been installed successfully!\n\nYou can now convert files."
-            ))
+        def progress_callback(message):
+            self.root.after(0, lambda msg=message: self.log(f"[INFO] {msg}"))
+        
+        def success_callback(message):
+            self.root.after(0, lambda msg=message: self.log("[SUCCESS] FFmpeg installed successfully!"))
+            self.root.after(0, lambda msg=message: self.show_message("info", "Success", msg))
             self.root.after(0, lambda: self.set_busy(False))
-            
-        except Exception as e:
-            error_msg = str(e)
-            self.root.after(0, lambda msg=error_msg: self.log(f"[ERROR] FFmpeg download failed: {msg}"))
-            self.root.after(0, lambda msg=error_msg: messagebox.showerror(
-                "Download Failed",
-                f"Failed to download FFmpeg:\n{msg}\n\n"
-                "Please download manually from:\n"
-                "https://ffmpeg.org/download.html"
-            ))
+        
+        def error_callback(message):
+            self.root.after(0, lambda msg=message: self.log(f"[ERROR] FFmpeg download failed: {msg}"))
+            self.root.after(0, lambda msg=message: self.show_message("error", "Download Failed", msg))
             self.root.after(0, lambda: self.set_busy(False))
+        
+        super().download_ffmpeg_windows(progress_callback, success_callback, error_callback)
     
     def start_conversion(self):
         if self.is_busy:
@@ -293,14 +180,14 @@ class VideoToMP3ConverterGUI:
             self.offer_ffmpeg_install()
             return
         
-        self.converted_folder = self.folder_var.get()
-        os.makedirs(self.converted_folder, exist_ok=True)
+        self.file_manager.set_folder_path('converted', self.folder_var.get())
+        self.ensure_directory(self.file_manager.get_folder_path('converted'))
         
         self.conversion_queue = self.selected_files.copy()
         self.current_index = 0
         
         self.log(f"[INFO] Starting conversion of {len(self.conversion_queue)} file(s)")
-        self.log(f"[INFO] Output folder: {self.converted_folder}")
+        self.log(f"[INFO] Output folder: {self.file_manager.get_folder_path('converted')}")
         self.log(f"[INFO] Audio quality: {self.quality_var.get()}")
         
         self.progress['maximum'] = len(self.conversion_queue)
@@ -321,7 +208,7 @@ class VideoToMP3ConverterGUI:
             
             input_path = Path(input_file)
             basename = input_path.stem
-            output_file = os.path.join(self.converted_folder, f"{basename}.mp3")
+            output_file = os.path.join(self.file_manager.get_folder_path('converted'), f"{basename}.mp3")
             
             self.root.after(
                 0,
@@ -336,25 +223,12 @@ class VideoToMP3ConverterGUI:
             )
             
             try:
-                ffmpeg_cmd = self.ffmpeg_path if self.ffmpeg_path else 'ffmpeg'
-                
-                cmd = [
-                    ffmpeg_cmd,
-                    '-i', str(input_file),
-                    '-vn',
-                    '-ar', '44100',
-                    '-ac', '2',
-                    '-b:a', self.quality_var.get(),
-                    '-y',
-                    output_file
-                ]
-                
-                process = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+                cmd = self.build_ffmpeg_command(
+                    input_file, output_file,
+                    audio_codec='mp3', audio_bitrate=self.quality_var.get()
                 )
+                
+                process = self.run_ffmpeg_command(cmd)
                 
                 if process.returncode == 0:
                     success_count += 1

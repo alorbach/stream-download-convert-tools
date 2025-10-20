@@ -9,21 +9,20 @@ import subprocess
 import json
 from pathlib import Path
 
+# Import shared libraries
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+from lib.base_gui import BaseAudioGUI
 
-class YouTubeDownloaderGUI:
+
+class YouTubeDownloaderGUI(BaseAudioGUI):
     def __init__(self, root, auto_load_csv=None):
-        self.root = root
-        self.root.title("YouTube Downloader")
+        super().__init__(root, "YouTube Downloader")
         self.root.geometry("900x750")
         
         self.csv_file = None
         self.csv_data = []
         self.available_streams = []
         self.current_video_info = None
-        self.download_folder = os.path.join(os.path.dirname(os.path.dirname(__file__)), "downloads")
-        self.is_busy = False
-        
-        os.makedirs(self.download_folder, exist_ok=True)
         
         self.setup_ui()
         
@@ -132,7 +131,7 @@ class YouTubeDownloaderGUI:
         frame.pack(fill='x', padx=10, pady=10)
         
         ttk.Label(frame, text="Download Folder:").grid(row=0, column=0, sticky='w', pady=5)
-        self.folder_var = tk.StringVar(value=self.download_folder)
+        self.folder_var = tk.StringVar(value=self.file_manager.get_folder_path('downloads'))
         ttk.Entry(frame, textvariable=self.folder_var, width=50).grid(row=0, column=1, padx=5)
         ttk.Button(frame, text="Browse", command=self.browse_folder).grid(row=0, column=2)
         
@@ -180,17 +179,19 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
             self.progress_label.config(text="")
     
     def browse_folder(self):
-        folder = filedialog.askdirectory(initialdir=self.folder_var.get())
+        folder = super().browse_folder(self.folder_var.get())
         if folder:
             self.folder_var.set(folder)
-            self.download_folder = folder
+            self.file_manager.set_folder_path('downloads', folder)
     
     def load_csv(self):
-        file_path = filedialog.askopenfilename(
+        file_path = super().select_files(
             title="Select CSV File",
-            filetypes=[("CSV Files", "*.csv"), ("All Files", "*.*")],
-            initialdir=os.path.join(os.path.dirname(os.path.dirname(__file__)), "input")
+            filetypes=self.file_manager.get_csv_filetypes(),
+            initial_dir=os.path.join(self.root_dir, "input")
         )
+        if file_path:
+            file_path = file_path[0]  # select_files returns tuple, we need first item
         
         if not file_path:
             return
@@ -426,7 +427,7 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
             return
         
         filename_pattern = self.filename_var.get()
-        filename = self._create_filename(filename_pattern, self.current_video_info)
+        filename = self.create_filename_from_pattern(filename_pattern, self.current_video_info)
         
         self.log(f"[INFO] Starting download: Format {format_id}")
         self.log(f"[INFO] Output file: {filename}")
@@ -436,24 +437,10 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
         thread.daemon = True
         thread.start()
     
-    def _create_filename(self, pattern, row_data):
-        filename = pattern
-        
-        for key, value in row_data.items():
-            placeholder = f"{{{key}}}"
-            if placeholder in filename:
-                safe_value = re.sub(r'[<>:"/\\|?*]', '_', str(value))
-                filename = filename.replace(placeholder, safe_value)
-        
-        filename = re.sub(r'\{[^}]+\}', '', filename)
-        filename = re.sub(r'_+', '_', filename)
-        filename = filename.strip('_')
-        
-        return filename
     
     def _download_thread(self, url, format_id, filename):
         try:
-            output_path = os.path.join(self.download_folder, filename)
+            output_path = os.path.join(self.file_manager.get_folder_path('downloads'), filename)
             
             cmd = [
                 'yt-dlp',
