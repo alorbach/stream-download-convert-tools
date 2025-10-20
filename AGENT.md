@@ -1,7 +1,7 @@
 # Agent Instructions for audiotools Project
 
 ## Project Overview
-This repository contains Python-based audio/video tools for downloading and processing YouTube content.
+This repository contains Python-based audio/video tools for downloading and processing YouTube content. The main application is now a unified tool with tabbed interface, though individual tools remain available for legacy users.
 
 ## Important Guidelines
 
@@ -40,16 +40,19 @@ audiotools/
 ├── converted_changed/      # Modified audio files (gitignored)
 ├── ffmpeg/                 # FFmpeg portable installation (gitignored)
 ├── scripts/                # Python application scripts
-│   ├── youtube_downloader.py     # YouTube downloader with GUI
-│   ├── video_to_mp3_converter.py # Video to MP3 converter with GUI
-│   └── audio_modifier.py         # Audio modifier with GUI
+│   ├── audio_tools_unified.py      # Unified application (RECOMMENDED)
+│   ├── youtube_downloader.py      # Individual YouTube downloader
+│   ├── video_to_mp3_converter.py   # Individual Video to MP3 converter
+│   └── audio_modifier.py           # Individual Audio modifier
 ├── launchers/              # Launcher scripts
-│   ├── youtube_downloader.bat        # Windows launcher
-│   ├── youtube_downloader.sh         # Linux/Mac launcher
-│   ├── video_to_mp3_converter.bat    # Windows launcher
-│   ├── video_to_mp3_converter.sh     # Linux/Mac launcher
-│   ├── audio_modifier.bat            # Windows launcher
-│   └── audio_modifier.sh             # Linux/Mac launcher
+│   ├── audio_tools_unified.bat     # Windows launcher (Unified - RECOMMENDED)
+│   ├── audio_tools_unified.sh      # Linux/Mac launcher (Unified - RECOMMENDED)
+│   ├── youtube_downloader.bat     # Windows launcher (Individual)
+│   ├── youtube_downloader.sh       # Linux/Mac launcher (Individual)
+│   ├── video_to_mp3_converter.bat # Windows launcher (Individual)
+│   ├── video_to_mp3_converter.sh  # Linux/Mac launcher (Individual)
+│   ├── audio_modifier.bat          # Windows launcher (Individual)
+│   └── audio_modifier.sh           # Linux/Mac launcher (Individual)
 ├── requirements.txt        # Python dependencies
 ├── .gitignore             # Git ignore rules
 ├── AGENT.md               # This file
@@ -87,6 +90,12 @@ The project uses CSV files with YouTube links. Example format from `input/top100
 3. Create launcher in `launchers/` directory
 4. Update README.md with usage instructions
 5. Test launcher on target platform
+
+#### Working with Unified Application
+- **Primary Application**: `audio_tools_unified.py` - Contains all three tools in tabbed interface
+- **Launcher**: `audio_tools_unified.bat/.sh` - Main launcher for unified application
+- **Individual Tools**: Still available for users who prefer separate applications
+- **Development**: When modifying functionality, update both unified and individual tools if needed
 
 #### Updating Dependencies
 1. Modify `requirements.txt`

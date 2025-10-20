@@ -1,11 +1,13 @@
 # audiotools
 
-Audio and video tools for downloading and processing content from YouTube.
+Unified audio and video tools for downloading and processing content from YouTube.
 
 ## Features
 
-### YouTube Downloader (GUI)
-A graphical application for downloading YouTube videos with advanced features:
+### Audio Tools - Unified Application
+A single graphical application with tabbed interface containing three powerful tools:
+
+#### YouTube Downloader Tab
 - Load CSV files containing YouTube links
 - Command-line support for auto-loading CSV files on startup
 - View all available video/audio streams with quality information
@@ -13,20 +15,16 @@ A graphical application for downloading YouTube videos with advanced features:
 - Customize output filenames using CSV field data
 - Real-time download progress with console output display
 - Visual progress bar and wait cursor during operations
-- Automatic virtual environment management
 
-### Video to MP3 Converter (GUI)
-A graphical application for converting video/audio files to MP3 format:
+#### Video to MP3 Converter Tab
 - Select multiple video/audio files (MP4, WEBM, M4A, AVI, MOV, MKV, FLV, WMV)
 - Batch conversion with progress tracking
 - Configurable audio quality (128k, 192k, 256k, 320k)
 - Automatic output to converted folder with same basename
 - Real-time conversion log
 - Uses FFmpeg for high-quality conversion
-- Automatic FFmpeg installation on Windows (no admin rights needed)
 
-### Audio Modifier (GUI)
-A graphical application for modifying audio files with speed and pitch adjustments:
+#### Audio Modifier Tab
 - Modify MP3, M4A, WAV, OGG, FLAC files
 - Speed adjustment: -50% to +100% (tempo change without pitch change)
 - Pitch adjustment: -12 to +12 semitones (change pitch without tempo change)
@@ -36,7 +34,19 @@ A graphical application for modifying audio files with speed and pitch adjustmen
 - Automatic output to converted_changed folder with descriptive suffixes
 - Real-time modification log
 - Uses FFmpeg for high-quality audio processing
-- Automatic FFmpeg installation on Windows (no admin rights needed)
+
+#### Settings Tab
+- Configure download folder location
+- Customize filename patterns for YouTube downloads
+- Centralized settings management
+
+### Key Benefits of Unified Application
+- Single application to launch instead of three separate tools
+- Seamless workflow between downloading, converting, and modifying
+- Shared FFmpeg installation and management
+- Consistent user interface across all tools
+- Automatic virtual environment management
+- Cross-platform support (Windows, Linux, Mac)
 
 ## Requirements
 
@@ -51,58 +61,56 @@ A graphical application for modifying audio files with speed and pitch adjustmen
 
 ### Windows
 
-1. **Basic Launch**: Double-click `launchers/youtube_downloader.bat`
+1. **Launch Unified Application**: Double-click `launchers/audio_tools_unified.bat`
    - First run will automatically create virtual environment and install dependencies
    - Subsequent runs will launch directly
 
 2. **Auto-load CSV**: Drag and drop a CSV file onto the launcher, or:
    ```cmd
-   launchers\youtube_downloader.bat input\top100.csv
+   launchers\audio_tools_unified.bat input\top100.csv
    ```
-
-3. **Launch Video to MP3 Converter**: Double-click `launchers/video_to_mp3_converter.bat`
-
-4. **Launch Audio Modifier**: Double-click `launchers/audio_modifier.bat`
 
 ### Linux/Mac
 
 1. Make the launcher executable (first time only):
    ```bash
-   chmod +x launchers/youtube_downloader.sh
-   chmod +x launchers/video_to_mp3_converter.sh
-   chmod +x launchers/audio_modifier.sh
+   chmod +x launchers/audio_tools_unified.sh
    ```
 
 2. **Basic Launch**:
    ```bash
-   ./launchers/youtube_downloader.sh
+   ./launchers/audio_tools_unified.sh
    ```
 
 3. **Auto-load CSV**:
    ```bash
-   ./launchers/youtube_downloader.sh input/top100.csv
+   ./launchers/audio_tools_unified.sh input/top100.csv
    ```
 
-4. **Launch Video to MP3 Converter**:
-   ```bash
-   ./launchers/video_to_mp3_converter.sh
-   ```
+### Legacy Individual Tools (Still Available)
 
-5. **Launch Audio Modifier**:
-   ```bash
-   ./launchers/audio_modifier.sh
-   ```
+The original individual tools are still available for users who prefer separate applications:
 
-## How to Use YouTube Downloader
+**Windows:**
+- `launchers/youtube_downloader.bat` - YouTube downloader only
+- `launchers/video_to_mp3_converter.bat` - Video to MP3 converter only  
+- `launchers/audio_modifier.bat` - Audio modifier only
+
+**Linux/Mac:**
+- `launchers/youtube_downloader.sh` - YouTube downloader only
+- `launchers/video_to_mp3_converter.sh` - Video to MP3 converter only
+- `launchers/audio_modifier.sh` - Audio modifier only
+
+## How to Use Audio Tools - Unified
+
+### YouTube Downloader Tab
 
 1. **Load CSV File**
-   - Go to "Load CSV" tab
    - Click "Select CSV File" and choose your CSV file
    - Preview will show the file contents
    - Sample file: `input/top100.csv`
 
 2. **Select Video**
-   - Go to "Download Videos" tab
    - Select a video from the list
    - Click "Fetch Available Streams"
 
@@ -120,67 +128,34 @@ A graphical application for modifying audio files with speed and pitch adjustmen
    - Real-time console output appears in the log window
    - Files are saved to the `downloads/` folder
 
-5. **Configure Settings** (Optional)
-   - Go to "Settings" tab
-   - Change download folder location
-   - Customize filename pattern using CSV fields:
-     - `{Rank}` - Rank number
-     - `{Song Title}` - Song title
-     - `{Artist}` - Artist name
-     - `{Year}` - Year
-     - `{Views (Billions)}` - View count
-   - Default pattern: `{Rank}_{Song Title}_{Artist}`
+### Video to MP3 Converter Tab
 
-## How to Use Video to MP3 Converter
-
-1. **Launch the Application**
-   - Windows: Double-click `launchers/video_to_mp3_converter.bat`
-   - Linux/Mac: Run `./launchers/video_to_mp3_converter.sh`
-
-2. **FFmpeg Setup (First Time Only)**
-   - Windows: If FFmpeg is not found, the app will offer to download it automatically
-   - Click "Yes" to download (approximately 80MB, no admin rights needed)
-   - Linux/Mac: Install FFmpeg using the command shown in the prompt
-
-3. **Select Video/Audio Files**
+1. **Select Video/Audio Files**
    - Click "Select Video Files"
    - Choose one or more video/audio files (MP4, WEBM, M4A, etc.)
    - Files will appear in the selection list
    - Default folder: `downloads/` (where YouTube videos are saved)
 
-4. **Configure Settings** (Optional)
+2. **Configure Settings** (Optional)
    - Choose output folder (default: `converted/`)
    - Select audio quality: 128k, 192k, 256k, or 320k
    - Higher quality = larger file size
 
-5. **Convert to MP3**
+3. **Convert to MP3**
    - Click "Convert to MP3"
    - Progress bar shows conversion progress
    - Log window displays detailed conversion information
    - Output files saved with same basename as input
 
-6. **Find Your Files**
-   - Converted MP3 files are in the `converted/` folder
-   - Original video/audio files remain unchanged
+### Audio Modifier Tab
 
-## How to Use Audio Modifier
-
-1. **Launch the Application**
-   - Windows: Double-click `launchers/audio_modifier.bat`
-   - Linux/Mac: Run `./launchers/audio_modifier.sh`
-
-2. **FFmpeg Setup (First Time Only)**
-   - Windows: If FFmpeg is not found, the app will offer to download it automatically
-   - Click "Yes" to download (approximately 80MB, no admin rights needed)
-   - Linux/Mac: Install FFmpeg using the command shown in the prompt
-
-3. **Select Audio Files**
+1. **Select Audio Files**
    - Click "Select Audio Files"
    - Choose one or more audio files (MP3, M4A, WAV, OGG, FLAC)
    - Files will appear in the selection list
    - Default folder: `converted/` (where MP3 files are saved)
 
-4. **Configure Modifications**
+2. **Configure Modifications**
    - **Speed Adjustment**: -50% to +100%
      - Negative values slow down the audio
      - Positive values speed up the audio
@@ -192,23 +167,44 @@ A graphical application for modifying audio files with speed and pitch adjustmen
      - Changes pitch without affecting tempo
    - **Audio Quality**: Select 128k, 192k, 256k, or 320k
 
-5. **Use Quick Presets** (Optional)
+3. **Use Quick Presets** (Optional)
    - Slower -10%: Reduce speed by 10%
    - Faster +10%: Increase speed by 10%
    - Pitch -1: Lower pitch by 1 semitone
    - Pitch +1: Raise pitch by 1 semitone
    - Reset: Set both to 0 (no change)
 
-6. **Modify Audio Files**
+4. **Modify Audio Files**
    - Click "Modify Audio Files"
    - Progress bar shows modification progress
    - Log window displays detailed processing information
    - Output files are saved with descriptive suffixes
 
-7. **Find Your Files**
-   - Modified audio files are in the `converted_changed/` folder
-   - Filename format: `original_name_speed+10pct_pitch+2st.mp3`
-   - Original audio files remain unchanged
+### Settings Tab
+
+1. **Configure Download Settings**
+   - Change download folder location
+   - Customize filename pattern using CSV fields:
+     - `{Rank}` - Rank number
+     - `{Song Title}` - Song title
+     - `{Artist}` - Artist name
+     - `{Year}` - Year
+     - `{Views (Billions)}` - View count
+   - Default pattern: `{Rank}_{Song Title}_{Artist}`
+
+## Recommended Workflow
+
+1. **Download Videos**: Use the YouTube Downloader tab to download videos from CSV lists
+2. **Convert to MP3**: Use the Video to MP3 Converter tab to extract audio from downloaded videos
+3. **Modify Audio**: Use the Audio Modifier tab to adjust speed and pitch as needed
+
+## FFmpeg Setup (First Time Only)
+
+- **Windows**: If FFmpeg is not found, the app will offer to download it automatically
+  - Click "Yes" to download (approximately 80MB, no admin rights needed)
+- **Linux/Mac**: Install FFmpeg using the command shown in the prompt:
+  - Linux: `sudo apt-get install ffmpeg`
+  - Mac: `brew install ffmpeg`
 
 ## Examples
 
@@ -244,16 +240,19 @@ audiotools/
 ├── converted_changed/                   # Modified audio files (auto-created)
 ├── ffmpeg/                              # FFmpeg portable (Windows, auto-downloaded)
 ├── scripts/                             # Python scripts
-│   ├── youtube_downloader.py           # YouTube downloader application
-│   ├── video_to_mp3_converter.py       # Video to MP3 converter
-│   └── audio_modifier.py               # Audio modifier application
+│   ├── audio_tools_unified.py          # Unified application (RECOMMENDED)
+│   ├── youtube_downloader.py           # Individual YouTube downloader
+│   ├── video_to_mp3_converter.py       # Individual Video to MP3 converter
+│   └── audio_modifier.py               # Individual Audio modifier
 ├── launchers/                           # Launcher scripts
-│   ├── youtube_downloader.bat          # Windows launcher (YouTube)
-│   ├── youtube_downloader.sh           # Linux/Mac launcher (YouTube)
-│   ├── video_to_mp3_converter.bat      # Windows launcher (Converter)
-│   ├── video_to_mp3_converter.sh       # Linux/Mac launcher (Converter)
-│   ├── audio_modifier.bat              # Windows launcher (Audio Modifier)
-│   └── audio_modifier.sh               # Linux/Mac launcher (Audio Modifier)
+│   ├── audio_tools_unified.bat         # Windows launcher (Unified - RECOMMENDED)
+│   ├── audio_tools_unified.sh          # Linux/Mac launcher (Unified - RECOMMENDED)
+│   ├── youtube_downloader.bat          # Windows launcher (YouTube only)
+│   ├── youtube_downloader.sh           # Linux/Mac launcher (YouTube only)
+│   ├── video_to_mp3_converter.bat      # Windows launcher (Converter only)
+│   ├── video_to_mp3_converter.sh       # Linux/Mac launcher (Converter only)
+│   ├── audio_modifier.bat              # Windows launcher (Audio Modifier only)
+│   └── audio_modifier.sh               # Linux/Mac launcher (Audio Modifier only)
 ├── requirements.txt                     # Python dependencies
 ├── .gitignore                           # Git ignore rules
 ├── AGENT.md                             # Developer/agent documentation
@@ -264,9 +263,9 @@ audiotools/
 
 ### Auto-loading CSV Files
 You can auto-load a CSV file on startup:
-- **Windows**: Drag and drop CSV file onto `youtube_downloader.bat`
+- **Windows**: Drag and drop CSV file onto `audio_tools_unified.bat`
 - **Command line**: Pass CSV file path as first argument to launcher
-- The GUI will automatically load the CSV and display the video list
+- The GUI will automatically load the CSV and display the video list in the YouTube Downloader tab
 
 ### Console Output Integration
 All operations show detailed console-style output in the GUI log window:
@@ -325,11 +324,12 @@ Ensure tkinter is installed with Python:
 - Downloaded files are saved to `downloads/` folder by default
 - Converted MP3 files are saved to `converted/` folder by default
 - Modified audio files are saved to `converted_changed/` folder by default
-- The YouTube downloader uses `yt-dlp` which is actively maintained
-- Video to MP3 converter uses FFmpeg for high-quality audio extraction
-- Audio modifier uses FFmpeg for speed and pitch adjustments
+- The unified application uses `yt-dlp` for YouTube downloading (actively maintained)
+- All processing uses FFmpeg for high-quality audio/video operations
 - Filename patterns sanitize special characters automatically
 - Original video and audio files are never modified or deleted during processing
+- **Recommended**: Use the unified application (`audio_tools_unified`) for the best experience
+- **Legacy**: Individual tools remain available for users who prefer separate applications
 
 ## For Developers
 
