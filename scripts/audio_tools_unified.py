@@ -197,7 +197,7 @@ class AudioToolsUnifiedGUI(BaseAudioGUI):
         settings_frame.pack(fill='x', padx=10, pady=10)
         
         ttk.Label(settings_frame, text="Output Folder:").grid(row=0, column=0, sticky='w', pady=5)
-        self.converter_folder_var = tk.StringVar(value=self.file_manager.get_folder_path('converted'))
+        self.converter_folder_var = tk.StringVar(value=self.file_manager.converted_folder)
         ttk.Entry(settings_frame, textvariable=self.converter_folder_var, width=50).grid(row=0, column=1, padx=5)
         ttk.Button(settings_frame, text="Browse", command=self.browse_converter_folder).grid(row=0, column=2)
         
@@ -279,7 +279,7 @@ class AudioToolsUnifiedGUI(BaseAudioGUI):
         settings_frame.pack(fill='x', padx=10, pady=10)
         
         ttk.Label(settings_frame, text="Output Folder:").grid(row=0, column=0, sticky='w', pady=5)
-        self.modifier_folder_var = tk.StringVar(value=self.file_manager.get_folder_path('output'))
+        self.modifier_folder_var = tk.StringVar(value=self.file_manager.output_folder)
         ttk.Entry(settings_frame, textvariable=self.modifier_folder_var, width=50).grid(row=0, column=1, padx=5)
         ttk.Button(settings_frame, text="Browse", command=self.browse_modifier_folder).grid(row=0, column=2)
         
@@ -347,20 +347,46 @@ class AudioToolsUnifiedGUI(BaseAudioGUI):
     
     def setup_settings_tab(self):
         # Settings Tab
-        frame = ttk.LabelFrame(self.tab_settings, text="Download Settings", padding=10)
+        frame = ttk.LabelFrame(self.tab_settings, text="Folder Settings", padding=10)
         frame.pack(fill='x', padx=10, pady=10)
         
         ttk.Label(frame, text="Download Folder:").grid(row=0, column=0, sticky='w', pady=5)
-        self.download_folder_var = tk.StringVar(value=self.file_manager.get_folder_path('downloads'))
+        self.download_folder_var = tk.StringVar(value=self.file_manager.downloads_folder)
         ttk.Entry(frame, textvariable=self.download_folder_var, width=50).grid(row=0, column=1, padx=5)
         ttk.Button(frame, text="Browse", command=self.browse_download_folder).grid(row=0, column=2)
         
-        ttk.Label(frame, text="Filename Pattern:").grid(row=1, column=0, sticky='w', pady=5)
-        self.filename_var = tk.StringVar(value="{Rank}_{Song Title}_{Artist}")
-        ttk.Entry(frame, textvariable=self.filename_var, width=50).grid(row=1, column=1, pady=5, columnspan=2)
+        ttk.Label(frame, text="Converted Folder:").grid(row=1, column=0, sticky='w', pady=5)
+        self.converted_folder_var = tk.StringVar(value=self.file_manager.converted_folder)
+        ttk.Entry(frame, textvariable=self.converted_folder_var, width=50).grid(row=1, column=1, padx=5)
+        ttk.Button(frame, text="Browse", command=self.browse_converted_folder).grid(row=1, column=2)
         
-        ttk.Label(frame, text="Available fields: {Rank}, {Song Title}, {Artist}, {Year}, {Views (Billions)}").grid(
-            row=2, column=0, columnspan=3, sticky='w', pady=5
+        ttk.Label(frame, text="Modified Folder:").grid(row=2, column=0, sticky='w', pady=5)
+        self.modified_folder_var = tk.StringVar(value=self.file_manager.output_folder)
+        ttk.Entry(frame, textvariable=self.modified_folder_var, width=50).grid(row=2, column=1, padx=5)
+        ttk.Button(frame, text="Browse", command=self.browse_modified_folder).grid(row=2, column=2)
+        
+        # CSV subfolder info
+        csv_frame = ttk.LabelFrame(self.tab_settings, text="CSV Subfolder", padding=10)
+        csv_frame.pack(fill='x', padx=10, pady=10)
+        
+        self.csv_subfolder_var = tk.StringVar(value="No CSV loaded")
+        ttk.Label(csv_frame, text="Current CSV:").grid(row=0, column=0, sticky='w', pady=5)
+        ttk.Label(csv_frame, textvariable=self.csv_subfolder_var, foreground='blue').grid(row=0, column=1, sticky='w', padx=5)
+        
+        ttk.Label(csv_frame, text="Files will be saved to subfolders based on CSV filename").grid(
+            row=1, column=0, columnspan=2, sticky='w', pady=5
+        )
+        
+        # Filename pattern settings
+        pattern_frame = ttk.LabelFrame(self.tab_settings, text="Filename Pattern", padding=10)
+        pattern_frame.pack(fill='x', padx=10, pady=10)
+        
+        ttk.Label(pattern_frame, text="Pattern:").grid(row=0, column=0, sticky='w', pady=5)
+        self.filename_var = tk.StringVar(value="{Rank}_{Song Title}_{Artist}")
+        ttk.Entry(pattern_frame, textvariable=self.filename_var, width=50).grid(row=0, column=1, pady=5, columnspan=2)
+        
+        ttk.Label(pattern_frame, text="Available fields: {Rank}, {Song Title}, {Artist}, {Year}, {Views (Billions)}").grid(
+            row=1, column=0, columnspan=3, sticky='w', pady=5
         )
         
         info_frame = ttk.LabelFrame(self.tab_settings, text="Information", padding=10)
@@ -440,12 +466,20 @@ Note: All tools require FFmpeg for processing.
             self.csv_file = file_path
             self.lbl_csv_status.config(text=f"Loaded: {os.path.basename(file_path)} ({len(self.csv_data)} rows)")
             
+            # Set CSV basename for subfolder creation
+            self.file_manager.set_csv_basename(file_path)
+            
+            # Update settings tab display
+            if hasattr(self, 'csv_subfolder_var'):
+                self.csv_subfolder_var.set(f"{self.file_manager.csv_basename} (subfolder)")
+            
             self.display_csv_in_grid()
             self.populate_video_list()
             
             self.notebook.select(self.tab_youtube)
             
             self.log(f"[SUCCESS] Loaded {len(self.csv_data)} videos from CSV: {os.path.basename(file_path)}", "youtube")
+            self.log(f"[INFO] Using subfolder: {self.file_manager.csv_basename}", "youtube")
             
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load CSV: {str(e)}")
@@ -1273,6 +1307,18 @@ Note: All tools require FFmpeg for processing.
         if folder:
             self.download_folder_var.set(folder)
             self.file_manager.set_folder_path('downloads', folder)
+    
+    def browse_converted_folder(self):
+        folder = self.browse_folder(self.converted_folder_var.get())
+        if folder:
+            self.converted_folder_var.set(folder)
+            self.file_manager.set_folder_path('converted', folder)
+    
+    def browse_modified_folder(self):
+        folder = self.browse_folder(self.modified_folder_var.get())
+        if folder:
+            self.modified_folder_var.set(folder)
+            self.file_manager.set_folder_path('output', folder)
 
 
 def main():

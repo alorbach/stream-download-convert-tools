@@ -24,6 +24,9 @@ class FileManager:
         self.converted_folder = os.path.join(root_dir, "converted")
         self.output_folder = os.path.join(root_dir, "converted_changed")
         
+        # CSV basename for subfolder creation
+        self.csv_basename = None
+        
         # Create directories
         os.makedirs(self.downloads_folder, exist_ok=True)
         os.makedirs(self.converted_folder, exist_ok=True)
@@ -39,14 +42,23 @@ class FileManager:
         Returns:
             str: Folder path
         """
+        base_folder = None
         if folder_type == 'downloads':
-            return self.downloads_folder
+            base_folder = self.downloads_folder
         elif folder_type == 'converted':
-            return self.converted_folder
+            base_folder = self.converted_folder
         elif folder_type == 'output':
-            return self.output_folder
+            base_folder = self.output_folder
         else:
             return self.root_dir
+        
+        # Add CSV basename subfolder if available
+        if self.csv_basename and base_folder:
+            subfolder_path = os.path.join(base_folder, self.csv_basename)
+            self.ensure_directory(subfolder_path)
+            return subfolder_path
+        
+        return base_folder
     
     def set_folder_path(self, folder_type, path):
         """
@@ -62,6 +74,19 @@ class FileManager:
             self.converted_folder = path
         elif folder_type == 'output':
             self.output_folder = path
+    
+    def set_csv_basename(self, csv_file_path):
+        """
+        Set CSV basename for subfolder creation.
+        
+        Args:
+            csv_file_path: Path to the CSV file
+        """
+        if csv_file_path:
+            csv_filename = os.path.basename(csv_file_path)
+            self.csv_basename = os.path.splitext(csv_filename)[0]
+        else:
+            self.csv_basename = None
     
     def validate_file(self, file_path, allowed_extensions=None):
         """
