@@ -219,8 +219,9 @@ The original individual tools are still available for users who prefer separate 
 ## CSV File Format
 
 Your CSV file should contain YouTube links. The downloader supports:
-- Plain URLs: `https://www.youtube.com/watch?v=VIDEO_ID`
+- Direct URLs: `https://www.youtube.com/watch?v=VIDEO_ID`
 - Markdown format: `[https://www.youtube.com/watch?v=VIDEO_ID](https://www.youtube.com/watch?v=VIDEO_ID)`
+- Search URLs: `https://www.youtube.com/results?search_query=Artist+-+Song+Title`
 
 Example CSV structure (from `input/top100.csv`):
 ```csv
@@ -331,6 +332,18 @@ Ensure tkinter is installed with Python:
 - **Recommended**: Use the unified application (`audio_tools_unified`) for the best experience
 - **Legacy**: Individual tools remain available for users who prefer separate applications
 
+## Legal Disclaimer
+
+This software is provided for educational and personal use only. Users are responsible for:
+- Complying with applicable copyright laws in their jurisdiction
+- Respecting YouTube's Terms of Service
+- Only downloading content they have legal rights to access
+- Understanding fair use guidelines for their intended use
+
+**Important**: This tool does not circumvent any digital rights management (DRM) or access controls. Users must ensure their use complies with all applicable laws and platform terms of service.
+
+The authors disclaim any responsibility for misuse of this software.
+
 ## License
 
 This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
@@ -339,6 +352,7 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 
 Contributions are welcome! Please feel free to submit a Pull Request. For major changes, please open an issue first to discuss what you would like to change.
 
-## For Developers
+## Documentation
 
-See `AGENT.md` for detailed development guidelines and project architecture.
+- **User Guide**: See [USER_GUIDE.md](USER_GUIDE.md) for comprehensive tutorials and usage instructions
+- **Developer Guide**: See `AGENT.md` for detailed development guidelines and project architecture

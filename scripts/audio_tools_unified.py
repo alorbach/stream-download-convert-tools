@@ -551,6 +551,7 @@ Note: All tools require FFmpeg for processing.
         
         self.log(f"[DEBUG] Extracting URL from: {text[:100]}...", "youtube")
         
+        # Pattern 1: Markdown format [URL](URL)
         markdown_pattern = r'\[(https://www\.youtube\.com/watch\?v=[\w-]+)\]\(https://www\.youtube\.com/watch\?v=[\w-]+\)'
         match = re.search(markdown_pattern, text)
         if match:
@@ -558,14 +559,27 @@ Note: All tools require FFmpeg for processing.
             self.log(f"[DEBUG] Extracted URL (markdown): {url}", "youtube")
             return url
         
+        # Pattern 2: Direct YouTube video URL
         url_pattern = r'https://www\.youtube\.com/watch\?v=[\w-]+'
         match = re.search(url_pattern, text)
         if match:
             url = match.group(0)
-            self.log(f"[DEBUG] Extracted URL (plain): {url}", "youtube")
+            self.log(f"[DEBUG] Extracted URL (direct): {url}", "youtube")
             return url
         
-        self.log(f"[ERROR] No URL pattern matched in text", "youtube")
+        # Pattern 3: YouTube search URL - extract search query and use it directly
+        search_pattern = r'https://www\.youtube\.com/results\?search_query=([^&\s]+)'
+        match = re.search(search_pattern, text)
+        if match:
+            search_query = match.group(1)
+            # URL decode the search query
+            import urllib.parse
+            decoded_query = urllib.parse.unquote_plus(search_query)
+            self.log(f"[DEBUG] Extracted search query: {decoded_query}", "youtube")
+            self.log(f"[INFO] Using search query as yt-dlp input: {decoded_query}", "youtube")
+            return decoded_query
+        
+        self.log(f"[ERROR] No supported URL pattern found in text", "youtube")
         return None
     
     def on_video_select(self, event):

@@ -171,6 +171,82 @@ class FileManager:
         
         return safe_filename
     
+    def validate_file_security(self, filepath):
+        """
+        Validate file path for security issues.
+        
+        Args:
+            filepath: Path to validate
+            
+        Returns:
+            tuple: (is_valid, error_message)
+        """
+        if not filepath or not isinstance(filepath, str):
+            return False, "Invalid file path"
+        
+        try:
+            # Normalize path
+            normalized = os.path.normpath(filepath)
+            
+            # Check for directory traversal
+            if '..' in normalized or normalized.startswith('/') or ':' in normalized:
+                return False, "Path contains dangerous characters"
+            
+            # Check for absolute paths outside project directory
+            if os.path.isabs(normalized):
+                return False, "Absolute paths are not allowed"
+            
+            # Check filename length
+            filename = os.path.basename(normalized)
+            if len(filename) > 255:
+                return False, "Filename too long"
+            
+            # Check for dangerous filename patterns
+            dangerous_patterns = ['CON', 'PRN', 'AUX', 'NUL', 'COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9', 'LPT1', 'LPT2', 'LPT3', 'LPT4', 'LPT5', 'LPT6', 'LPT7', 'LPT8', 'LPT9']
+            if filename.upper() in dangerous_patterns:
+                return False, "Reserved filename"
+            
+            return True, "Valid file path"
+            
+        except Exception as e:
+            return False, f"Path validation error: {str(e)}"
+    
+    def get_secure_output_path(self, base_folder, filename, extension=None):
+        """
+        Get a secure output path for a file.
+        
+        Args:
+            base_folder: Base folder for output
+            filename: Desired filename
+            extension: File extension (optional)
+            
+        Returns:
+            str: Secure output path
+        """
+        # Ensure base folder exists and is secure
+        if not base_folder:
+            base_folder = self.output_folder
+        
+        # Validate base folder
+        is_valid, error = self.validate_file_security(base_folder)
+        if not is_valid:
+            base_folder = self.output_folder
+        
+        # Create safe filename
+        safe_filename = self.create_safe_filename(filename)
+        
+        # Add extension if provided
+        if extension and not safe_filename.endswith(extension):
+            safe_filename += extension
+        
+        # Construct full path
+        output_path = os.path.join(base_folder, safe_filename)
+        
+        # Ensure directory exists
+        os.makedirs(base_folder, exist_ok=True)
+        
+        return output_path
+    
     def create_filename_from_pattern(self, pattern, data):
         """
         Create filename from pattern using data fields.

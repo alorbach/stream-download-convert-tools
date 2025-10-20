@@ -28,6 +28,8 @@ from .ffmpeg_utils import FFmpegManager
 from .gui_utils import GUIManager, LogManager
 from .file_utils import FileManager
 from .process_utils import ProcessManager
+from .legal_utils import LegalManager
+from .security_utils import SecurityManager
 
 
 class BaseAudioGUI:
@@ -52,6 +54,8 @@ class BaseAudioGUI:
         self.file_manager = FileManager(self.root_dir)
         self.process_manager = ProcessManager(self.log_callback)
         self.ffmpeg_manager = FFmpegManager(self.root_dir, self.log_callback)
+        self.legal_manager = LegalManager(self.root_dir)
+        self.security_manager = SecurityManager()
         
         # Initialize log manager (will be set by subclasses)
         self.log_manager = LogManager()
@@ -60,8 +64,16 @@ class BaseAudioGUI:
         self.is_busy = False
         self.selected_files = []
         
+        # Check legal disclaimer on first run
+        if not self.legal_manager.check_and_show_disclaimer(root):
+            root.destroy()
+            return
+        
         # Setup common UI elements
         self.setup_common_ui()
+        
+        # Center the main window after UI is loaded
+        self.root.after(100, lambda: self.gui_manager.center_window(self.root))
     
     def setup_common_ui(self):
         """Setup common UI elements."""
@@ -190,3 +202,27 @@ class BaseAudioGUI:
     def create_filename_from_pattern(self, pattern, data):
         """Create filename from pattern."""
         return self.file_manager.create_filename_from_pattern(pattern, data)
+    
+    def validate_youtube_url(self, url):
+        """Validate YouTube URL."""
+        return self.security_manager.validate_youtube_url(url)
+    
+    def sanitize_filename(self, filename):
+        """Sanitize filename."""
+        return self.security_manager.sanitize_filename(filename)
+    
+    def validate_file_path(self, filepath):
+        """Validate file path."""
+        return self.security_manager.validate_file_path(filepath)
+    
+    def validate_file_extension(self, filepath, allowed_extensions=None):
+        """Validate file extension."""
+        return self.security_manager.validate_file_extension(filepath, allowed_extensions)
+    
+    def is_safe_for_download(self, url):
+        """Check if URL is safe for download."""
+        return self.security_manager.is_safe_for_download(url)
+    
+    def validate_csv_data(self, csv_data):
+        """Validate CSV data."""
+        return self.security_manager.validate_csv_data(csv_data)

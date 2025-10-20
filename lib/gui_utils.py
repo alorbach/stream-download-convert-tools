@@ -36,6 +36,45 @@ class GUIManager:
         self.root = root
         self.is_busy = False
     
+    def center_window(self, window, width=None, height=None):
+        """
+        Center a window on the screen.
+        
+        Args:
+            window: Tkinter window to center
+            width: Window width (optional, uses current width if not provided)
+            height: Window height (optional, uses current height if not provided)
+        """
+        # Update window to get current size if not provided
+        window.update_idletasks()
+        
+        if width is None or height is None:
+            # Get actual window dimensions after content is loaded
+            width = window.winfo_reqwidth()
+            height = window.winfo_reqheight()
+            
+            # Fallback to geometry if reqwidth/reqheight don't work
+            if width <= 1 or height <= 1:
+                current_geometry = window.geometry()
+                if '+' in current_geometry:
+                    # Format: "WIDTHxHEIGHT+X+Y"
+                    size_part = current_geometry.split('+')[0]
+                    width, height = map(int, size_part.split('x'))
+                else:
+                    # Format: "WIDTHxHEIGHT"
+                    width, height = map(int, current_geometry.split('x'))
+        
+        # Get screen dimensions
+        screen_width = window.winfo_screenwidth()
+        screen_height = window.winfo_screenheight()
+        
+        # Calculate position to center the window
+        x = (screen_width - width) // 2
+        y = (screen_height - height) // 2
+        
+        # Set the window position
+        window.geometry(f"{width}x{height}+{x}+{y}")
+    
     def set_busy(self, busy=True, message="", progress_bar=None, progress_label=None):
         """
         Set busy state for the application.
