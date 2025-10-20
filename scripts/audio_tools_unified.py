@@ -107,7 +107,7 @@ class AudioToolsUnifiedGUI(BaseAudioGUI):
         
         ttk.Label(video_frame, text="Select Video:").pack(anchor='w')
         
-        self.video_listbox = tk.Listbox(video_frame, height=6)
+        self.video_listbox = tk.Listbox(video_frame, height=6, selectmode=tk.EXTENDED)
         self.video_listbox.pack(fill='both', expand=True, pady=5)
         self.video_listbox.bind('<<ListboxSelect>>', self.on_video_select)
         
@@ -142,7 +142,13 @@ class AudioToolsUnifiedGUI(BaseAudioGUI):
         download_frame = ttk.Frame(self.tab_youtube)
         download_frame.pack(fill='x', padx=10, pady=10)
         
-        ttk.Button(download_frame, text="Download Selected Stream", command=self.download_stream).pack(pady=5)
+        # Batch processing buttons
+        batch_frame = ttk.Frame(download_frame)
+        batch_frame.pack(fill='x', pady=5)
+        
+        ttk.Button(batch_frame, text="Download Selected Stream", command=self.download_stream).pack(side='left', padx=5)
+        ttk.Button(batch_frame, text="Download Selected Videos", command=self.download_selected_videos).pack(side='left', padx=5)
+        ttk.Button(batch_frame, text="Download All Videos", command=self.download_all_videos).pack(side='left', padx=5)
         
         self.youtube_log_text = scrolledtext.ScrolledText(download_frame, height=6)
         self.youtube_log_text.pack(fill='both', expand=True)
@@ -204,7 +210,12 @@ class AudioToolsUnifiedGUI(BaseAudioGUI):
         convert_frame = ttk.Frame(self.tab_converter)
         convert_frame.pack(fill='x', padx=10, pady=10)
         
-        ttk.Button(convert_frame, text="Convert to MP3", command=self.start_conversion).pack(pady=5)
+        # Batch processing buttons
+        batch_frame = ttk.Frame(convert_frame)
+        batch_frame.pack(fill='x', pady=5)
+        
+        ttk.Button(batch_frame, text="Convert Selected Files", command=self.start_conversion).pack(side='left', padx=5)
+        ttk.Button(batch_frame, text="Convert All Files", command=self.convert_all_files).pack(side='left', padx=5)
         
         self.converter_progress = ttk.Progressbar(convert_frame, mode='determinate')
         self.converter_progress.pack(fill='x', pady=5)
@@ -309,7 +320,12 @@ class AudioToolsUnifiedGUI(BaseAudioGUI):
         modify_frame = ttk.Frame(self.tab_modifier)
         modify_frame.pack(fill='x', padx=10, pady=10)
         
-        ttk.Button(modify_frame, text="Modify Audio Files", command=self.start_modification).pack(pady=5)
+        # Batch processing buttons
+        batch_frame = ttk.Frame(modify_frame)
+        batch_frame.pack(fill='x', pady=5)
+        
+        ttk.Button(batch_frame, text="Modify Selected Files", command=self.start_modification).pack(side='left', padx=5)
+        ttk.Button(batch_frame, text="Modify All Files", command=self.modify_all_files).pack(side='left', padx=5)
         
         self.modifier_progress = ttk.Progressbar(modify_frame, mode='determinate')
         self.modifier_progress.pack(fill='x', pady=5)
@@ -693,6 +709,145 @@ Note: All tools require FFmpeg for processing.
             self.root.after(0, lambda msg=error_msg: self.log(f"[ERROR] Download error: {msg}", "youtube"))
             self.root.after(0, lambda: self.set_busy(False, tab="youtube"))
     
+    def download_selected_videos(self):
+        """Download selected videos using the same stream format"""
+        if self.is_busy:
+            messagebox.showwarning("Warning", "Please wait for current operation to complete")
+            return
+        
+        selection = self.video_listbox.curselection()
+        if not selection:
+            messagebox.showwarning("Warning", "Please select at least one video")
+            return
+        
+        stream_selection = self.stream_tree.selection()
+        if not stream_selection:
+            messagebox.showwarning("Warning", "Please select a stream format first")
+            return
+        
+        item = stream_selection[0]
+        format_id = str(self.stream_tree.item(item)['values'][0])
+        
+        selected_indices = list(selection)
+        self.log(f"[INFO] Starting batch download of {len(selected_indices)} videos with format {format_id}", "youtube")
+        
+        self.set_busy(True, f"Downloading {len(selected_indices)} videos...", "youtube")
+        
+        thread = threading.Thread(target=self._batch_download_thread, args=(selected_indices, format_id))
+        thread.daemon = True
+        thread.start()
+    
+    def download_all_videos(self):
+        """Download all videos using the same stream format"""
+        if self.is_busy:
+            messagebox.showwarning("Warning", "Please wait for current operation to complete")
+            return
+        
+        if not self.csv_data:
+            messagebox.showwarning("Warning", "No CSV data loaded")
+            return
+        
+        stream_selection = self.stream_tree.selection()
+        if not stream_selection:
+            messagebox.showwarning("Warning", "Please select a stream format first")
+            return
+        
+        item = stream_selection[0]
+        format_id = str(self.stream_tree.item(item)['values'][0])
+        
+        all_indices = list(range(len(self.csv_data)))
+        self.log(f"[INFO] Starting batch download of all {len(all_indices)} videos with format {format_id}", "youtube")
+        
+        self.set_busy(True, f"Downloading all {len(all_indices)} videos...", "youtube")
+        
+        thread = threading.Thread(target=self._batch_download_thread, args=(all_indices, format_id))
+        thread.daemon = True
+        thread.start()
+    
+    def _batch_download_thread(self, video_indices, format_id):
+        success_count = 0
+        error_count = 0
+        
+        for i, index in enumerate(video_indices):
+            try:
+                row = self.csv_data[index]
+                url = self.extract_youtube_url(row.get('Video Link', ''))
+                
+                if not url:
+                    error_count += 1
+                    self.root.after(0, lambda idx=index+1: self.log(f"[ERROR] Video {idx}: Could not extract URL", "youtube"))
+                    continue
+                
+                filename_pattern = self.filename_var.get()
+                filename = self.create_filename_from_pattern(filename_pattern, row)
+                
+                self.root.after(
+                    0,
+                    lambda idx=i+1, total=len(video_indices), name=row.get('Song Title', 'Unknown'):
+                    self.set_busy(True, f"Downloading {idx}/{total}: {name}", "youtube")
+                )
+                
+                self.root.after(
+                    0,
+                    lambda msg=f"\n[INFO] Downloading ({i+1}/{len(video_indices)}): {row.get('Song Title', 'Unknown')} - {row.get('Artist', 'Unknown')}":
+                    self.log(msg, "youtube")
+                )
+                
+                output_path = os.path.join(self.file_manager.get_folder_path('downloads'), filename)
+                
+                cmd = [
+                    'yt-dlp',
+                    '-f', format_id,
+                    '-o', output_path + '.%(ext)s',
+                    url
+                ]
+                
+                process = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+                )
+                
+                if process.returncode == 0:
+                    success_count += 1
+                    self.root.after(
+                        0,
+                        lambda out=filename: self.log(f"[SUCCESS] Downloaded: {out}", "youtube")
+                    )
+                else:
+                    error_count += 1
+                    error_msg = process.stderr if process.stderr else "Unknown error"
+                    self.root.after(
+                        0,
+                        lambda err=error_msg: self.log(f"[ERROR] Download failed: {err[:200]}", "youtube")
+                    )
+                
+            except Exception as e:
+                error_count += 1
+                error_msg = str(e)
+                self.root.after(
+                    0,
+                    lambda msg=error_msg: self.log(f"[ERROR] Exception: {msg}", "youtube")
+                )
+        
+        self.root.after(
+            0,
+            lambda s=success_count, e=error_count:
+            self.log(f"\n[COMPLETE] Batch download finished: {s} succeeded, {e} failed", "youtube")
+        )
+        
+        self.root.after(
+            0,
+            lambda s=success_count, e=error_count:
+            messagebox.showinfo(
+                "Batch Download Complete",
+                f"Batch download finished!\n\nSuccessful: {s}\nFailed: {e}"
+            )
+        )
+        
+        self.root.after(0, lambda: self.set_busy(False, tab="youtube"))
+    
     # Video to MP3 Converter methods
     def select_video_files(self):
         files = self.select_files(
@@ -832,6 +987,41 @@ Note: All tools require FFmpeg for processing.
         )
         
         self.root.after(0, lambda: self.set_busy(False, tab="converter"))
+    
+    def convert_all_files(self):
+        """Convert all files in the downloads folder"""
+        if self.is_busy:
+            messagebox.showwarning("Warning", "Conversion already in progress")
+            return
+        
+        downloads_folder = self.file_manager.get_folder_path('downloads')
+        if not os.path.exists(downloads_folder):
+            messagebox.showerror("Error", "Downloads folder does not exist")
+            return
+        
+        # Find all video files in downloads folder
+        video_extensions = ['.mp4', '.webm', '.m4a', '.avi', '.mov', '.mkv', '.flv', '.wmv']
+        all_files = []
+        
+        for file in os.listdir(downloads_folder):
+            file_path = os.path.join(downloads_folder, file)
+            if os.path.isfile(file_path):
+                _, ext = os.path.splitext(file.lower())
+                if ext in video_extensions:
+                    all_files.append(file_path)
+        
+        if not all_files:
+            messagebox.showwarning("Warning", "No video files found in downloads folder")
+            return
+        
+        # Update the selected files list
+        self.selected_video_files = all_files
+        self.update_video_file_list()
+        
+        self.log(f"[INFO] Found {len(all_files)} video files in downloads folder", "converter")
+        
+        # Start conversion with all files
+        self.start_conversion()
     
     # Audio Modifier methods
     def select_audio_files(self):
@@ -1016,6 +1206,41 @@ Note: All tools require FFmpeg for processing.
         )
         
         self.root.after(0, lambda: self.set_busy(False, tab="modifier"))
+    
+    def modify_all_files(self):
+        """Modify all files in the converted folder"""
+        if self.is_busy:
+            messagebox.showwarning("Warning", "Modification already in progress")
+            return
+        
+        converted_folder = self.file_manager.get_folder_path('converted')
+        if not os.path.exists(converted_folder):
+            messagebox.showerror("Error", "Converted folder does not exist")
+            return
+        
+        # Find all audio files in converted folder
+        audio_extensions = ['.mp3', '.m4a', '.wav', '.ogg', '.flac']
+        all_files = []
+        
+        for file in os.listdir(converted_folder):
+            file_path = os.path.join(converted_folder, file)
+            if os.path.isfile(file_path):
+                _, ext = os.path.splitext(file.lower())
+                if ext in audio_extensions:
+                    all_files.append(file_path)
+        
+        if not all_files:
+            messagebox.showwarning("Warning", "No audio files found in converted folder")
+            return
+        
+        # Update the selected files list
+        self.selected_audio_files = all_files
+        self.update_audio_file_list()
+        
+        self.log(f"[INFO] Found {len(all_files)} audio files in converted folder", "modifier")
+        
+        # Start modification with all files
+        self.start_modification()
     
     # Common FFmpeg methods
     def check_ffmpeg(self):

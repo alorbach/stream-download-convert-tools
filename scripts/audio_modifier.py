@@ -106,7 +106,12 @@ class AudioModifierGUI(BaseAudioGUI):
         modify_frame = ttk.Frame(self.root)
         modify_frame.pack(fill='x', padx=10, pady=10)
         
-        ttk.Button(modify_frame, text="Modify Audio Files", command=self.start_modification).pack(pady=5)
+        # Batch processing buttons
+        batch_frame = ttk.Frame(modify_frame)
+        batch_frame.pack(fill='x', pady=5)
+        
+        ttk.Button(batch_frame, text="Modify Selected Files", command=self.start_modification).pack(side='left', padx=5)
+        ttk.Button(batch_frame, text="Modify All Files", command=self.modify_all_files).pack(side='left', padx=5)
         
         self.progress = ttk.Progressbar(modify_frame, mode='determinate')
         self.progress.pack(fill='x', pady=5)
@@ -346,6 +351,41 @@ class AudioModifierGUI(BaseAudioGUI):
         )
         
         self.root.after(0, lambda: self.set_busy(False))
+    
+    def modify_all_files(self):
+        """Modify all files in the converted folder"""
+        if self.is_busy:
+            messagebox.showwarning("Warning", "Modification already in progress")
+            return
+        
+        converted_folder = self.file_manager.get_folder_path('converted')
+        if not os.path.exists(converted_folder):
+            messagebox.showerror("Error", "Converted folder does not exist")
+            return
+        
+        # Find all audio files in converted folder
+        audio_extensions = ['.mp3', '.m4a', '.wav', '.ogg', '.flac']
+        all_files = []
+        
+        for file in os.listdir(converted_folder):
+            file_path = os.path.join(converted_folder, file)
+            if os.path.isfile(file_path):
+                _, ext = os.path.splitext(file.lower())
+                if ext in audio_extensions:
+                    all_files.append(file_path)
+        
+        if not all_files:
+            messagebox.showwarning("Warning", "No audio files found in converted folder")
+            return
+        
+        # Update the selected files list
+        self.selected_files = all_files
+        self.update_file_list()
+        
+        self.log(f"[INFO] Found {len(all_files)} audio files in converted folder")
+        
+        # Start modification with all files
+        self.start_modification()
     
     def log(self, message):
         self.log_text.insert(tk.END, f"{message}\n")

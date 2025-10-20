@@ -78,7 +78,12 @@ class VideoToMP3ConverterGUI(BaseAudioGUI):
         convert_frame = ttk.Frame(self.root)
         convert_frame.pack(fill='x', padx=10, pady=10)
         
-        ttk.Button(convert_frame, text="Convert to MP3", command=self.start_conversion).pack(pady=5)
+        # Batch processing buttons
+        batch_frame = ttk.Frame(convert_frame)
+        batch_frame.pack(fill='x', pady=5)
+        
+        ttk.Button(batch_frame, text="Convert Selected Files", command=self.start_conversion).pack(side='left', padx=5)
+        ttk.Button(batch_frame, text="Convert All Files", command=self.convert_all_files).pack(side='left', padx=5)
         
         self.progress = ttk.Progressbar(convert_frame, mode='determinate')
         self.progress.pack(fill='x', pady=5)
@@ -273,6 +278,41 @@ class VideoToMP3ConverterGUI(BaseAudioGUI):
         )
         
         self.root.after(0, lambda: self.set_busy(False))
+    
+    def convert_all_files(self):
+        """Convert all files in the downloads folder"""
+        if self.is_busy:
+            messagebox.showwarning("Warning", "Conversion already in progress")
+            return
+        
+        downloads_folder = self.file_manager.get_folder_path('downloads')
+        if not os.path.exists(downloads_folder):
+            messagebox.showerror("Error", "Downloads folder does not exist")
+            return
+        
+        # Find all video files in downloads folder
+        video_extensions = ['.mp4', '.webm', '.m4a', '.avi', '.mov', '.mkv', '.flv', '.wmv']
+        all_files = []
+        
+        for file in os.listdir(downloads_folder):
+            file_path = os.path.join(downloads_folder, file)
+            if os.path.isfile(file_path):
+                _, ext = os.path.splitext(file.lower())
+                if ext in video_extensions:
+                    all_files.append(file_path)
+        
+        if not all_files:
+            messagebox.showwarning("Warning", "No video files found in downloads folder")
+            return
+        
+        # Update the selected files list
+        self.selected_files = all_files
+        self.update_file_list()
+        
+        self.log(f"[INFO] Found {len(all_files)} video files in downloads folder")
+        
+        # Start conversion with all files
+        self.start_conversion()
     
     def log(self, message):
         self.log_text.insert(tk.END, f"{message}\n")

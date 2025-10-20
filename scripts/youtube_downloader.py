@@ -88,7 +88,7 @@ class YouTubeDownloaderGUI(BaseAudioGUI):
         
         ttk.Label(top_frame, text="Select Video:").pack(anchor='w')
         
-        self.video_listbox = tk.Listbox(top_frame, height=8)
+        self.video_listbox = tk.Listbox(top_frame, height=8, selectmode=tk.EXTENDED)
         self.video_listbox.pack(fill='both', expand=True, pady=5)
         self.video_listbox.bind('<<ListboxSelect>>', self.on_video_select)
         
@@ -121,7 +121,13 @@ class YouTubeDownloaderGUI(BaseAudioGUI):
         bottom_frame = ttk.Frame(self.tab_download)
         bottom_frame.pack(fill='x', padx=10, pady=10)
         
-        ttk.Button(bottom_frame, text="Download Selected Stream", command=self.download_stream).pack(pady=5)
+        # Batch processing buttons
+        batch_frame = ttk.Frame(bottom_frame)
+        batch_frame.pack(fill='x', pady=5)
+        
+        ttk.Button(batch_frame, text="Download Selected Stream", command=self.download_stream).pack(side='left', padx=5)
+        ttk.Button(batch_frame, text="Download Selected Videos", command=self.download_selected_videos).pack(side='left', padx=5)
+        ttk.Button(batch_frame, text="Download All Videos", command=self.download_all_videos).pack(side='left', padx=5)
         
         self.log_text = scrolledtext.ScrolledText(bottom_frame, height=8)
         self.log_text.pack(fill='both', expand=True)
@@ -476,6 +482,145 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
             error_msg = str(e)
             self.root.after(0, lambda msg=error_msg: self.log(f"[ERROR] Download error: {msg}"))
             self.root.after(0, lambda: self.set_busy(False))
+    
+    def download_selected_videos(self):
+        """Download selected videos using the same stream format"""
+        if self.is_busy:
+            messagebox.showwarning("Warning", "Please wait for current operation to complete")
+            return
+        
+        selection = self.video_listbox.curselection()
+        if not selection:
+            messagebox.showwarning("Warning", "Please select at least one video")
+            return
+        
+        stream_selection = self.stream_tree.selection()
+        if not stream_selection:
+            messagebox.showwarning("Warning", "Please select a stream format first")
+            return
+        
+        item = stream_selection[0]
+        format_id = str(self.stream_tree.item(item)['values'][0])
+        
+        selected_indices = list(selection)
+        self.log(f"[INFO] Starting batch download of {len(selected_indices)} videos with format {format_id}")
+        
+        self.set_busy(True, f"Downloading {len(selected_indices)} videos...")
+        
+        thread = threading.Thread(target=self._batch_download_thread, args=(selected_indices, format_id))
+        thread.daemon = True
+        thread.start()
+    
+    def download_all_videos(self):
+        """Download all videos using the same stream format"""
+        if self.is_busy:
+            messagebox.showwarning("Warning", "Please wait for current operation to complete")
+            return
+        
+        if not self.csv_data:
+            messagebox.showwarning("Warning", "No CSV data loaded")
+            return
+        
+        stream_selection = self.stream_tree.selection()
+        if not stream_selection:
+            messagebox.showwarning("Warning", "Please select a stream format first")
+            return
+        
+        item = stream_selection[0]
+        format_id = str(self.stream_tree.item(item)['values'][0])
+        
+        all_indices = list(range(len(self.csv_data)))
+        self.log(f"[INFO] Starting batch download of all {len(all_indices)} videos with format {format_id}")
+        
+        self.set_busy(True, f"Downloading all {len(all_indices)} videos...")
+        
+        thread = threading.Thread(target=self._batch_download_thread, args=(all_indices, format_id))
+        thread.daemon = True
+        thread.start()
+    
+    def _batch_download_thread(self, video_indices, format_id):
+        success_count = 0
+        error_count = 0
+        
+        for i, index in enumerate(video_indices):
+            try:
+                row = self.csv_data[index]
+                url = self.extract_youtube_url(row.get('Video Link', ''))
+                
+                if not url:
+                    error_count += 1
+                    self.root.after(0, lambda idx=index+1: self.log(f"[ERROR] Video {idx}: Could not extract URL"))
+                    continue
+                
+                filename_pattern = self.filename_var.get()
+                filename = self.create_filename_from_pattern(filename_pattern, row)
+                
+                self.root.after(
+                    0,
+                    lambda idx=i+1, total=len(video_indices), name=row.get('Song Title', 'Unknown'):
+                    self.set_busy(True, f"Downloading {idx}/{total}: {name}")
+                )
+                
+                self.root.after(
+                    0,
+                    lambda msg=f"\n[INFO] Downloading ({i+1}/{len(video_indices)}): {row.get('Song Title', 'Unknown')} - {row.get('Artist', 'Unknown')}":
+                    self.log(msg)
+                )
+                
+                output_path = os.path.join(self.file_manager.get_folder_path('downloads'), filename)
+                
+                cmd = [
+                    'yt-dlp',
+                    '-f', format_id,
+                    '-o', output_path + '.%(ext)s',
+                    url
+                ]
+                
+                process = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+                )
+                
+                if process.returncode == 0:
+                    success_count += 1
+                    self.root.after(
+                        0,
+                        lambda out=filename: self.log(f"[SUCCESS] Downloaded: {out}")
+                    )
+                else:
+                    error_count += 1
+                    error_msg = process.stderr if process.stderr else "Unknown error"
+                    self.root.after(
+                        0,
+                        lambda err=error_msg: self.log(f"[ERROR] Download failed: {err[:200]}")
+                    )
+                
+            except Exception as e:
+                error_count += 1
+                error_msg = str(e)
+                self.root.after(
+                    0,
+                    lambda msg=error_msg: self.log(f"[ERROR] Exception: {msg}")
+                )
+        
+        self.root.after(
+            0,
+            lambda s=success_count, e=error_count:
+            self.log(f"\n[COMPLETE] Batch download finished: {s} succeeded, {e} failed")
+        )
+        
+        self.root.after(
+            0,
+            lambda s=success_count, e=error_count:
+            messagebox.showinfo(
+                "Batch Download Complete",
+                f"Batch download finished!\n\nSuccessful: {s}\nFailed: {e}"
+            )
+        )
+        
+        self.root.after(0, lambda: self.set_busy(False))
     
     def log(self, message):
         self.log_text.insert(tk.END, f"{message}\n")
