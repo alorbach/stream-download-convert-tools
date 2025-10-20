@@ -1,10 +1,10 @@
-# audiotools
+# stream-download-convert-tools
 
 Unified audio and video tools for downloading and processing content from YouTube.
 
 ## Features
 
-### Audio Tools - Unified Application
+### Stream Download Convert Tools - Unified Application
 A single graphical application with tabbed interface containing three powerful tools:
 
 #### YouTube Downloader Tab
@@ -101,7 +101,7 @@ The original individual tools are still available for users who prefer separate 
 - `launchers/video_to_mp3_converter.sh` - Video to MP3 converter only
 - `launchers/audio_modifier.sh` - Audio modifier only
 
-## How to Use Audio Tools - Unified
+## How to Use Stream Download Convert Tools - Unified
 
 ### YouTube Downloader Tab
 
@@ -232,7 +232,7 @@ Example CSV structure (from `input/top100.csv`):
 ## Project Structure
 
 ```
-audiotools/
+stream-download-convert-tools/
 ├── venv/                                # Virtual environment (auto-created)
 ├── input/                               # Input CSV files
 │   └── top100.csv                      # Sample YouTube links
@@ -329,7 +329,7 @@ Ensure tkinter is installed with Python:
 - All processing uses FFmpeg for high-quality audio/video operations
 - Filename patterns sanitize special characters automatically
 - Original video and audio files are never modified or deleted during processing
-- **Recommended**: Use the unified application (`audio_tools_unified`) for the best experience
+- **Recommended**: Use the unified application (`stream_download_convert_tools_unified`) for the best experience
 - **Legacy**: Individual tools remain available for users who prefer separate applications
 
 ## Legal Disclaimer

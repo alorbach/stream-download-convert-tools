@@ -1,4 +1,4 @@
-# Agent Instructions for audiotools Project
+# Agent Instructions for stream-download-convert-tools Project
 
 ## Project Overview
 This repository contains Python-based audio/video tools for downloading and processing YouTube content. The main application is now a unified tool with tabbed interface, though individual tools remain available for legacy users.
@@ -31,7 +31,7 @@ This repository contains Python-based audio/video tools for downloading and proc
 
 ### Project Structure
 ```
-audiotools/
+stream-download-convert-tools/
 ├── venv/                    # Virtual environment (auto-created, gitignored)
 ├── input/                   # Input CSV files
 │   └── top100.csv          # Sample YouTube links CSV
@@ -40,13 +40,13 @@ audiotools/
 ├── converted_changed/      # Modified audio files (gitignored)
 ├── ffmpeg/                 # FFmpeg portable installation (gitignored)
 ├── scripts/                # Python application scripts
-│   ├── audio_tools_unified.py      # Unified application (RECOMMENDED)
+│   ├── stream_download_convert_tools_unified.py      # Unified application (RECOMMENDED)
 │   ├── youtube_downloader.py      # Individual YouTube downloader
 │   ├── video_to_mp3_converter.py   # Individual Video to MP3 converter
 │   └── audio_modifier.py           # Individual Audio modifier
 ├── launchers/              # Launcher scripts
-│   ├── audio_tools_unified.bat     # Windows launcher (Unified - RECOMMENDED)
-│   ├── audio_tools_unified.sh      # Linux/Mac launcher (Unified - RECOMMENDED)
+│   ├── stream_download_convert_tools_unified.bat     # Windows launcher (Unified - RECOMMENDED)
+│   ├── stream_download_convert_tools_unified.sh      # Linux/Mac launcher (Unified - RECOMMENDED)
 │   ├── youtube_downloader.bat     # Windows launcher (Individual)
 │   ├── youtube_downloader.sh       # Linux/Mac launcher (Individual)
 │   ├── video_to_mp3_converter.bat # Windows launcher (Individual)
@@ -92,8 +92,8 @@ The project uses CSV files with YouTube links. Example format from `input/top100
 5. Test launcher on target platform
 
 #### Working with Unified Application
-- **Primary Application**: `audio_tools_unified.py` - Contains all three tools in tabbed interface
-- **Launcher**: `audio_tools_unified.bat/.sh` - Main launcher for unified application
+- **Primary Application**: `stream_download_convert_tools_unified.py` - Contains all three tools in tabbed interface
+- **Launcher**: `stream_download_convert_tools_unified.bat/.sh` - Main launcher for unified application
 - **Individual Tools**: Still available for users who prefer separate applications
 - **Development**: When modifying functionality, update both unified and individual tools if needed
 

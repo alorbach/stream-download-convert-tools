@@ -1,6 +1,6 @@
-# Audio Tools - Complete User Guide
+# Stream Download Convert Tools - Complete User Guide
 
-Welcome to Audio Tools! This comprehensive guide will help you get the most out of your audio and video processing workflow.
+Welcome to Stream Download Convert Tools! This comprehensive guide will help you get the most out of your audio and video processing workflow.
 
 ## Table of Contents
 
@@ -17,7 +17,7 @@ Welcome to Audio Tools! This comprehensive guide will help you get the most out 
 
 ### First Launch
 
-When you first launch Audio Tools, you'll see a legal disclaimer. Please read it carefully and click "I Accept" to continue. This ensures you understand your responsibilities when using the software.
+When you first launch Stream Download Convert Tools, you'll see a legal disclaimer. Please read it carefully and click "I Accept" to continue. This ensures you understand your responsibilities when using the software.
 
 ### System Requirements
 
@@ -29,23 +29,23 @@ When you first launch Audio Tools, you'll see a legal disclaimer. Please read it
 ### Launching the Application
 
 **Windows:**
-- Double-click `launchers/audio_tools_unified.bat`
+- Double-click `launchers/stream_download_convert_tools_unified.bat`
 - First run will create a virtual environment and install dependencies
 
 **Linux/Mac:**
-- Make executable: `chmod +x launchers/audio_tools_unified.sh`
-- Run: `./launchers/audio_tools_unified.sh`
+- Make executable: `chmod +x launchers/stream_download_convert_tools_unified.sh`
+- Run: `./launchers/stream_download_convert_tools_unified.sh`
 
 ### Auto-loading CSV Files
 
 You can automatically load a CSV file on startup:
 
 **Windows:**
-- Drag and drop a CSV file onto `audio_tools_unified.bat`
-- Or use command line: `launchers\audio_tools_unified.bat input\top100.csv`
+- Drag and drop a CSV file onto `stream_download_convert_tools_unified.bat`
+- Or use command line: `launchers\stream_download_convert_tools_unified.bat input\top100.csv`
 
 **Linux/Mac:**
-- Command line: `./launchers/audio_tools_unified.sh input/top100.csv`
+- Command line: `./launchers/stream_download_convert_tools_unified.sh input/top100.csv`
 
 ## YouTube Downloader
 
