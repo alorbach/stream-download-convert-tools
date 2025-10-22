@@ -52,11 +52,12 @@ echo "1. Audio Tools Unified"
 echo "2. YouTube Downloader"
 echo "3. Video to MP3 Converter"
 echo "4. Audio Modifier"
-echo "5. Exit"
+echo "5. MP3 to Video Converter"
+echo "6. Exit"
 echo ""
 
 while true; do
-    read -p "Please select a tool (1-5): " choice
+    read -p "Please select a tool (1-6): " choice
     
     case $choice in
         1)
@@ -85,11 +86,17 @@ while true; do
             ;;
         5)
             echo ""
+            echo "[INFO] Launching MP3 to Video Converter..."
+            bash "$ROOT_DIR/launchers/mp3_to_video_converter.sh"
+            break
+            ;;
+        6)
+            echo ""
             echo "[INFO] Goodbye!"
             exit 0
             ;;
         *)
-            echo "[ERROR] Invalid choice. Please select 1-5."
+            echo "[ERROR] Invalid choice. Please select 1-6."
             ;;
     esac
 done

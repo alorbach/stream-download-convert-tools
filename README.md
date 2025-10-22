@@ -99,11 +99,13 @@ The original individual tools are still available for users who prefer separate 
 - `launchers/youtube_downloader.bat` - YouTube downloader only
 - `launchers/video_to_mp3_converter.bat` - Video to MP3 converter only  
 - `launchers/audio_modifier.bat` - Audio modifier only
+- `launchers/mp3_to_video_converter.bat` - MP3 to video converter only
 
 **Linux/Mac:**
 - `launchers/youtube_downloader.sh` - YouTube downloader only
 - `launchers/video_to_mp3_converter.sh` - Video to MP3 converter only
 - `launchers/audio_modifier.sh` - Audio modifier only
+- `launchers/mp3_to_video_converter.sh` - MP3 to video converter only
 
 ## How to Use Stream Download Convert Tools - Unified
 
@@ -196,11 +198,80 @@ The original individual tools are still available for users who prefer separate 
      - `{Views (Billions)}` - View count
    - Default pattern: `{Rank}_{Song Title}_{Artist}`
 
+## MP3 to Video Converter (Individual Tool)
+
+A standalone tool for creating videos from MP3 files:
+
+### Features
+- Combine MP3 files with images or videos
+- Image source: Create videos with static images as background
+- Video source: Automatically loop existing videos to match MP3 duration
+- Loop modes: Forward only or forward-reverse for seamless looping
+- Multiple output qualities: Auto (smart defaults), 480p, 720p, 1080p, Mobile Portrait (9:16), Mobile Landscape (16:9), Instagram Square (1:1), Instagram Story (9:16), Portrait 2:3, Landscape 3:2, Image Size (uses original image dimensions)
+- Flexible scaling modes: Stretch, Expand (with black bars), Truncate (crop to fit)
+- Batch processing: Convert multiple MP3 files at once
+- Configurable video codecs: H.264, H.265, VP9
+- Automatic image dimension detection and display
+- Settings persistence: Remembers your preferences and file selections between sessions
+
+### Usage
+1. **Select MP3 Files**: Choose one or more MP3 files to convert
+2. **Choose Video Source**: 
+   - **Image**: Select a static image (JPG, PNG, etc.)
+   - **Video**: Select a video file to loop (MP4, WEBM, etc.) - video will be repeated to match MP3 length
+3. **Configure Settings**:
+   - Output folder location
+   - Video quality (Auto, 480p, 720p, 1080p, Mobile Portrait, Mobile Landscape, Instagram Square, Instagram Story, Portrait 2:3, Landscape 3:2, Image Size)
+   - Video codec (H.264, H.265, VP9)
+   - Scaling mode (Stretch, Expand, Truncate)
+   - Loop mode (for video sources): Forward only or Forward-Reverse
+4. **Convert**: Start the conversion process
+
+### Quality Modes
+- **Auto**: Smart defaults - uses image dimensions for image sources, 720p for video sources
+- **480p**: Standard definition (854x480)
+- **720p**: High definition (1280x720)
+- **1080p**: Full high definition (1920x1080)
+- **Mobile Portrait (9:16)**: Vertical mobile format (720x1280)
+- **Mobile Landscape (16:9)**: Horizontal mobile format (1280x720)
+- **Instagram Square (1:1)**: Square format for Instagram posts (1080x1080)
+- **Instagram Story (9:16)**: Vertical format for Instagram stories (1080x1920)
+- **Portrait 2:3**: Traditional portrait format (720x1080)
+- **Landscape 3:2**: Traditional landscape format (1080x720)
+- **Image Size**: Uses original image dimensions (only available when image source is selected)
+
+### Scaling Modes
+- **Stretch**: Fills the entire frame, may distort aspect ratio
+- **Expand**: Fits content within frame, adds black bars (letterbox/pillarbox) to maintain aspect ratio
+- **Truncate**: Crops content to fit frame exactly, may cut off parts of the image/video
+
+### Settings Persistence
+The application automatically saves your preferences and restores them on startup:
+- **Output folder**: Last selected output directory
+- **Video quality**: Last selected quality setting
+- **Video codec**: Last selected codec
+- **Scaling mode**: Last selected scaling method
+- **Video source type**: Image or video source preference
+- **Loop mode**: Forward or forward-reverse preference
+- **File selections**: Last selected image and video files (if they still exist)
+- **Image dimensions**: Cached image dimensions for faster loading
+
+Settings are stored in `mp3_to_video_converter_settings.json` in the project root.
+
+### Use Cases
+- Create music videos with album artwork
+- Generate video content for social media (Instagram, TikTok, YouTube Shorts)
+- Convert audio podcasts to video format
+- Create visualizers for music tracks
+- Mobile-first content creation
+- Social media marketing videos
+
 ## Recommended Workflow
 
 1. **Download Videos**: Use the YouTube Downloader tab to download videos from CSV lists
 2. **Convert to MP3**: Use the Video to MP3 Converter tab to extract audio from downloaded videos
 3. **Modify Audio**: Use the Audio Modifier tab to adjust speed and pitch as needed
+4. **Create Videos**: Use the MP3 to Video Converter to create videos from MP3 files
 
 ## FFmpeg Setup (First Time Only)
 
@@ -250,7 +321,8 @@ stream-download-convert-tools/
 │   ├── stream_download_convert_tools_unified.py  # Unified application (RECOMMENDED)
 │   ├── youtube_downloader.py           # Individual YouTube downloader
 │   ├── video_to_mp3_converter.py       # Individual Video to MP3 converter
-│   └── audio_modifier.py               # Individual Audio modifier
+│   ├── audio_modifier.py               # Individual Audio modifier
+│   └── mp3_to_video_converter.py       # Individual MP3 to Video converter
 ├── launchers/                           # Launcher scripts
 │   ├── stream_download_convert_tools_unified.bat  # Windows launcher (Unified - RECOMMENDED)
 │   ├── stream_download_convert_tools_unified.sh   # Linux/Mac launcher (Unified - RECOMMENDED)
@@ -259,7 +331,9 @@ stream-download-convert-tools/
 │   ├── video_to_mp3_converter.bat      # Windows launcher (Converter only)
 │   ├── video_to_mp3_converter.sh       # Linux/Mac launcher (Converter only)
 │   ├── audio_modifier.bat              # Windows launcher (Audio Modifier only)
-│   └── audio_modifier.sh               # Linux/Mac launcher (Audio Modifier only)
+│   ├── audio_modifier.sh               # Linux/Mac launcher (Audio Modifier only)
+│   ├── mp3_to_video_converter.bat      # Windows launcher (MP3 to Video only)
+│   └── mp3_to_video_converter.sh       # Linux/Mac launcher (MP3 to Video only)
 ├── requirements.txt                     # Python dependencies
 ├── .gitignore                           # Git ignore rules
 ├── AGENTS.md                            # Developer/agent documentation

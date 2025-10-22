@@ -56,18 +56,20 @@ echo 1. Audio Tools Unified
 echo 2. YouTube Downloader
 echo 3. Video to MP3 Converter  
 echo 4. Audio Modifier
-echo 5. Exit
+echo 5. MP3 to Video Converter
+echo 6. Exit
 echo.
 
 :menu
-set /p choice="Please select a tool (1-5): "
+set /p choice="Please select a tool (1-6): "
 
 if "%choice%"=="1" goto audio_unified
 if "%choice%"=="2" goto youtube_downloader
 if "%choice%"=="3" goto video_converter
 if "%choice%"=="4" goto audio_modifier
-if "%choice%"=="5" goto exit
-echo [ERROR] Invalid choice. Please select 1-5.
+if "%choice%"=="5" goto mp3_to_video_converter
+if "%choice%"=="6" goto exit
+echo [ERROR] Invalid choice. Please select 1-6.
 goto menu
 
 :youtube_downloader
@@ -92,6 +94,12 @@ goto end
 echo.
 echo [INFO] Launching Audio Tools Unified...
 call "%ROOT_DIR%\launchers\audio_tools_unified.bat"
+goto end
+
+:mp3_to_video_converter
+echo.
+echo [INFO] Launching MP3 to Video Converter...
+call "%ROOT_DIR%\launchers\mp3_to_video_converter.bat"
 goto end
 
 :exit
