@@ -46,18 +46,19 @@ else
 fi
 
 echo ""
-echo "[INFO] Available Audio Tools:"
+echo "[INFO] Available Audio/Video Tools:"
 echo ""
 echo "1. Audio Tools Unified"
 echo "2. YouTube Downloader"
 echo "3. Video to MP3 Converter"
 echo "4. Audio Modifier"
 echo "5. MP3 to Video Converter"
-echo "6. Exit"
+echo "6. Video Editor"
+echo "7. Exit"
 echo ""
 
 while true; do
-    read -p "Please select a tool (1-6): " choice
+    read -p "Please select a tool (1-7): " choice
     
     case $choice in
         1)
@@ -92,11 +93,17 @@ while true; do
             ;;
         6)
             echo ""
+            echo "[INFO] Launching Video Editor..."
+            bash "$ROOT_DIR/launchers/video_editor.sh"
+            break
+            ;;
+        7)
+            echo ""
             echo "[INFO] Goodbye!"
             exit 0
             ;;
         *)
-            echo "[ERROR] Invalid choice. Please select 1-6."
+            echo "[ERROR] Invalid choice. Please select 1-7."
             ;;
     esac
 done

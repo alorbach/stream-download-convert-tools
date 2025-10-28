@@ -43,7 +43,9 @@ stream-download-convert-tools/
 │   ├── stream_download_convert_tools_unified.py      # Unified application (RECOMMENDED)
 │   ├── youtube_downloader.py      # Individual YouTube downloader
 │   ├── video_to_mp3_converter.py   # Individual Video to MP3 converter
-│   └── audio_modifier.py           # Individual Audio modifier
+│   ├── audio_modifier.py           # Individual Audio modifier
+│   ├── mp3_to_video_converter.py   # Individual MP3 to Video converter
+│   └── video_editor.py             # Individual Video Editor
 ├── launchers/              # Launcher scripts
 │   ├── stream_download_convert_tools_unified.bat     # Windows launcher (Unified - RECOMMENDED)
 │   ├── stream_download_convert_tools_unified.sh      # Linux/Mac launcher (Unified - RECOMMENDED)
@@ -52,7 +54,11 @@ stream-download-convert-tools/
 │   ├── video_to_mp3_converter.bat # Windows launcher (Individual)
 │   ├── video_to_mp3_converter.sh  # Linux/Mac launcher (Individual)
 │   ├── audio_modifier.bat          # Windows launcher (Individual)
-│   └── audio_modifier.sh           # Linux/Mac launcher (Individual)
+│   ├── audio_modifier.sh           # Linux/Mac launcher (Individual)
+│   ├── mp3_to_video_converter.bat  # Windows launcher (Individual)
+│   ├── mp3_to_video_converter.sh   # Linux/Mac launcher (Individual)
+│   ├── video_editor.bat             # Windows launcher (Individual)
+│   └── video_editor.sh              # Linux/Mac launcher (Individual)
 ├── requirements.txt        # Python dependencies
 ├── .gitignore             # Git ignore rules
 ├── AGENT.md               # This file
@@ -110,9 +116,11 @@ The project uses CSV files with YouTube links. Example format from `input/top100
 ### External Tools Used
 - **yt-dlp**: YouTube downloading (https://github.com/yt-dlp/yt-dlp)
 - **FFmpeg**: Video/audio conversion and modification (https://ffmpeg.org/)
-  - Windows: Automatically downloaded by video_to_mp3_converter.py and audio_modifier.py
+  - Windows: Automatically downloaded by video_to_mp3_converter.py, audio_modifier.py, mp3_to_video_converter.py, and video_editor.py
   - Linux/Mac: User must install manually
 - **tkinter**: GUI framework (included with Python)
+- **tkinterdnd2**: Drag-and-drop support for Tkinter (optional, for video_editor.py)
+- **opencv-python**: Video preview support (optional, for video_editor.py)
 - **csv**: CSV parsing (Python standard library)
 
 ## Notes for AI Agents

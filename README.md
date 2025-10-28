@@ -100,12 +100,14 @@ The original individual tools are still available for users who prefer separate 
 - `launchers/video_to_mp3_converter.bat` - Video to MP3 converter only  
 - `launchers/audio_modifier.bat` - Audio modifier only
 - `launchers/mp3_to_video_converter.bat` - MP3 to video converter only
+- `launchers/video_editor.bat` - Video editor for combining and arranging videos
 
 **Linux/Mac:**
 - `launchers/youtube_downloader.sh` - YouTube downloader only
 - `launchers/video_to_mp3_converter.sh` - Video to MP3 converter only
 - `launchers/audio_modifier.sh` - Audio modifier only
 - `launchers/mp3_to_video_converter.sh` - MP3 to video converter only
+- `launchers/video_editor.sh` - Video editor for combining and arranging videos
 
 ## How to Use Stream Download Convert Tools - Unified
 
@@ -198,6 +200,54 @@ The original individual tools are still available for users who prefer separate 
      - `{Views (Billions)}` - View count
    - Default pattern: `{Rank}_{Song Title}_{Artist}`
 
+## Video Editor (Individual Tool)
+
+A standalone tool for arranging and combining multiple video files:
+
+### Features
+- Drag-and-drop video arrangement: Visually arrange videos in a grid by dragging thumbnails
+- Video preview: Preview combined videos before saving
+- Frame export: Export first or last frame as PNG images
+- Video combination: Combine multiple videos into a single output file
+- Configurable grid: Adjust number of columns in the video grid
+- Project management: Save and load video arrangements as project files
+- System player fallback: Automatically falls back to system player when OpenCV GUI is not available
+- FFmpeg integration: Uses FFmpeg for video processing and thumbnail generation
+
+### Usage
+1. **Add Videos**: Click "Add Videos" button or drag-and-drop video files from Explorer
+2. **Arrange Videos**: Drag video thumbnails to reorder them in the grid
+3. **Adjust Grid**: Change the number of columns using the "Grid Columns" spinner
+4. **Preview**: Click "Preview Combined Video" to preview the result
+5. **Export**: Click "Export Combined Video" to save the combined video file
+6. **Save Project**: Use File > Save Project to save your arrangement for later
+
+### Supported Formats
+- Video: MP4, WEBM, AVI, MOV, MKV, FLV, WMV, M4V
+- Output: MP4
+
+### Frame Export
+- Export first frame as PNG image
+- Export last frame as PNG image  
+- Frames are saved in the same folder as the source video
+
+### Project Files
+Save your video arrangements as JSON project files:
+- Stores video file paths and their order
+- Grid column configuration
+- Can be loaded later to resume editing
+
+### Requirements
+- FFmpeg for video processing (automatically managed)
+- Optional: OpenCV for in-app video preview (falls back to system player if not available)
+
+### Use Cases
+- Combine multiple short videos into one longer video
+- Reorder video clips before uploading
+- Extract thumbnails from videos
+- Prepare video content for social media
+- Create video compilations
+
 ## MP3 to Video Converter (Individual Tool)
 
 A standalone tool for creating videos from MP3 files:
@@ -272,6 +322,7 @@ Settings are stored in `mp3_to_video_converter_settings.json` in the project roo
 2. **Convert to MP3**: Use the Video to MP3 Converter tab to extract audio from downloaded videos
 3. **Modify Audio**: Use the Audio Modifier tab to adjust speed and pitch as needed
 4. **Create Videos**: Use the MP3 to Video Converter to create videos from MP3 files
+5. **Edit Videos**: Use the Video Editor to combine and arrange multiple videos
 
 ## FFmpeg Setup (First Time Only)
 
@@ -322,7 +373,8 @@ stream-download-convert-tools/
 │   ├── youtube_downloader.py           # Individual YouTube downloader
 │   ├── video_to_mp3_converter.py       # Individual Video to MP3 converter
 │   ├── audio_modifier.py               # Individual Audio modifier
-│   └── mp3_to_video_converter.py       # Individual MP3 to Video converter
+│   ├── mp3_to_video_converter.py       # Individual MP3 to Video converter
+│   └── video_editor.py                  # Individual Video Editor
 ├── launchers/                           # Launcher scripts
 │   ├── stream_download_convert_tools_unified.bat  # Windows launcher (Unified - RECOMMENDED)
 │   ├── stream_download_convert_tools_unified.sh   # Linux/Mac launcher (Unified - RECOMMENDED)
@@ -333,7 +385,9 @@ stream-download-convert-tools/
 │   ├── audio_modifier.bat              # Windows launcher (Audio Modifier only)
 │   ├── audio_modifier.sh               # Linux/Mac launcher (Audio Modifier only)
 │   ├── mp3_to_video_converter.bat      # Windows launcher (MP3 to Video only)
-│   └── mp3_to_video_converter.sh       # Linux/Mac launcher (MP3 to Video only)
+│   ├── mp3_to_video_converter.sh       # Linux/Mac launcher (MP3 to Video only)
+│   ├── video_editor.bat                 # Windows launcher (Video Editor only)
+│   └── video_editor.sh                  # Linux/Mac launcher (Video Editor only)
 ├── requirements.txt                     # Python dependencies
 ├── .gitignore                           # Git ignore rules
 ├── AGENTS.md                            # Developer/agent documentation
