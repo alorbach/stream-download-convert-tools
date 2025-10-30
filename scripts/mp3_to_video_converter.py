@@ -18,6 +18,7 @@ limitations under the License.
 
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
+from tkinterdnd2 import DND_FILES, TkinterDnD
 import os
 import sys
 import threading
@@ -71,21 +72,21 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
         main_frame.pack(fill='both', expand=True, padx=10, pady=10)
         
         # MP3 Files Selection
-        mp3_frame = ttk.LabelFrame(main_frame, text="MP3 Files Selection", padding=10)
-        mp3_frame.pack(fill='both', expand=True, pady=(0, 10))
+        self.mp3_frame = ttk.LabelFrame(main_frame, text="MP3 Files Selection", padding=10)
+        self.mp3_frame.pack(fill='both', expand=True, pady=(0, 10))
         
-        btn_frame = ttk.Frame(mp3_frame)
-        btn_frame.pack(fill='x', pady=5)
+        self.btn_mp3_frame = ttk.Frame(self.mp3_frame)
+        self.btn_mp3_frame.pack(fill='x', pady=5)
         
-        ttk.Button(btn_frame, text="Select MP3 Files", command=self.select_mp3_files).pack(side='left', padx=5)
-        ttk.Button(btn_frame, text="Clear Selection", command=self.clear_mp3_selection).pack(side='left', padx=5)
+        ttk.Button(self.btn_mp3_frame, text="Select MP3 Files", command=self.select_mp3_files).pack(side='left', padx=5)
+        ttk.Button(self.btn_mp3_frame, text="Clear Selection", command=self.clear_mp3_selection).pack(side='left', padx=5)
         
-        self.lbl_mp3_status = ttk.Label(btn_frame, text="No files selected")
+        self.lbl_mp3_status = ttk.Label(self.btn_mp3_frame, text="No files selected")
         self.lbl_mp3_status.pack(side='left', padx=10)
         
-        ttk.Label(mp3_frame, text="Selected MP3 Files:").pack(anchor='w', pady=(10, 5))
+        ttk.Label(self.mp3_frame, text="Selected MP3 Files:").pack(anchor='w', pady=(10, 5))
         
-        list_frame = ttk.Frame(mp3_frame)
+        list_frame = ttk.Frame(self.mp3_frame)
         list_frame.pack(fill='both', expand=True)
         
         scrollbar_y = ttk.Scrollbar(list_frame, orient='vertical')
@@ -108,6 +109,19 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
         
         list_frame.grid_rowconfigure(0, weight=1)
         list_frame.grid_columnconfigure(0, weight=1)
+
+        # Drag-and-drop: allow dropping MP3/audio files onto the list
+        try:
+            self.mp3_file_listbox.drop_target_register(DND_FILES)
+            self.mp3_file_listbox.dnd_bind('<<Drop>>', self.on_drop_mp3_files)
+            # Also allow dropping anywhere in the MP3 section
+            self.mp3_frame.drop_target_register(DND_FILES)
+            self.mp3_frame.dnd_bind('<<Drop>>', self.on_drop_mp3_files)
+            self.btn_mp3_frame.drop_target_register(DND_FILES)
+            self.btn_mp3_frame.dnd_bind('<<Drop>>', self.on_drop_mp3_files)
+            print("[DEBUG] DnD registered: mp3_file_listbox, mp3_frame, btn_mp3_frame")
+        except Exception:
+            pass
         
         # Video Source Selection
         source_frame = ttk.LabelFrame(main_frame, text="Video Source", padding=10)
@@ -135,19 +149,39 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
         
         self.lbl_image_status = ttk.Label(btn_image_frame, text="No image selected")
         self.lbl_image_status.pack(side='left', padx=10)
+
+        # Drag-and-drop: allow dropping image file onto the image area label
+        try:
+            self.lbl_image_status.drop_target_register(DND_FILES)
+            self.lbl_image_status.dnd_bind('<<Drop>>', self.on_drop_image_file)
+            print("[DEBUG] DnD registered: lbl_image_status")
+        except Exception:
+            pass
         
         # Video file selection
         self.video_frame = ttk.Frame(source_frame)
         self.video_frame.pack(fill='x', pady=5)
         
-        btn_video_frame = ttk.Frame(self.video_frame)
-        btn_video_frame.pack(fill='x')
+        self.btn_video_frame = ttk.Frame(self.video_frame)
+        self.btn_video_frame.pack(fill='x')
         
-        ttk.Button(btn_video_frame, text="Select Video File", command=self.select_video_file).pack(side='left', padx=5)
-        ttk.Button(btn_video_frame, text="Clear Video", command=self.clear_video_selection).pack(side='left', padx=5)
+        ttk.Button(self.btn_video_frame, text="Select Video File", command=self.select_video_file).pack(side='left', padx=5)
+        ttk.Button(self.btn_video_frame, text="Clear Video", command=self.clear_video_selection).pack(side='left', padx=5)
         
-        self.lbl_video_status = ttk.Label(btn_video_frame, text="No video selected")
+        self.lbl_video_status = ttk.Label(self.btn_video_frame, text="No video selected")
         self.lbl_video_status.pack(side='left', padx=10)
+
+        # Drag-and-drop: allow dropping video file onto the video area label and containers
+        try:
+            self.lbl_video_status.drop_target_register(DND_FILES)
+            self.lbl_video_status.dnd_bind('<<Drop>>', self.on_drop_video_file)
+            self.video_frame.drop_target_register(DND_FILES)
+            self.video_frame.dnd_bind('<<Drop>>', self.on_drop_video_file)
+            self.btn_video_frame.drop_target_register(DND_FILES)
+            self.btn_video_frame.dnd_bind('<<Drop>>', self.on_drop_video_file)
+            print("[DEBUG] DnD registered: lbl_video_status, video_frame, btn_video_frame")
+        except Exception:
+            pass
         
         # Loop settings (only for video source)
         self.loop_frame = ttk.LabelFrame(source_frame, text="Loop Settings", padding=10)
@@ -243,6 +277,20 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
         self.scaling_mode_var.trace('w', self.save_settings)
         self.video_source_type.trace('w', self.save_settings)
         self.loop_mode.trace('w', self.save_settings)
+
+        # Global drag-and-drop as a safety net (window and main container)
+        try:
+            self.root.drop_target_register(DND_FILES)
+            self.root.dnd_bind('<<Drop>>', self.on_drop_any)
+            print("[DEBUG] DnD registered: root")
+        except Exception:
+            pass
+        try:
+            main_frame.drop_target_register(DND_FILES)
+            main_frame.dnd_bind('<<Drop>>', self.on_drop_any)
+            print("[DEBUG] DnD registered: main_frame")
+        except Exception:
+            pass
     
     def on_source_type_change(self):
         """Handle video source type change."""
@@ -276,6 +324,8 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
             
             self.update_mp3_file_list()
             self.log(f"[INFO] Added {len(files)} MP3 file(s) to selection")
+            # Auto-set output folder to the folder of the first selected MP3
+            self._auto_set_output_from_mp3(files[0])
     
     def clear_mp3_selection(self):
         """Clear MP3 file selection."""
@@ -293,6 +343,127 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
         
         count = len(self.selected_mp3_files)
         self.lbl_mp3_status.config(text=f"{count} file(s) selected")
+
+    def _parse_dropped_paths(self, data):
+        """Parse dropped file list from DND event data (supports {path with spaces})."""
+        import re
+        if not data:
+            return []
+        # Match sequences wrapped in { }, or in double quotes, or bare non-space tokens
+        tokens = re.findall(r"\{[^}]+\}|\"[^\"]+\"|\S+", data)
+        paths = []
+        for t in tokens:
+            t = t.strip()
+            if t.startswith('{') and t.endswith('}'):
+                t = t[1:-1]
+            if t.startswith('"') and t.endswith('"'):
+                t = t[1:-1]
+            if t:
+                paths.append(t)
+        print(f"[DEBUG] Parsed drop data: {paths}")
+        return paths
+
+    def on_drop_mp3_files(self, event):
+        print(f"[DEBUG] on_drop_mp3_files from {event.widget}: {event.data}")
+        paths = self._parse_dropped_paths(event.data)
+        allowed_ext = {'.mp3', '.m4a', '.wav', '.ogg', '.flac'}
+        added = 0
+        first_added = None
+        for p in paths:
+            ext = os.path.splitext(p)[1].lower()
+            if ext in allowed_ext and p not in self.selected_mp3_files:
+                self.selected_mp3_files.append(p)
+                added += 1
+                if first_added is None:
+                    first_added = p
+        if added:
+            self.update_mp3_file_list()
+            self.log(f"[INFO] Added {added} audio file(s) via drag and drop")
+            if first_added:
+                self._auto_set_output_from_mp3(first_added)
+        else:
+            print("[DEBUG] No valid audio files in drop")
+
+    def on_drop_image_file(self, event):
+        print(f"[DEBUG] on_drop_image_file from {event.widget}: {event.data}")
+        paths = self._parse_dropped_paths(event.data)
+        image_ext = {'.jpg', '.jpeg', '.png', '.bmp', '.gif'}
+        for p in paths:
+            ext = os.path.splitext(p)[1].lower()
+            if ext in image_ext:
+                self.selected_image_file = p
+                filename = os.path.basename(self.selected_image_file)
+                self.lbl_image_status.config(text=f"Selected: {filename}")
+                # Get dimensions if possible
+                try:
+                    from PIL import Image
+                    with Image.open(self.selected_image_file) as img:
+                        self.image_width, self.image_height = img.size
+                        self.image_dimensions_label.config(text=f"({self.image_width}x{self.image_height})")
+                        self.video_quality_var.set("Image Size")
+                except Exception:
+                    self.image_width, self.image_height = None, None
+                    self.image_dimensions_label.config(text="")
+                self.log(f"[INFO] Image selected via drag and drop: {filename}")
+                break
+        else:
+            print("[DEBUG] No valid image file in drop")
+
+    def on_drop_video_file(self, event):
+        print(f"[DEBUG] on_drop_video_file from {event.widget}: {event.data}")
+        paths = self._parse_dropped_paths(event.data)
+        video_ext = {'.mp4', '.webm', '.avi', '.mov', '.mkv', '.flv', '.wmv'}
+        for p in paths:
+            ext = os.path.splitext(p)[1].lower()
+            if ext in video_ext:
+                self.selected_video_file = p
+                filename = os.path.basename(self.selected_video_file)
+                self.lbl_video_status.config(text=f"Selected: {filename}")
+                self.log(f"[INFO] Video selected via drag and drop: {filename}")
+                break
+        else:
+            print("[DEBUG] No valid video file in drop")
+
+    def on_drop_any(self, event):
+        """Catch-all drop handler: accepts MP3s into list and a single video file."""
+        print(f"[DEBUG] on_drop_any from {event.widget}: {event.data}")
+        paths = self._parse_dropped_paths(event.data)
+        audio_ext = {'.mp3', '.m4a', '.wav', '.ogg', '.flac'}
+        video_ext = {'.mp4', '.webm', '.avi', '.mov', '.mkv', '.flv', '.wmv'}
+        added_audio = 0
+        set_video = False
+        first_added_audio = None
+        for p in paths:
+            ext = os.path.splitext(p)[1].lower()
+            if ext in audio_ext:
+                if p not in self.selected_mp3_files:
+                    self.selected_mp3_files.append(p)
+                    added_audio += 1
+                    if first_added_audio is None:
+                        first_added_audio = p
+            elif ext in video_ext and not set_video:
+                self.selected_video_file = p
+                filename = os.path.basename(self.selected_video_file)
+                self.lbl_video_status.config(text=f"Selected: {filename}")
+                set_video = True
+        if added_audio:
+            self.update_mp3_file_list()
+            self.log(f"[INFO] Added {added_audio} audio file(s) via drag and drop")
+            if first_added_audio:
+                self._auto_set_output_from_mp3(first_added_audio)
+        if set_video:
+            self.log("[INFO] Video selected via drag and drop (global handler)")
+
+    def _auto_set_output_from_mp3(self, reference_file):
+        """Set output folder to the directory of the reference MP3 file."""
+        try:
+            folder = os.path.dirname(reference_file)
+            if folder and os.path.isdir(folder):
+                self.output_folder_var.set(folder)
+                self.file_manager.set_folder_path('output', folder)
+                self.log(f"[INFO] Output folder set to: {folder}")
+        except Exception as e:
+            print(f"[DEBUG] Failed to auto-set output folder: {e}")
     
     def select_image_file(self):
         """Select image file."""
@@ -802,7 +973,7 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
 
 
 def main():
-    root = tk.Tk()
+    root = TkinterDnD.Tk()
     app = MP3ToVideoConverterGUI(root)
     
     # Handle window closing

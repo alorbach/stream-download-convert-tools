@@ -18,6 +18,7 @@ limitations under the License.
 
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
+from tkinterdnd2 import DND_FILES, TkinterDnD
 import os
 import sys
 import threading
@@ -78,6 +79,14 @@ class VideoToMP3ConverterGUI(BaseAudioGUI):
         
         list_frame.grid_rowconfigure(0, weight=1)
         list_frame.grid_columnconfigure(0, weight=1)
+
+        # Drag-and-drop support for adding files
+        try:
+            self.file_listbox.drop_target_register(DND_FILES)
+            self.file_listbox.dnd_bind('<<Drop>>', self.on_drop_files)
+        except Exception:
+            # If DnD not available, silently ignore
+            pass
         
         settings_frame = ttk.LabelFrame(self.root, text="Conversion Settings", padding=10)
         settings_frame.pack(fill='x', padx=10, pady=10)
@@ -165,6 +174,38 @@ class VideoToMP3ConverterGUI(BaseAudioGUI):
         
         count = len(self.selected_files)
         self.lbl_status.config(text=f"{count} file(s) selected")
+
+    def _parse_dropped_paths(self, data):
+        """Parse dropped file list from DND event data (supports {path with spaces})."""
+        import re
+        if not data:
+            return []
+        tokens = re.findall(r"\{[^}]+\}|\"[^\"]+\"|\S+", data)
+        paths = []
+        for t in tokens:
+            t = t.strip()
+            if t.startswith('{') and t.endswith('}'):
+                t = t[1:-1]
+            if t.startswith('"') and t.endswith('"'):
+                t = t[1:-1]
+            if t:
+                paths.append(t)
+        return paths
+
+    def on_drop_files(self, event):
+        """Handle files dropped onto the listbox."""
+        paths = self._parse_dropped_paths(event.data)
+        # Accept video/audio input types supported by this tool
+        allowed_ext = {'.mp4', '.webm', '.m4a', '.avi', '.mov', '.mkv', '.flv', '.wmv'}
+        added = 0
+        for p in paths:
+            ext = os.path.splitext(p)[1].lower()
+            if ext in allowed_ext and p not in self.selected_files:
+                self.selected_files.append(p)
+                added += 1
+        if added:
+            self.update_file_list()
+            self.log(f"[INFO] Added {added} file(s) via drag and drop")
     
     def check_ffmpeg(self):
         return super().check_ffmpeg()
@@ -338,7 +379,7 @@ class VideoToMP3ConverterGUI(BaseAudioGUI):
 
 
 def main():
-    root = tk.Tk()
+    root = TkinterDnD.Tk()
     app = VideoToMP3ConverterGUI(root)
     root.mainloop()
 
