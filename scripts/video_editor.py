@@ -76,6 +76,33 @@ class VideoEditorGUI(BaseAudioGUI):
         self.load_settings()
         self.check_ffmpeg_availability()
     
+    def _escape_for_concat(self, file_path: str) -> str:
+        """Return a POSIX-style path with quotes escaped for ffmpeg concat demuxer."""
+        # Normalize to absolute POSIX path to avoid backslash escaping issues on Windows
+        posix_path = Path(file_path).resolve().as_posix()
+        # Escape single quotes per ffmpeg concat demuxer rules
+        return posix_path.replace("'", r"\'")
+
+    def _write_concat_file(self) -> str:
+        """Write concat list file with proper escaping and return its path."""
+        concat_file = os.path.join(self.root_dir, 'temp_concat.txt')
+        lines_written = []
+        with open(concat_file, 'w', encoding='utf-8', newline='\n') as f:
+            for video_file in self.video_files:
+                if not os.path.isfile(video_file):
+                    self.log(f"[WARNING] File not found, skipping in concat: {video_file}")
+                    continue
+                safe_path = self._escape_for_concat(video_file)
+                line = f"file '{safe_path}'\n"
+                f.write(line)
+                lines_written.append(line.strip())
+        # Log concat file diagnostics (first few lines)
+        preview_lines = lines_written[:4]
+        self.log(f"[DEBUG] Concat file: {concat_file}")
+        for l in preview_lines:
+            self.log(f"[DEBUG] Concat line: {l}")
+        return concat_file
+
     def setup_ui(self):
         # Main container
         main_frame = ttk.Frame(self.root)
@@ -580,10 +607,7 @@ class VideoEditorGUI(BaseAudioGUI):
             ffmpeg_cmd = self.get_ffmpeg_command()
             
             # Create concat file
-            concat_file = os.path.join(self.root_dir, 'temp_concat.txt')
-            with open(concat_file, 'w') as f:
-                for video_file in self.video_files:
-                    f.write(f"file '{video_file}'\n")
+            concat_file = self._write_concat_file()
             
             # Use concat demuxer with faster encoding for preview
             cmd = f'{ffmpeg_cmd} -f concat -safe 0 -i "{concat_file}" -c:v libx264 -preset ultrafast -crf 28 -c:a aac -b:a 128k -y "{preview_file}"'
@@ -603,7 +627,8 @@ class VideoEditorGUI(BaseAudioGUI):
                 self.root.after(0, lambda: self.root.config(cursor=''))
                 self.root.after(0, lambda: self._play_preview(preview_file))
             else:
-                error_msg = result.stderr[:500] if result.stderr else "Unknown error"
+                # Log more of stderr for diagnosis
+                error_msg = result.stderr[:2000] if result.stderr else "Unknown error"
                 self.root.after(0, lambda: self.log(f"[ERROR] Failed to create preview: {error_msg}"))
                 self.root.after(0, lambda: self.root.config(cursor=''))
                 self.root.after(0, lambda: messagebox.showerror("Error", f"Failed to create preview:\n{error_msg}"))
@@ -766,10 +791,7 @@ class VideoEditorGUI(BaseAudioGUI):
             ffmpeg_cmd = self.get_ffmpeg_command()
             
             # Create concat file
-            concat_file = os.path.join(self.root_dir, 'temp_concat.txt')
-            with open(concat_file, 'w') as f:
-                for video_file in self.video_files:
-                    f.write(f"file '{video_file}'\n")
+            concat_file = self._write_concat_file()
             
             # Use concat demuxer for lossless combination
             cmd = f'{ffmpeg_cmd} -f concat -safe 0 -i "{concat_file}" -c copy -y "{output_file}"'
@@ -786,10 +808,20 @@ class VideoEditorGUI(BaseAudioGUI):
                 self.root.after(0, lambda: self.log(f"[SUCCESS] Final video saved: {os.path.basename(output_file)}"))
                 self.root.after(0, lambda: self.root.config(cursor=''))
             else:
-                error_msg = result.stderr[:500] if result.stderr else "Unknown error"
-                self.root.after(0, lambda: self.log(f"[ERROR] Failed to save: {error_msg}"))
-                self.root.after(0, lambda: self.root.config(cursor=''))
-                self.root.after(0, lambda: messagebox.showerror("Error", f"Failed to save:\n{error_msg}"))
+                # Retry with re-encode if stream copy fails
+                error_msg = result.stderr[:2000] if result.stderr else "Unknown error"
+                self.root.after(0, lambda: self.log(f"[WARNING] Copy combine failed, retrying with re-encode..."))
+                reencode_cmd = f"{ffmpeg_cmd} -f concat -safe 0 -i \"{concat_file}\" -c:v libx264 -preset veryfast -crf 18 -c:a aac -b:a 192k -movflags +faststart -y \"{output_file}\""
+                self.root.after(0, lambda: self.log(f"[DEBUG] FFmpeg reencode command: {reencode_cmd}"))
+                retry = subprocess.run(reencode_cmd, capture_output=True, text=True, cwd=self.root_dir, shell=True)
+                if retry.returncode == 0:
+                    self.root.after(0, lambda: self.log(f"[SUCCESS] Final video saved (re-encoded): {os.path.basename(output_file)}"))
+                    self.root.after(0, lambda: self.root.config(cursor=''))
+                else:
+                    error_msg2 = retry.stderr[:4000] if retry.stderr else "Unknown error"
+                    self.root.after(0, lambda: self.log(f"[ERROR] Failed to save: {error_msg2}"))
+                    self.root.after(0, lambda: self.root.config(cursor=''))
+                    self.root.after(0, lambda: messagebox.showerror("Error", f"Failed to save:\n{error_msg2}"))
         
         except Exception as e:
             error_msg = str(e)
@@ -837,10 +869,7 @@ class VideoEditorGUI(BaseAudioGUI):
             ffmpeg_cmd = self.get_ffmpeg_command()
             
             # Create concat file
-            concat_file = os.path.join(self.root_dir, 'temp_concat.txt')
-            with open(concat_file, 'w') as f:
-                for video_file in self.video_files:
-                    f.write(f"file '{video_file}'\n")
+            concat_file = self._write_concat_file()
             
             # Use concat demuxer
             cmd = [ffmpeg_cmd, '-f', 'concat', '-safe', '0', '-i', concat_file, 
@@ -859,9 +888,18 @@ class VideoEditorGUI(BaseAudioGUI):
             if result.returncode == 0:
                 self.root.after(0, lambda: self.log(f"[SUCCESS] Combined video saved: {os.path.basename(output_file)}"))
             else:
-                error_msg = result.stderr[:500] if result.stderr else "Unknown error"
-                self.root.after(0, lambda: self.log(f"[ERROR] Failed to combine videos: {error_msg}"))
-                self.root.after(0, lambda: messagebox.showerror("Error", f"Failed to combine videos:\n{error_msg}"))
+                # Retry with re-encode fallback
+                error_msg = result.stderr[:2000] if result.stderr else "Unknown error"
+                self.root.after(0, lambda: self.log(f"[WARNING] Copy combine failed, retrying with re-encode..."))
+                reencode_cmd = f"{ffmpeg_cmd} -f concat -safe 0 -i \"{concat_file}\" -c:v libx264 -preset veryfast -crf 18 -c:a aac -b:a 192k -movflags +faststart -y \"{output_file}\""
+                self.root.after(0, lambda: self.log(f"[DEBUG] FFmpeg reencode command: {reencode_cmd}"))
+                retry = subprocess.run(reencode_cmd, capture_output=True, text=True, cwd=self.root_dir, shell=True)
+                if retry.returncode == 0:
+                    self.root.after(0, lambda: self.log(f"[SUCCESS] Combined video saved (re-encoded): {os.path.basename(output_file)}"))
+                else:
+                    error_msg2 = retry.stderr[:4000] if retry.stderr else "Unknown error"
+                    self.root.after(0, lambda: self.log(f"[ERROR] Failed to combine videos: {error_msg2}"))
+                    self.root.after(0, lambda: messagebox.showerror("Error", f"Failed to combine videos:\n{error_msg2}"))
         
         except Exception as e:
             error_msg = str(e)
