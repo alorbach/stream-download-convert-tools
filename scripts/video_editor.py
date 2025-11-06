@@ -60,7 +60,7 @@ class VideoEditorGUI(BaseAudioGUI):
         self.video_files = []
         
         # Grid layout dimensions
-        self.grid_cols = 4
+        self.grid_cols = 5
         
         # Settings file path
         self.settings_file = os.path.join(self.root_dir, "video_editor_settings.json")
@@ -198,8 +198,8 @@ class VideoEditorGUI(BaseAudioGUI):
         try:
             self.grid_cols = int(self.grid_cols_var.get())
         except ValueError:
-            self.grid_cols = 4
-            self.grid_cols_var.set('4')
+            self.grid_cols = 5
+            self.grid_cols_var.set('5')
         
         self.status_var.set(f"Grid updated: {self.grid_cols} columns")
         self.refresh_grid()
@@ -976,7 +976,7 @@ class VideoEditorGUI(BaseAudioGUI):
                     project_data = json.load(f)
                 
                 self.video_files = project_data.get('video_files', [])
-                self.grid_cols = project_data.get('grid_cols', 4)
+                self.grid_cols = project_data.get('grid_cols', 5)
                 self.grid_cols_var.set(str(self.grid_cols))
                 
                 self.log(f"[INFO] Project loaded: {os.path.basename(filename)}")
