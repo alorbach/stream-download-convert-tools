@@ -101,6 +101,7 @@ The original individual tools are still available for users who prefer separate 
 - `launchers/audio_modifier.bat` - Audio modifier only
 - `launchers/mp3_to_video_converter.bat` - MP3 to video converter only
 - `launchers/video_editor.bat` - Video editor for combining and arranging videos
+- `launchers/suno_style_browser.bat` - Suno Style Browser for AI music cover generation
 
 **Linux/Mac:**
 - `launchers/youtube_downloader.sh` - YouTube downloader only
@@ -108,6 +109,7 @@ The original individual tools are still available for users who prefer separate 
 - `launchers/audio_modifier.sh` - Audio modifier only
 - `launchers/mp3_to_video_converter.sh` - MP3 to video converter only
 - `launchers/video_editor.sh` - Video editor for combining and arranging videos
+- `launchers/suno_style_browser.sh` - Suno Style Browser for AI music cover generation
 
 ## How to Use Stream Download Convert Tools - Unified
 
@@ -248,6 +250,76 @@ Save your video arrangements as JSON project files:
 - Prepare video content for social media
 - Create video compilations
 
+## Suno Style Browser (Individual Tool)
+
+A specialized tool for browsing music styles and generating AI-powered content for music covers:
+
+### Features
+- **Style Browser**: Browse and filter music styles from CSV files with advanced search and filtering
+- **AI Cover Name Generation**: Generate creative AI cover names based on song and style information
+- **Style Merging**: Combine multiple music styles using AI to create unique merged style descriptions
+- **Album Cover Generation**: Generate AI prompts and create album cover images using Azure OpenAI DALL-E
+- **Video Loop Generation**: Generate AI prompts and create video loops for music visualizers using Azure video generation
+- **YouTube Description Export**: Export SEO-optimized YouTube descriptions with hashtags and metadata
+- **Song Details Management**: Save and load song details, styles, lyrics, and prompts
+- **Azure AI Integration**: Configure multiple Azure AI profiles for text, image, and video generation
+- **Preview Support**: Preview generated album covers directly in the application
+- **Debug Output**: Comprehensive debug logging for troubleshooting AI operations
+
+### Usage
+1. **Browse Styles**: Load a CSV file with music styles and use filters to find the perfect style
+2. **Enter Song Details**: Fill in song name, artist, lyrics, and select styles
+3. **Merge Styles**: Use AI to merge multiple styles into a unique description
+4. **Generate AI Cover Name**: Create a creative name for your AI cover
+5. **Generate Album Cover**: Create an AI prompt and generate album cover image
+6. **Generate Video Loop**: Create an AI prompt and generate video loop for music visualization
+7. **Export YouTube Description**: Export complete YouTube description with SEO optimization
+
+### Configuration
+Before using AI features, configure Azure AI settings:
+1. Go to **Settings > Azure AI Settings**
+2. Configure three profiles:
+   - **Text Profile**: For style merging and prompt generation (GPT-4)
+   - **Image Gen Profile**: For album cover generation (DALL-E 3)
+   - **Video Gen Profile**: For video loop generation (Sora/ImageVideo)
+3. Enter your Azure endpoint, deployment name, subscription key, and API version
+
+### CSV File Format
+The tool expects a CSV file with music style information. Default location: `AI/suno/suno_sound_styles.csv`
+
+Example columns:
+- `style`: Style name
+- `mood`: Mood description
+- `tempo_bpm`: Tempo in BPM
+- `instrumentation`: Instrumentation details
+- `vocal_style`: Vocal style description
+- `sample_artists`: Example artists
+- `decade_range`: Decade range (e.g., "1970s-1980s")
+- `production_notes`: Production style notes
+- `prompt`: Style prompt for AI generation
+
+### Keyboard Shortcuts
+- **Ctrl+S**: Save song details
+- **Ctrl+D**: Toggle debug output
+- **Ctrl+F**: Focus search field
+- **F5**: Reload CSV file
+
+### Requirements
+- Python 3.7 or higher
+- Azure OpenAI account with access to:
+  - Text generation (GPT-4)
+  - Image generation (DALL-E 3)
+  - Video generation (Sora/ImageVideo)
+- Internet connection for AI API calls
+
+### Use Cases
+- Create AI-generated music covers with custom styles
+- Generate album artwork for AI music projects
+- Create video loops for music visualizers
+- Export YouTube descriptions for music content
+- Browse and explore music style databases
+- Merge multiple music styles for unique compositions
+
 ## MP3 to Video Converter (Individual Tool)
 
 A standalone tool for creating videos from MP3 files:
@@ -323,6 +395,7 @@ Settings are stored in `mp3_to_video_converter_settings.json` in the project roo
 3. **Modify Audio**: Use the Audio Modifier tab to adjust speed and pitch as needed
 4. **Create Videos**: Use the MP3 to Video Converter to create videos from MP3 files
 5. **Edit Videos**: Use the Video Editor to combine and arrange multiple videos
+6. **Generate AI Content**: Use the Suno Style Browser to create AI album covers and video loops for music projects
 
 ## FFmpeg Setup (First Time Only)
 
@@ -374,7 +447,8 @@ stream-download-convert-tools/
 │   ├── video_to_mp3_converter.py       # Individual Video to MP3 converter
 │   ├── audio_modifier.py               # Individual Audio modifier
 │   ├── mp3_to_video_converter.py       # Individual MP3 to Video converter
-│   └── video_editor.py                  # Individual Video Editor
+│   ├── video_editor.py                  # Individual Video Editor
+│   └── suno_style_browser.py            # Suno Style Browser for AI music covers
 ├── launchers/                           # Launcher scripts
 │   ├── stream_download_convert_tools_unified.bat  # Windows launcher (Unified - RECOMMENDED)
 │   ├── stream_download_convert_tools_unified.sh   # Linux/Mac launcher (Unified - RECOMMENDED)
@@ -387,7 +461,9 @@ stream-download-convert-tools/
 │   ├── mp3_to_video_converter.bat      # Windows launcher (MP3 to Video only)
 │   ├── mp3_to_video_converter.sh       # Linux/Mac launcher (MP3 to Video only)
 │   ├── video_editor.bat                 # Windows launcher (Video Editor only)
-│   └── video_editor.sh                  # Linux/Mac launcher (Video Editor only)
+│   ├── video_editor.sh                  # Linux/Mac launcher (Video Editor only)
+│   ├── suno_style_browser.bat           # Windows launcher (Suno Style Browser)
+│   └── suno_style_browser.sh           # Linux/Mac launcher (Suno Style Browser)
 ├── requirements.txt                     # Python dependencies
 ├── .gitignore                           # Git ignore rules
 ├── AGENTS.md                            # Developer/agent documentation

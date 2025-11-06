@@ -1214,9 +1214,17 @@ class SunoStyleBrowser(tk.Tk):
         btn_row2.pack(fill=tk.X, expand=True, pady=(6, 0))
 
         # Row 1: Setup and Album Cover workflow
+        clear_btn = ttk.Button(btn_row1, text='Clear All', command=self.clear_song_fields)
+        clear_btn.pack(side=tk.LEFT, padx=5)
+        create_tooltip(clear_btn, 'Clear all song detail fields')
+        
         save_btn = ttk.Button(btn_row1, text='Save', command=self.save_song_details)
         save_btn.pack(side=tk.LEFT, padx=5)
         create_tooltip(save_btn, 'Save song details to config (Ctrl+S)')
+        
+        load_btn = ttk.Button(btn_row1, text='Load', command=self.load_song_details)
+        load_btn.pack(side=tk.LEFT, padx=5)
+        create_tooltip(load_btn, 'Load song details from settings file')
         
         merge_btn = ttk.Button(btn_row1, text='Merge Styles', command=self.merge_styles)
         merge_btn.pack(side=tk.LEFT, padx=5)
@@ -1230,14 +1238,14 @@ class SunoStyleBrowser(tk.Tk):
         gen_cover_btn.pack(side=tk.LEFT, padx=5)
         create_tooltip(gen_cover_btn, 'Generate album cover prompt using AI')
         
-        run_cover_btn = ttk.Button(btn_row1, text='Run Album Cover Prompt', command=self.run_image_model)
-        run_cover_btn.pack(side=tk.LEFT, padx=5)
-        create_tooltip(run_cover_btn, 'Generate album cover image from prompt')
-
-        # Row 2: Video workflow and final actions
-        gen_video_btn = ttk.Button(btn_row2, text='Gen Video Loop Prompt', command=self.generate_video_loop)
+        gen_video_btn = ttk.Button(btn_row1, text='Gen Video Loop Prompt', command=self.generate_video_loop)
         gen_video_btn.pack(side=tk.LEFT, padx=5)
         create_tooltip(gen_video_btn, 'Generate video loop prompt using AI')
+
+        # Row 2: Video workflow and final actions
+        run_cover_btn = ttk.Button(btn_row2, text='Run Album Cover Prompt', command=self.run_image_model)
+        run_cover_btn.pack(side=tk.LEFT, padx=5)
+        create_tooltip(run_cover_btn, 'Generate album cover image from prompt')
         
         run_video_btn = ttk.Button(btn_row2, text='Run Video Loop Prompt', command=self.run_video_loop_model)
         run_video_btn.pack(side=tk.LEFT, padx=5)
@@ -1246,10 +1254,6 @@ class SunoStyleBrowser(tk.Tk):
         export_btn = ttk.Button(btn_row2, text='Export YouTube Description', command=self.export_youtube_description)
         export_btn.pack(side=tk.LEFT, padx=5)
         create_tooltip(export_btn, 'Export YouTube description and song details')
-        
-        clear_btn = ttk.Button(btn_row2, text='Clear All', command=self.clear_song_fields)
-        clear_btn.pack(side=tk.LEFT, padx=5)
-        create_tooltip(clear_btn, 'Clear all song detail fields')
         
         # Configure grid weights
         main_frame.columnconfigure(1, weight=1)
@@ -2197,7 +2201,93 @@ class SunoStyleBrowser(tk.Tk):
         }
         self.ai_config['song_details'] = song_details
         if save_config(self.ai_config):
-            messagebox.showinfo('Save', 'Song details saved successfully.')
+            self.log_debug('INFO', 'Song details saved successfully to config')
+            
+            # If AI Cover Name is set, ask user to save settings to separate file
+            ai_cover_name = self.ai_cover_name_var.get().strip()
+            if ai_cover_name:
+                # Use same basename logic as run_image_model
+                safe_basename = ai_cover_name.replace(':', '_').replace('/', '_').replace('\\', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace("'", '_').replace('<', '_').replace('>', '_').replace('|', '_')
+                
+                # Ask user if they want to save to a separate file
+                response = messagebox.askyesno(
+                    'Save Settings File',
+                    f'AI Cover Name is set. Would you like to save settings to a separate file?\n\nSuggested filename: {safe_basename}.json'
+                )
+                
+                if response:
+                    # Get the directory from last saved album cover image if available
+                    default_dir = self.ai_config.get('song_details', {}).get('album_cover_image_dir', '')
+                    if not default_dir:
+                        # Fallback to script directory
+                        default_dir = os.path.dirname(os.path.abspath(__file__))
+                    
+                    filename = filedialog.asksaveasfilename(
+                        title='Save Song Details Settings',
+                        defaultextension='.json',
+                        filetypes=[('JSON Files', '*.json'), ('All Files', '*.*')],
+                        initialdir=default_dir,
+                        initialfile=f"{safe_basename}.json"
+                    )
+                    
+                    if filename:
+                        try:
+                            with open(filename, 'w', encoding='utf-8') as f:
+                                json.dump(song_details, f, indent=4)
+                            self.log_debug('INFO', f'Song details saved to {filename}')
+                            messagebox.showinfo('Save Settings', f'Settings saved successfully to:\n{filename}')
+                        except Exception as e:
+                            self.log_debug('ERROR', f'Failed to save settings file: {e}')
+                            messagebox.showerror('Save Settings', f'Failed to save settings file:\n{e}')
+    
+    def load_song_details(self):
+        """Load song details from a settings file."""
+        # Get the directory from last saved album cover image if available
+        default_dir = self.ai_config.get('song_details', {}).get('album_cover_image_dir', '')
+        if not default_dir:
+            # Fallback to script directory
+            default_dir = os.path.dirname(os.path.abspath(__file__))
+        
+        filename = filedialog.askopenfilename(
+            title='Load Song Details Settings',
+            defaultextension='.json',
+            filetypes=[('JSON Files', '*.json'), ('All Files', '*.*')],
+            initialdir=default_dir
+        )
+        
+        if not filename:
+            return
+        
+        try:
+            with open(filename, 'r', encoding='utf-8') as f:
+                song_details = json.load(f)
+            
+            # Populate fields from loaded settings
+            if isinstance(song_details, dict):
+                self.ai_cover_name_var.set(song_details.get('ai_cover_name', ''))
+                self.song_name_var.set(song_details.get('song_name', ''))
+                self.artist_var.set(song_details.get('artist', ''))
+                self.lyrics_text.delete('1.0', tk.END)
+                self.lyrics_text.insert('1.0', song_details.get('lyrics', ''))
+                self.styles_text.delete('1.0', tk.END)
+                self.styles_text.insert('1.0', song_details.get('styles', ''))
+                self.merged_style_text.delete('1.0', tk.END)
+                self.merged_style_text.insert('1.0', song_details.get('merged_style', ''))
+                self.album_cover_text.delete('1.0', tk.END)
+                self.album_cover_text.insert('1.0', song_details.get('album_cover', ''))
+                self.video_loop_text.delete('1.0', tk.END)
+                self.video_loop_text.insert('1.0', song_details.get('video_loop', ''))
+                
+                self.log_debug('INFO', f'Song details loaded from {filename}')
+                messagebox.showinfo('Load Settings', f'Settings loaded successfully from:\n{filename}')
+            else:
+                messagebox.showerror('Load Settings', 'Invalid settings file format.')
+        except json.JSONDecodeError as e:
+            self.log_debug('ERROR', f'Failed to parse JSON file: {e}')
+            messagebox.showerror('Load Settings', f'Failed to parse JSON file:\n{e}')
+        except Exception as e:
+            self.log_debug('ERROR', f'Failed to load settings file: {e}')
+            messagebox.showerror('Load Settings', f'Failed to load settings file:\n{e}')
     
     def restore_song_details(self):
         """Restore song details from config file."""

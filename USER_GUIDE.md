@@ -10,10 +10,11 @@ Welcome to Stream Download Convert Tools! This comprehensive guide will help you
 2. [YouTube Downloader](#youtube-downloader)
 3. [Video to MP3 Converter](#video-to-mp3-converter)
 4. [Audio Modifier](#audio-modifier)
-5. [Settings Configuration](#settings-configuration)
-6. [Troubleshooting](#troubleshooting)
-7. [Advanced Features](#advanced-features)
-8. [Legal and Compliance](#legal-and-compliance)
+5. [Suno Style Browser](#suno-style-browser)
+6. [Settings Configuration](#settings-configuration)
+7. [Troubleshooting](#troubleshooting)
+8. [Advanced Features](#advanced-features)
+9. [Legal and Compliance](#legal-and-compliance)
 
 ## Getting Started
 
@@ -213,6 +214,199 @@ Streams are organized by type:
 - **Quality Preservation**: Higher quality settings preserve audio fidelity
 - **Testing**: Try small adjustments first
 - **Backup**: Original files are never modified
+
+## Suno Style Browser
+
+The Suno Style Browser is a specialized tool for browsing music styles and generating AI-powered content for music covers, including album artwork and video loops.
+
+### Getting Started with Suno Style Browser
+
+**Windows:**
+- Double-click `launchers/suno_style_browser.bat`
+- First run will create a virtual environment and install dependencies
+
+**Linux/Mac:**
+- Make executable: `chmod +x launchers/suno_style_browser.sh`
+- Run: `./launchers/suno_style_browser.sh`
+
+**Auto-load CSV:**
+- Command line: `launchers\suno_style_browser.bat AI\suno\suno_sound_styles.csv` (Windows)
+- Command line: `./launchers/suno_style_browser.sh AI/suno/suno_sound_styles.csv` (Linux/Mac)
+
+### Step 1: Configure Azure AI Settings
+
+Before using AI features, you need to configure Azure AI access:
+
+1. Go to **Settings > Azure AI Settings**
+2. Configure three profiles:
+
+**Text Profile (for style merging and prompts):**
+- Endpoint: Your Azure OpenAI endpoint
+- Model Name: gpt-4
+- Deployment: Your GPT-4 deployment name
+- Subscription Key: Your Azure API key
+- API Version: 2024-12-01-preview
+
+**Image Gen Profile (for album covers):**
+- Endpoint: Your Azure OpenAI endpoint
+- Model Name: dall-e-3
+- Deployment: Your DALL-E 3 deployment name
+- Subscription Key: Your Azure API key
+- API Version: 2024-02-15-preview
+
+**Video Gen Profile (for video loops):**
+- Endpoint: Your Azure OpenAI endpoint
+- Model Name: imagevideo (or sora-2)
+- Deployment: Your video generation deployment name
+- Subscription Key: Your Azure API key
+- API Version: 2024-02-15-preview
+
+### Step 2: Browse Music Styles
+
+1. **Load CSV File**: The tool automatically loads `AI/suno/suno_sound_styles.csv` by default
+2. **Use Filters**: 
+   - **Search**: General search across all fields
+   - **Style**: Filter by style name
+   - **Artists**: Filter by sample artists
+   - **Decade**: Filter by decade range
+   - **Tempo**: Filter by tempo (BPM)
+3. **Select Style**: Click on a style in the list to view details
+4. **View Details**: See style information including mood, tempo, instrumentation, and more
+
+### Step 3: Enter Song Details
+
+1. **AI Cover Name**: Enter or generate a name for your AI cover
+2. **Song Name**: Enter the original song name
+3. **Artist**: Enter the original artist name
+4. **Lyrics**: Paste song lyrics (up to 20,000 characters)
+5. **Styles**: Enter one or more style names to use
+6. **Merged Style**: Result after merging styles (see Step 4)
+
+### Step 4: Merge Styles
+
+If you want to combine multiple styles:
+
+1. Enter multiple style names in the **Styles** field (comma-separated)
+2. Click **Merge Styles**
+3. Wait for AI to generate a merged style description
+4. The result appears in the **Merged Style** field
+
+### Step 5: Generate AI Cover Name
+
+1. Ensure **Song Name** and **Artist** are filled
+2. Ensure **Styles** or **Merged Style** is filled
+3. Click **Generate AI Cover Name**
+4. The generated name appears in the **AI Cover Name** field
+
+### Step 6: Generate Album Cover
+
+1. **Generate Prompt**: Click **Gen Album Cover Prompt** to create an AI prompt
+2. **Review Prompt**: Check the generated prompt in the Album Cover tab
+3. **Inject Extra Commands** (Optional): Click **Run Album Cover Prompt** to add extra instructions
+4. **Generate Image**: The tool will call Azure DALL-E 3 to generate the image
+5. **Preview**: Generated image appears in the preview section
+6. **Save**: Choose where to save the PNG file
+
+### Step 7: Generate Video Loop
+
+1. **Generate Prompt**: Click **Gen Video Loop Prompt** (requires album cover prompt first)
+2. **Review Prompt**: Check the generated prompt in the Video Loop tab
+3. **Configure Options**:
+   - **Size**: 720x1280 (portrait) or 1280x720 (landscape)
+   - **Seconds**: 4, 8, or 12 seconds
+4. **Generate Video**: Click **Run Video Loop Prompt**
+5. **Save**: Choose where to save the MP4 file
+
+### Step 8: Export YouTube Description
+
+1. Ensure **Song Name** and **Artist** are filled
+2. Click **Export YouTube Description**
+3. Choose save location
+4. The exported file includes:
+   - YouTube title
+   - Song details
+   - SEO-optimized description
+   - Hashtags
+   - Credits and disclaimers
+
+### Saving and Loading Song Details
+
+**Save Song Details:**
+- Click **Save** (Ctrl+S) to save to config file
+- If AI Cover Name is set, you'll be prompted to save to a separate JSON file
+- Settings are saved in `scripts/suno_style_browser_config.json`
+
+**Load Song Details:**
+- Click **Load** to load from a JSON file
+- Restores all song details, styles, lyrics, and prompts
+
+**Clear All:**
+- Click **Clear All** to reset all fields
+
+### Keyboard Shortcuts
+
+- **Ctrl+S**: Save song details
+- **Ctrl+D**: Toggle debug output
+- **Ctrl+F**: Focus search field
+- **F5**: Reload CSV file
+
+### Debug Output
+
+The tool includes comprehensive debug logging:
+- Click **▼ Debug Output** to show/hide debug panel
+- Click **Clear** to clear debug messages
+- Debug messages show:
+  - API calls and responses
+  - Configuration details
+  - Error messages
+  - Operation status
+
+### Tips for Best Results
+
+**Style Selection:**
+- Select a style that matches your song's mood
+- Use style merging for unique combinations
+- Review style details before generating prompts
+
+**Album Cover Generation:**
+- Generate prompt first, then review before generating image
+- Use "Inject Extra Commands" to refine the prompt
+- Album covers are generated at 1024x1024 resolution
+
+**Video Loop Generation:**
+- Generate album cover prompt first for better results
+- Choose appropriate size for your platform (portrait for mobile, landscape for desktop)
+- Video generation may take several minutes
+
+**YouTube Description:**
+- Export after completing all other steps
+- Review the generated description before using
+- Customize hashtags and links as needed
+
+### Troubleshooting Suno Style Browser
+
+**Azure AI Configuration Errors:**
+- Verify all endpoints are correct
+- Check subscription keys are valid
+- Ensure API versions match your Azure deployment
+- Check debug output for detailed error messages
+
+**Style Not Found:**
+- Verify CSV file is in correct location
+- Check CSV file format matches expected structure
+- Use "Reload" button to refresh styles
+
+**Image Generation Fails:**
+- Check image_gen profile configuration
+- Verify DALL-E 3 deployment is active
+- Check API quota and limits
+- Review debug output for specific errors
+
+**Video Generation Fails:**
+- Check video_gen profile configuration
+- Verify video generation deployment is active
+- Video generation may take 5+ minutes
+- Check debug output for job status
 
 ## Settings Configuration
 
