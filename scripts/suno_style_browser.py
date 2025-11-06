@@ -1743,7 +1743,7 @@ class SunoStyleBrowser(tk.Tk):
         # Call Azure AI with system message to output only the prompt
         # TODO: Change to profile='video_gen' when video generation endpoint is implemented
         self.log_debug('INFO', 'Calling Azure AI for video loop generation...')
-        system_message = 'You are a professional video prompt generator for music visualizers. Generate clean, artistic, SFW video prompts suitable for music content. Output ONLY the final video prompt text with no explanations or extra labels.'
+        system_message = 'You are a professional video prompt generator for music visualizers. Generate clean, artistic, SFW video prompts suitable for music content. CRITICAL: Adapt the prompt to comply with Azure AI Content Safety guidelines (https://ai.azure.com/doc/azure/ai-foundry/ai-services/content-safety-overview). Ensure the prompt avoids any content that could violate safety policies including violence, sexual content, hate speech, self-harm, or any harmful or inappropriate material. If the input contains potentially problematic elements, adapt them to safe, artistic alternatives suitable for music visualization. Output ONLY the final video prompt text with no explanations or extra labels.'
         self.config(cursor='wait')
         self.update()
         try:
@@ -1769,6 +1769,21 @@ class SunoStyleBrowser(tk.Tk):
         if not prompt or prompt.startswith('Error:'):
             messagebox.showinfo('Run Video Loop Prompt', 'Please generate a video loop prompt first.')
             return
+
+        # Show dialog to inject extra commands
+        dialog = ExtraCommandsDialog(self, prompt)
+        self.wait_window(dialog)
+        
+        # If user canceled, abort
+        if dialog.result is None:
+            self.log_debug('INFO', 'Run Video Loop Prompt canceled by user')
+            return
+        
+        # Inject extra commands if provided (empty string means use prompt as-is)
+        if dialog.result:
+            # Append extra commands to the prompt
+            prompt = f"{prompt} {dialog.result}"
+            self.log_debug('INFO', f'Extra commands injected: {dialog.result[:100]}...')
 
         # Read options
         size = self.video_size_var.get().strip() or '720x1280'
