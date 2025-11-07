@@ -2349,6 +2349,9 @@ class SunoStyleBrowser(tk.Tk):
         self.merged_style_text.delete('1.0', tk.END)
         self.album_cover_text.delete('1.0', tk.END)
         self.video_loop_text.delete('1.0', tk.END)
+        # Clear album cover preview image
+        self.album_cover_photo = None
+        self.album_cover_preview.config(image='', text='No image generated yet')
     
     def show_shortcuts(self):
         """Show keyboard shortcuts dialog."""

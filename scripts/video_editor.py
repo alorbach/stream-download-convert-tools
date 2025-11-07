@@ -23,6 +23,7 @@ import sys
 import threading
 import subprocess
 import json
+import hashlib
 from pathlib import Path
 from PIL import Image, ImageTk
 
@@ -327,7 +328,9 @@ class VideoEditorGUI(BaseAudioGUI):
                     label.config(text="No FFmpeg")
                     return
                 
-                temp_thumb = os.path.join(self.root_dir, 'temp_thumb.jpg')
+                # Use unique temp filename based on video file path to avoid race conditions
+                video_hash = hashlib.md5(video_file.encode('utf-8')).hexdigest()[:8]
+                temp_thumb = os.path.join(self.root_dir, f'temp_thumb_{video_hash}.jpg')
                 
                 cmd = [ffmpeg_cmd, '-i', video_file, '-ss', '00:00:00', '-vframes', '1', 
                       '-q:v', '2', '-y', temp_thumb]

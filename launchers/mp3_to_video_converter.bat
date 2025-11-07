@@ -2,13 +2,10 @@
 REM MP3 to Video Converter Launcher for Windows
 REM Copyright 2025 Andre Lorbach
 
-setlocal enabledelayedexpansion
+setlocal
 
-REM Get the directory where this script is located
-set "SCRIPT_DIR=%~dp0"
-set "ROOT_DIR=%SCRIPT_DIR%.."
-
-REM Change to the root directory
+set SCRIPT_DIR=%~dp0
+set ROOT_DIR=%SCRIPT_DIR%..
 cd /d "%ROOT_DIR%"
 
 REM Check if virtual environment exists
