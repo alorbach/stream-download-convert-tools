@@ -25,6 +25,7 @@ import sys
 import threading
 import subprocess
 import json
+import random
 from pathlib import Path
 
 # Import shared libraries
@@ -38,9 +39,14 @@ class YouTubeDownloaderGUI(BaseAudioGUI):
         self.root.geometry("900x750")
         
         self.csv_file = None
+        self.csv_basename = None
         self.csv_data = []
         self.available_streams = []
         self.current_video_info = None
+        self.cancel_download = False
+        self.current_process = None
+        self.use_android_client = False  # Default: disabled (use web client for more formats)
+        self.user_agent = self.generate_user_agent()  # Randomize user agent on startup
         
         self.setup_ui()
         
@@ -146,6 +152,8 @@ class YouTubeDownloaderGUI(BaseAudioGUI):
         ttk.Button(batch_frame, text="Download Selected Stream", command=self.download_stream).pack(side='left', padx=5)
         ttk.Button(batch_frame, text="Download Selected Videos", command=self.download_selected_videos).pack(side='left', padx=5)
         ttk.Button(batch_frame, text="Download All Videos", command=self.download_all_videos).pack(side='left', padx=5)
+        self.cancel_button = ttk.Button(batch_frame, text="Cancel Download", command=self.cancel_download_action, state='disabled')
+        self.cancel_button.pack(side='left', padx=5)
         
         self.log_text = scrolledtext.ScrolledText(bottom_frame, height=8)
         self.log_text.pack(fill='both', expand=True)
@@ -159,13 +167,26 @@ class YouTubeDownloaderGUI(BaseAudioGUI):
         ttk.Entry(frame, textvariable=self.folder_var, width=50).grid(row=0, column=1, padx=5)
         ttk.Button(frame, text="Browse", command=self.browse_folder).grid(row=0, column=2)
         
-        ttk.Label(frame, text="Filename Pattern:").grid(row=1, column=0, sticky='w', pady=5)
+        self.actual_path_label = ttk.Label(frame, text="Actual download path: (load CSV to see)", foreground='gray')
+        self.actual_path_label.grid(row=1, column=0, columnspan=3, sticky='w', pady=2)
+        
+        ttk.Label(frame, text="Filename Pattern:").grid(row=2, column=0, sticky='w', pady=5)
         self.filename_var = tk.StringVar(value="{Rank}_{Song Title}_{Artist}")
-        ttk.Entry(frame, textvariable=self.filename_var, width=50).grid(row=1, column=1, padx=5, columnspan=2)
+        ttk.Entry(frame, textvariable=self.filename_var, width=50).grid(row=2, column=1, padx=5, columnspan=2)
         
         ttk.Label(frame, text="Available fields: {Rank}, {Song Title}, {Artist}, {Year}, {Views (Billions)}").grid(
-            row=2, column=0, columnspan=3, sticky='w', pady=5
+            row=3, column=0, columnspan=3, sticky='w', pady=5
         )
+        
+        ttk.Label(frame, text="Android Client Mode:").grid(row=4, column=0, sticky='w', pady=5)
+        self.android_client_var = tk.BooleanVar(value=False)
+        android_check = ttk.Checkbutton(
+            frame,
+            text="Use Android client (helps avoid 403 errors, but limits available formats)",
+            variable=self.android_client_var,
+            command=self.on_android_client_changed
+        )
+        android_check.grid(row=4, column=1, columnspan=2, sticky='w', padx=5)
         
         info_frame = ttk.LabelFrame(self.tab_settings, text="Information", padding=10)
         info_frame.pack(fill='both', expand=True, padx=10, pady=10)
@@ -197,16 +218,48 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
             self.root.config(cursor="wait")
             self.progress.start(10)
             self.progress_label.config(text=message)
+            self.cancel_button.config(state='normal')
         else:
             self.root.config(cursor="")
             self.progress.stop()
             self.progress_label.config(text="")
+            self.cancel_button.config(state='disabled')
+    
+    def cancel_download_action(self):
+        """Cancel the current download operation"""
+        self.cancel_download = True
+        if self.current_process:
+            try:
+                self.current_process.terminate()
+                self.log("[INFO] Download cancelled by user")
+            except Exception as e:
+                self.log(f"[WARNING] Error cancelling process: {str(e)}")
+        self.set_busy(False)
+    
+    def update_actual_path_label(self):
+        """Update the actual download path label"""
+        actual_path = self.get_download_path()
+        if self.csv_basename:
+            self.actual_path_label.config(
+                text=f"Actual download path: {actual_path}",
+                foreground='black'
+            )
+        else:
+            self.actual_path_label.config(
+                text="Actual download path: (load CSV to see)",
+                foreground='gray'
+            )
+    
+    def on_android_client_changed(self):
+        """Callback when Android client checkbox is toggled"""
+        self.use_android_client = self.android_client_var.get()
     
     def browse_folder(self):
         folder = super().browse_folder(self.folder_var.get())
         if folder:
             self.folder_var.set(folder)
             self.file_manager.set_folder_path('downloads', folder)
+            self.update_actual_path_label()
     
     def load_csv(self):
         file_path = super().select_files(
@@ -230,10 +283,12 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
                 self.csv_data = list(reader)
             
             self.csv_file = file_path
+            self.csv_basename = os.path.splitext(os.path.basename(file_path))[0]
             self.lbl_csv_status.config(text=f"Loaded: {os.path.basename(file_path)} ({len(self.csv_data)} rows)")
             
             self.display_csv_in_grid()
             self.populate_video_list()
+            self.update_actual_path_label()
             
             self.notebook.select(self.tab_download)
             
@@ -284,6 +339,56 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
             artist = row.get('Artist', 'Unknown')
             rank = row.get('Rank', i+1)
             self.video_listbox.insert(tk.END, f"{rank}. {title} - {artist}")
+    
+    def get_download_path(self):
+        """Get download path with CSV basename as subfolder"""
+        base_path = self.file_manager.get_folder_path('downloads')
+        if self.csv_basename:
+            download_path = os.path.join(base_path, self.csv_basename)
+            os.makedirs(download_path, exist_ok=True)
+            return download_path
+        return base_path
+    
+    def generate_user_agent(self):
+        """Generate a randomized Chrome user agent string"""
+        # Randomize Chrome version (120-130 range)
+        chrome_major = random.randint(120, 130)
+        chrome_minor = random.randint(0, 9)
+        chrome_patch = random.randint(0, 9)
+        
+        # Randomize WebKit version slightly (537.30 - 537.40)
+        webkit_major = 537
+        webkit_minor = random.randint(30, 40)
+        
+        # Randomize Safari version to match WebKit
+        safari_major = webkit_major
+        safari_minor = webkit_minor
+        
+        user_agent = (
+            f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            f"AppleWebKit/{webkit_major}.{webkit_minor} (KHTML, like Gecko) "
+            f"Chrome/{chrome_major}.{chrome_minor}.{chrome_patch}.0 "
+            f"Safari/{safari_major}.{safari_minor}"
+        )
+        
+        return user_agent
+    
+    def build_ytdlp_command(self, base_args):
+        """Build yt-dlp command with anti-403 options
+        
+        Args:
+            base_args: List of yt-dlp arguments
+        """
+        cmd = [
+            sys.executable,
+            '-m', 'yt_dlp',
+            '--user-agent', self.user_agent,
+        ]
+        
+        if self.use_android_client:
+            cmd.extend(['--extractor-args', 'youtube:player_client=android'])
+        
+        return cmd + base_args
     
     def extract_youtube_url(self, text):
         if not text:
@@ -360,12 +465,34 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
     
     def _fetch_streams_thread(self, url):
         try:
+            # Try with current setting first (web client by default for more formats)
+            cmd = self.build_ytdlp_command(['-J', url])
             result = subprocess.run(
-                [sys.executable, '-m', 'yt_dlp', '-J', url],
+                cmd,
                 capture_output=True,
                 text=True,
                 creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
             )
+            
+            # If web client fails with 403 and Android client is disabled, try Android client
+            if (result.returncode != 0 and 
+                ('403' in result.stderr or 'Forbidden' in result.stderr) and 
+                not self.use_android_client):
+                self.root.after(0, lambda: self.log("[INFO] Web client blocked, trying Android client..."))
+                # Temporarily enable Android client for this fetch
+                original_setting = self.use_android_client
+                self.use_android_client = True
+                cmd = self.build_ytdlp_command(['-J', url])
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+                )
+                # Restore original setting
+                self.use_android_client = original_setting
+                if result.returncode == 0:
+                    self.root.after(0, lambda: self.log("[INFO] Consider enabling Android Client Mode in Settings to avoid 403 errors"))
             
             if result.returncode != 0:
                 error_msg = result.stderr
@@ -467,6 +594,9 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
         filename_pattern = self.filename_var.get()
         filename = self.create_filename_from_pattern(filename_pattern, self.current_video_info)
         
+        self.cancel_download = False
+        self.current_process = None
+        
         self.log(f"[INFO] Starting download: Format {format_id}")
         self.log(f"[INFO] Output file: {filename}")
         self.set_busy(True, "Downloading...")
@@ -478,15 +608,18 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
     
     def _download_thread(self, url, format_id, filename):
         try:
-            output_path = os.path.join(self.file_manager.get_folder_path('downloads'), filename)
+            if self.cancel_download:
+                self.root.after(0, lambda: self.log("[INFO] Download cancelled"))
+                self.root.after(0, lambda: self.set_busy(False))
+                return
             
-            cmd = [
-                sys.executable,
-                '-m', 'yt_dlp',
+            output_path = os.path.join(self.get_download_path(), filename)
+            
+            cmd = self.build_ytdlp_command([
                 '-f', format_id,
                 '-o', output_path + '.%(ext)s',
                 url
-            ]
+            ])
             
             process = subprocess.Popen(
                 cmd,
@@ -496,12 +629,25 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
                 creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
             )
             
+            self.current_process = process
+            
             for line in process.stdout:
+                if self.cancel_download:
+                    process.terminate()
+                    self.root.after(0, lambda: self.log("[INFO] Download cancelled by user"))
+                    self.root.after(0, lambda: self.set_busy(False))
+                    return
+                
                 line_text = line.strip()
                 if line_text:
                     self.root.after(0, lambda l=line_text: self.log(l))
             
             process.wait()
+            
+            if self.cancel_download:
+                self.root.after(0, lambda: self.log("[INFO] Download cancelled"))
+                self.root.after(0, lambda: self.set_busy(False))
+                return
             
             if process.returncode == 0:
                 self.root.after(0, lambda: self.log("[SUCCESS] Download completed successfully!"))
@@ -512,9 +658,12 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
                 self.root.after(0, lambda: self.set_busy(False))
                 
         except Exception as e:
-            error_msg = str(e)
-            self.root.after(0, lambda msg=error_msg: self.log(f"[ERROR] Download error: {msg}"))
+            if not self.cancel_download:
+                error_msg = str(e)
+                self.root.after(0, lambda msg=error_msg: self.log(f"[ERROR] Download error: {msg}"))
             self.root.after(0, lambda: self.set_busy(False))
+        finally:
+            self.current_process = None
     
     def download_selected_videos(self):
         """Download selected videos using the same stream format"""
@@ -534,6 +683,9 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
         
         item = stream_selection[0]
         format_id = str(self.stream_tree.item(item)['values'][0])
+        
+        self.cancel_download = False
+        self.current_process = None
         
         selected_indices = list(selection)
         self.log(f"[INFO] Starting batch download of {len(selected_indices)} videos with format {format_id}")
@@ -562,6 +714,9 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
         item = stream_selection[0]
         format_id = str(self.stream_tree.item(item)['values'][0])
         
+        self.cancel_download = False
+        self.current_process = None
+        
         all_indices = list(range(len(self.csv_data)))
         self.log(f"[INFO] Starting batch download of all {len(all_indices)} videos with format {format_id}")
         
@@ -576,6 +731,10 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
         error_count = 0
         
         for i, index in enumerate(video_indices):
+            if self.cancel_download:
+                self.root.after(0, lambda: self.log("[INFO] Batch download cancelled by user"))
+                break
+            
             try:
                 row = self.csv_data[index]
                 url = self.extract_youtube_url(row.get('Video Link', ''))
@@ -600,22 +759,33 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
                     self.log(msg)
                 )
                 
-                output_path = os.path.join(self.file_manager.get_folder_path('downloads'), filename)
+                output_path = os.path.join(self.get_download_path(), filename)
                 
-                cmd = [
-                    sys.executable,
-                    '-m', 'yt_dlp',
+                cmd = self.build_ytdlp_command([
                     '-f', format_id,
                     '-o', output_path + '.%(ext)s',
                     url
-                ]
+                ])
                 
-                process = subprocess.run(
+                process = subprocess.Popen(
                     cmd,
-                    capture_output=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
                     text=True,
                     creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
                 )
+                
+                self.current_process = process
+                
+                stdout, stderr = process.communicate()
+                
+                if self.cancel_download:
+                    try:
+                        process.terminate()
+                    except:
+                        pass
+                    self.root.after(0, lambda: self.log("[INFO] Batch download cancelled by user"))
+                    break
                 
                 if process.returncode == 0:
                     success_count += 1
@@ -625,34 +795,44 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
                     )
                 else:
                     error_count += 1
-                    error_msg = process.stderr if process.stderr else "Unknown error"
+                    error_msg = stderr if stderr else "Unknown error"
                     self.root.after(
                         0,
                         lambda err=error_msg: self.log(f"[ERROR] Download failed: {err[:200]}")
                     )
                 
             except Exception as e:
-                error_count += 1
-                error_msg = str(e)
-                self.root.after(
-                    0,
-                    lambda msg=error_msg: self.log(f"[ERROR] Exception: {msg}")
-                )
+                if not self.cancel_download:
+                    error_count += 1
+                    error_msg = str(e)
+                    self.root.after(
+                        0,
+                        lambda msg=error_msg: self.log(f"[ERROR] Exception: {msg}")
+                    )
+            finally:
+                self.current_process = None
         
-        self.root.after(
-            0,
-            lambda s=success_count, e=error_count:
-            self.log(f"\n[COMPLETE] Batch download finished: {s} succeeded, {e} failed")
-        )
-        
-        self.root.after(
-            0,
-            lambda s=success_count, e=error_count:
-            messagebox.showinfo(
-                "Batch Download Complete",
-                f"Batch download finished!\n\nSuccessful: {s}\nFailed: {e}"
+        if not self.cancel_download:
+            self.root.after(
+                0,
+                lambda s=success_count, e=error_count:
+                self.log(f"\n[COMPLETE] Batch download finished: {s} succeeded, {e} failed")
             )
-        )
+            
+            self.root.after(
+                0,
+                lambda s=success_count, e=error_count:
+                messagebox.showinfo(
+                    "Batch Download Complete",
+                    f"Batch download finished!\n\nSuccessful: {s}\nFailed: {e}"
+                )
+            )
+        else:
+            self.root.after(
+                0,
+                lambda s=success_count, e=error_count:
+                self.log(f"\n[CANCELLED] Batch download stopped: {s} succeeded, {e} failed")
+            )
         
         self.root.after(0, lambda: self.set_busy(False))
     

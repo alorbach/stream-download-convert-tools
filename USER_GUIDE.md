@@ -114,11 +114,18 @@ Streams are organized by type:
 1. Select your preferred stream
 2. Click "Download Selected Stream"
 3. Watch the progress bar and log output
+4. Use "Cancel Download" button to stop if needed
 
 **Batch Downloads:**
 1. Select multiple videos (Ctrl+Click)
 2. Choose "Download Selected Videos" or "Download All Videos"
 3. All videos will use the same format
+4. Use "Cancel Download" button to stop batch downloads
+
+**Download Organization:**
+- Downloads are automatically organized by CSV filename
+- Example: If CSV is `top100_songs.csv`, files go to `downloads/top100_songs/`
+- This keeps downloads from different CSV files separate
 
 ### Download Tips
 
@@ -126,6 +133,7 @@ Streams are organized by type:
 - **Format Selection**: MP4 is most compatible, WEBM is more efficient
 - **Network**: Stable internet connection recommended
 - **Storage**: Check available disk space before large downloads
+- **Canceling**: You can cancel downloads at any time using the Cancel button
 
 ## Video to MP3 Converter
 
@@ -217,7 +225,65 @@ Streams are organized by type:
 
 ## Suno Style Browser
 
-The Suno Style Browser is a specialized tool for browsing music styles and generating AI-powered content for music covers, including album artwork and video loops.
+![Suno Style Browser](docs/suno_style_browser.png)
+
+The Suno Style Browser is a specialized tool for browsing music styles and generating AI-powered content for music covers, including album artwork and video loops. The interface is divided into three main sections: style browser (left), details and song management (right), and debug output (bottom).
+
+### Interface Layout
+
+**Top Search and Filter Bar:**
+The top bar contains search and filter controls for quickly finding styles:
+- **Search**: Searches across all style fields (style name, mood, artists, etc.)
+- **Style**: Filter by specific style name
+- **Artists**: Filter by sample artists mentioned in styles
+- **Decade**: Filter by decade range (e.g., type "1970s" or "1990s")
+- **Tempo**: Filter by tempo/BPM values
+- **Clear Filters**: Resets all filter fields at once
+- **Reload**: Refreshes the CSV file (also F5 keyboard shortcut)
+- **Open CSV**: Opens file dialog to load a different CSV file
+
+**Left Panel - Style List:**
+- Displays all music styles from the loaded CSV file
+- Click any style to select it and view details
+- Click the "Style" column header to sort (ascending/descending)
+- Currently selected style is highlighted in blue
+- Scrollable list for large style databases
+
+**Right Panel - Details Tabs:**
+The right panel contains two main tabs:
+
+**Style Details Tab:**
+- Shows complete information about the selected style
+- All fields are read-only and have "Copy" buttons for easy copying
+- Fields include: Style, Mood, Tempo (BPM), Instrumentation, Vocal Style, Sample Artists, Decade Range, Production Notes, and Prompt
+- Scrollable interface for long content
+
+**Song Details Tab:**
+- **AI Cover Name**: Text field for the generated cover name
+- **Song Name**: Original song title
+- **Artist**: Original artist name
+- **Lyrics**: Multi-line text area with character counter (20,000 character limit)
+  - Counter shows "X / 20000" format
+  - Color changes: gray (normal), orange (approaching limit), red (over limit)
+- **Styles**: Multi-line field for entering style names (comma-separated for multiple)
+- **Merged Style**: Result field showing AI-merged style description
+- **AI Results**: Tabbed interface containing:
+  - **Album Cover Tab**: Generated album cover prompt with toolbar and copy button
+  - **Video Loop Tab**: Generated video loop prompt with toolbar and copy button
+- **Album Cover Preview**: Image preview area showing generated album covers
+  - Displays "No image generated yet" when empty
+  - Auto-scales large images to fit (max 512x512 display size)
+- **Video Options**: Configuration panel with:
+  - **Size**: Dropdown with "720x1280" (portrait) or "1280x720" (landscape)
+  - **Seconds**: Dropdown with "4", "8", or "12" seconds
+- **Action Buttons**: Two rows of workflow buttons (see detailed workflow below)
+
+**Bottom Panel - Debug Output:**
+- Collapsible panel (click "▼ Debug Output" or press Ctrl+D)
+- Shows comprehensive logging of all operations
+- Timestamped messages with log levels (INFO, DEBUG, ERROR, WARNING)
+- "Clear" button to reset debug messages
+- Useful for troubleshooting API calls and configuration issues
 
 ### Getting Started with Suno Style Browser
 
@@ -264,23 +330,63 @@ Before using AI features, you need to configure Azure AI access:
 ### Step 2: Browse Music Styles
 
 1. **Load CSV File**: The tool automatically loads `AI/suno/suno_sound_styles.csv` by default
+   - The status bar at the bottom shows "Loaded X styles from [path]"
+   - Use "Open CSV" button to load a different file
+
 2. **Use Filters**: 
-   - **Search**: General search across all fields
-   - **Style**: Filter by style name
-   - **Artists**: Filter by sample artists
-   - **Decade**: Filter by decade range
-   - **Tempo**: Filter by tempo (BPM)
-3. **Select Style**: Click on a style in the list to view details
-4. **View Details**: See style information including mood, tempo, instrumentation, and more
+   - **Search**: Type in the Search field to search across all style fields (style name, mood, artists, instrumentation, etc.)
+   - **Style**: Type a style name to filter (e.g., "Gospel", "Hip-Hop")
+   - **Artists**: Filter by sample artists (e.g., "Michael Jackson", "The Beatles")
+   - **Decade**: Filter by decade range (e.g., "1970s", "1990s", "2000s")
+   - **Tempo**: Filter by tempo/BPM (e.g., "120", "140")
+   - Filters work together (AND logic) - all active filters must match
+   - Click "Clear Filters" to reset all filters at once
+
+3. **Select Style**: 
+   - Click on any style in the left panel list
+   - Selected style is highlighted in blue
+   - Style details automatically populate in the "Style Details" tab
+
+4. **View Details**: 
+   - Switch to "Style Details" tab to see complete information
+   - All fields are displayed with copy buttons
+   - Scroll through fields to see mood, tempo, instrumentation, vocal style, sample artists, decade range, production notes, and prompt
+   - Click "Copy" next to any field to copy its content to clipboard
 
 ### Step 3: Enter Song Details
 
-1. **AI Cover Name**: Enter or generate a name for your AI cover
-2. **Song Name**: Enter the original song name
-3. **Artist**: Enter the original artist name
-4. **Lyrics**: Paste song lyrics (up to 20,000 characters)
-5. **Styles**: Enter one or more style names to use
-6. **Merged Style**: Result after merging styles (see Step 4)
+Switch to the "Song Details" tab to enter your song information:
+
+1. **AI Cover Name**: 
+   - Text field for the generated cover name
+   - Can be manually entered or auto-generated (see Step 5)
+   - Example: "1970s Soulful Gospel Revival - Fifth Harmony ft. Ty Dolla $ign 'Work from Home' AI Cover"
+
+2. **Song Name**: 
+   - Enter the original song title
+   - Example: "Work from Home"
+
+3. **Artist**: 
+   - Enter the original artist name
+   - Include featured artists: "Fifth Harmony ft. Ty Dolla $ign"
+
+4. **Lyrics**: 
+   - Multi-line text area for song lyrics
+   - Character counter shows "X / 20000" in the top-right
+   - Counter color: gray (normal), orange (approaching 18,000), red (over 20,000)
+   - Maximum 20,000 characters
+   - Paste support with automatic truncation warning if over limit
+
+5. **Styles**: 
+   - Multi-line text area for entering style names
+   - Enter multiple styles separated by commas or new lines
+   - Example: "Gospel - Traditional, Soul, R&B"
+   - Used as input for style merging
+
+6. **Merged Style**: 
+   - Result field showing AI-merged style description
+   - Populated after using "Merge Styles" button (see Step 4)
+   - Used as input for generating AI cover names and prompts
 
 ### Step 4: Merge Styles
 
@@ -300,22 +406,69 @@ If you want to combine multiple styles:
 
 ### Step 6: Generate Album Cover
 
-1. **Generate Prompt**: Click **Gen Album Cover Prompt** to create an AI prompt
-2. **Review Prompt**: Check the generated prompt in the Album Cover tab
-3. **Inject Extra Commands** (Optional): Click **Run Album Cover Prompt** to add extra instructions
-4. **Generate Image**: The tool will call Azure DALL-E 3 to generate the image
-5. **Preview**: Generated image appears in the preview section
-6. **Save**: Choose where to save the PNG file
+1. **Generate Prompt**: 
+   - Click **Gen Album Cover Prompt** button (first row, right side)
+   - Requires Song Name, Artist, and Styles/Merged Style to be filled
+   - AI generates a detailed album cover prompt based on style information
+   - Prompt appears in the "Album Cover" tab within "AI Results"
+
+2. **Review Prompt**: 
+   - Switch to "AI Results" section
+   - Click "Album Cover" tab to view the generated prompt
+   - Prompt includes visual elements, mood, typography, and style details
+   - Use the "Copy" button in the toolbar to copy the prompt
+
+3. **Generate Image**: 
+   - Click **Run Album Cover Prompt** button (second row, left side)
+   - A dialog appears allowing you to inject extra commands into the prompt
+   - Leave empty to use prompt as-is, or add additional instructions
+   - Click OK to proceed with image generation
+   - The tool calls Azure DALL-E 3 to generate the image (1024x1024 resolution)
+
+4. **Preview**: 
+   - Generated image automatically appears in the "Album Cover Preview" section
+   - Images are auto-scaled to fit (max 512x512 display size)
+   - Preview updates immediately after generation
+
+5. **Save**: 
+   - After generation, a file dialog appears
+   - Default filename is based on AI Cover Name (sanitized for filesystem)
+   - Choose location and save as PNG file
+   - Last saved image path is remembered for next session
 
 ### Step 7: Generate Video Loop
 
-1. **Generate Prompt**: Click **Gen Video Loop Prompt** (requires album cover prompt first)
-2. **Review Prompt**: Check the generated prompt in the Video Loop tab
-3. **Configure Options**:
-   - **Size**: 720x1280 (portrait) or 1280x720 (landscape)
-   - **Seconds**: 4, 8, or 12 seconds
-4. **Generate Video**: Click **Run Video Loop Prompt**
-5. **Save**: Choose where to save the MP4 file
+1. **Generate Prompt**: 
+   - Click **Gen Video Loop Prompt** button (first row, right side)
+   - Requires album cover prompt to be generated first
+   - AI generates a video loop prompt based on album cover and style information
+   - Prompt appears in the "Video Loop" tab within "AI Results"
+
+2. **Review Prompt**: 
+   - Switch to "AI Results" section
+   - Click "Video Loop" tab to view the generated prompt
+   - Prompt includes camera style, lighting, animation, and visual elements
+   - Use the "Copy" button in the toolbar to copy the prompt
+
+3. **Configure Options**: 
+   - In the "Video Options" section:
+     - **Size**: Dropdown menu - select "720x1280" (portrait/vertical) or "1280x720" (landscape/horizontal)
+     - **Seconds**: Dropdown menu - select "4", "8", or "12" seconds duration
+   - These settings are used when generating the video
+
+4. **Generate Video**: 
+   - Click **Run Video Loop Prompt** button (second row, left side)
+   - A dialog appears allowing you to inject extra commands into the prompt
+   - Leave empty to use prompt as-is, or add additional instructions
+   - Click OK to proceed with video generation
+   - The tool calls Azure video generation API
+   - Video generation may take 5+ minutes (shows progress in debug output)
+
+5. **Save**: 
+   - After generation completes, a file dialog appears
+   - Default filename is based on AI Cover Name (sanitized for filesystem)
+   - Choose location and save as MP4 file
+   - If URL is returned instead of video bytes, the URL is displayed in a message box
 
 ### Step 8: Export YouTube Description
 
@@ -352,14 +505,36 @@ If you want to combine multiple styles:
 
 ### Debug Output
 
-The tool includes comprehensive debug logging:
-- Click **▼ Debug Output** to show/hide debug panel
-- Click **Clear** to clear debug messages
-- Debug messages show:
-  - API calls and responses
-  - Configuration details
-  - Error messages
-  - Operation status
+The tool includes comprehensive debug logging at the bottom of the interface:
+
+**Accessing Debug Output:**
+- Click **▼ Debug Output** button to expand the debug panel
+- Click **▶ Debug Output** to collapse it (or press Ctrl+D)
+- Click **Clear** button to clear all debug messages
+
+**Debug Information:**
+Debug messages are timestamped and include log levels:
+- **[INFO]**: General information about operations
+- **[DEBUG]**: Detailed debugging information
+- **[ERROR]**: Error messages and failures
+- **[WARNING]**: Warning messages
+
+**What's Logged:**
+- Application initialization and startup
+- CSV file loading and style population
+- Style selection and filtering operations
+- Azure AI API calls (URLs, status codes, responses)
+- Configuration loading and saving
+- Image and video generation progress
+- Error details with full context
+- Operation status updates
+
+**Using Debug Output:**
+- Expand debug panel when troubleshooting issues
+- Check for API errors when generation fails
+- Review configuration details to verify settings
+- Monitor operation progress for long-running tasks
+- Clear debug output periodically to reduce clutter
 
 ### Tips for Best Results
 
@@ -369,14 +544,23 @@ The tool includes comprehensive debug logging:
 - Review style details before generating prompts
 
 **Album Cover Generation:**
-- Generate prompt first, then review before generating image
-- Use "Inject Extra Commands" to refine the prompt
+- Generate prompt first, then review in the Album Cover tab before generating image
+- Use "Inject Extra Commands" dialog when clicking "Run Album Cover Prompt" to refine the prompt
 - Album covers are generated at 1024x1024 resolution
+- Preview appears automatically in the Album Cover Preview section
+- Last generated image is remembered and can be reloaded on next session
 
 **Video Loop Generation:**
-- Generate album cover prompt first for better results
-- Choose appropriate size for your platform (portrait for mobile, landscape for desktop)
-- Video generation may take several minutes
+- Generate album cover prompt first for better results (video loop uses album cover as reference)
+- Choose appropriate size for your platform:
+  - **720x1280 (portrait)**: Best for mobile/TikTok/Instagram Stories/YouTube Shorts
+  - **1280x720 (landscape)**: Best for desktop/YouTube/standard video platforms
+- Choose duration based on your needs:
+  - **4 seconds**: Quick loops, social media
+  - **8 seconds**: Standard loops, most use cases
+  - **12 seconds**: Longer loops, extended visualizers
+- Video generation may take 5+ minutes - monitor debug output for progress
+- Use "Inject Extra Commands" to add specific video instructions (camera movements, effects, etc.)
 
 **YouTube Description:**
 - Export after completing all other steps
@@ -418,6 +602,9 @@ The tool includes comprehensive debug logging:
 - Default: `downloads/`
 - Click "Browse" to change location
 - Ensure sufficient disk space
+- **Note**: Downloads are automatically organized by CSV filename
+  - Example: CSV `top100_songs.csv` → files go to `downloads/top100_songs/`
+  - The actual download path is shown below the folder field
 
 **Filename Pattern:**
 Customize how downloaded files are named using CSV fields:
@@ -435,6 +622,16 @@ Customize how downloaded files are named using CSV fields:
 - `{Artist} - {Song Title} ({Year})`
 - `{Rank:02d} - {Song Title}`
 - `{Year} - {Artist} - {Song Title}`
+
+**Android Client Mode:**
+- **Default**: Disabled (unchecked)
+- **When Disabled**: Uses web client for maximum format availability
+  - More stream options (video+audio, video-only, audio-only)
+  - May encounter 403 errors on some videos
+- **When Enabled**: Uses Android client to avoid 403 errors
+  - Fewer format options available
+  - Better compatibility with restricted videos
+- **Recommendation**: Keep disabled unless you experience frequent 403 errors
 
 ### Converter Settings
 
@@ -470,6 +667,14 @@ Customize how downloaded files are named using CSV fields:
 2. Verify YouTube URL is valid
 3. Some videos may be geo-restricted
 4. Update yt-dlp: launcher auto-updates dependencies
+
+**403 Forbidden Errors:**
+- If you encounter HTTP 403 errors when downloading:
+  1. Go to Settings tab
+  2. Enable "Android Client Mode" checkbox
+  3. Try downloading again
+- Note: Android Client Mode limits available formats but helps avoid 403 errors
+- The application automatically randomizes user agents to reduce detection
 
 **Conversion Failures:**
 1. Ensure FFmpeg is installed

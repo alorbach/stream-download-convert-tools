@@ -252,28 +252,91 @@ Save your video arrangements as JSON project files:
 
 ## Suno Style Browser (Individual Tool)
 
-A specialized tool for browsing music styles and generating AI-powered content for music covers:
+![Suno Style Browser](docs/suno_style_browser.png)
+
+A specialized tool for browsing music styles and generating AI-powered content for music covers, album artwork, and video loops.
+
+### Interface Overview
+
+The application features a clean, organized interface with three main sections:
+
+**Top Bar - Search and Filters:**
+- **Search**: General search across all style fields
+- **Style**: Filter by specific style name
+- **Artists**: Filter by sample artists
+- **Decade**: Filter by decade range (e.g., "1970s", "1990s")
+- **Tempo**: Filter by tempo/BPM
+- **Clear Filters**: Reset all filter fields
+- **Reload**: Refresh the CSV file (F5)
+- **Open CSV**: Load a different CSV file
+
+**Left Panel - Style List (30% width):**
+- Scrollable list of all music styles from the loaded CSV
+- Click any style to view detailed information
+- Styles are sortable by clicking the column header
+- Currently selected style is highlighted
+
+**Right Panel - Details and Song Management (70% width):**
+- **Style Details Tab**: View complete information about the selected style including mood, tempo, instrumentation, vocal style, sample artists, decade range, production notes, and prompt. Each field has a "Copy" button for easy copying.
+- **Song Details Tab**: Complete workflow for creating AI covers:
+  - **AI Cover Name**: Generated or manually entered cover name
+  - **Song Name**: Original song title
+  - **Artist**: Original artist name
+  - **Lyrics**: Song lyrics with character counter (20,000 character limit)
+  - **Styles**: Input field for style names (comma-separated for multiple)
+  - **Merged Style**: AI-generated merged style description
+  - **AI Results**: Tabbed interface with:
+    - **Album Cover Tab**: Generated album cover prompt with copy button
+    - **Video Loop Tab**: Generated video loop prompt with copy button
+  - **Album Cover Preview**: Live preview of generated album cover images
+  - **Video Options**: Size (720x1280 or 1280x720) and duration (4, 8, or 12 seconds)
+  - **Action Buttons**: Two rows of workflow buttons (see Workflow section below)
+
+**Bottom Panel - Debug Output:**
+- Collapsible debug panel (Ctrl+D to toggle)
+- Comprehensive logging of all operations
+- Clear button to reset debug messages
+- Shows API calls, responses, errors, and operation status
 
 ### Features
-- **Style Browser**: Browse and filter music styles from CSV files with advanced search and filtering
+- **Advanced Style Browser**: Browse and filter music styles from CSV files with multi-field search and filtering
+- **Style Details Viewer**: View complete style information with copyable fields for easy integration
 - **AI Cover Name Generation**: Generate creative AI cover names based on song and style information
 - **Style Merging**: Combine multiple music styles using AI to create unique merged style descriptions
-- **Album Cover Generation**: Generate AI prompts and create album cover images using Azure OpenAI DALL-E
+- **Album Cover Generation**: Generate AI prompts and create album cover images using Azure OpenAI DALL-E 3
 - **Video Loop Generation**: Generate AI prompts and create video loops for music visualizers using Azure video generation
 - **YouTube Description Export**: Export SEO-optimized YouTube descriptions with hashtags and metadata
-- **Song Details Management**: Save and load song details, styles, lyrics, and prompts
+- **Song Details Management**: Save and load song details, styles, lyrics, and prompts as JSON files
 - **Azure AI Integration**: Configure multiple Azure AI profiles for text, image, and video generation
-- **Preview Support**: Preview generated album covers directly in the application
+- **Live Preview**: Preview generated album covers directly in the application interface
 - **Debug Output**: Comprehensive debug logging for troubleshooting AI operations
+- **Keyboard Shortcuts**: Quick access to common functions
+
+### Workflow
+
+**Row 1 - Setup and Generation:**
+1. **Clear All**: Reset all song detail fields
+2. **Save**: Save song details to config (Ctrl+S)
+3. **Load**: Load song details from JSON file
+4. **Merge Styles**: Combine multiple styles using AI
+5. **Generate AI Cover Name**: Create cover name from song and style
+6. **Gen Album Cover Prompt**: Generate album cover prompt
+7. **Gen Video Loop Prompt**: Generate video loop prompt
+
+**Row 2 - Execution and Export:**
+1. **Run Album Cover Prompt**: Generate album cover image from prompt
+2. **Run Video Loop Prompt**: Generate video loop from prompt
+3. **Export YouTube Description**: Export complete YouTube description
 
 ### Usage
 1. **Browse Styles**: Load a CSV file with music styles and use filters to find the perfect style
-2. **Enter Song Details**: Fill in song name, artist, lyrics, and select styles
-3. **Merge Styles**: Use AI to merge multiple styles into a unique description
-4. **Generate AI Cover Name**: Create a creative name for your AI cover
-5. **Generate Album Cover**: Create an AI prompt and generate album cover image
-6. **Generate Video Loop**: Create an AI prompt and generate video loop for music visualization
-7. **Export YouTube Description**: Export complete YouTube description with SEO optimization
+2. **Select Style**: Click on a style in the left panel to view detailed information
+3. **Enter Song Details**: Fill in song name, artist, lyrics (up to 20,000 characters), and select styles
+4. **Merge Styles**: Enter multiple style names and use AI to merge them into a unique description
+5. **Generate AI Cover Name**: Create a creative name for your AI cover
+6. **Generate Album Cover**: Create an AI prompt, review it, then generate the album cover image
+7. **Generate Video Loop**: Create an AI prompt and generate video loop for music visualization
+8. **Export YouTube Description**: Export complete YouTube description with SEO optimization
 
 ### Configuration
 Before using AI features, configure Azure AI settings:
@@ -284,16 +347,40 @@ Before using AI features, configure Azure AI settings:
    - **Video Gen Profile**: For video loop generation (Sora/ImageVideo)
 3. Enter your Azure endpoint, deployment name, subscription key, and API version
 
+### Interface Details
+
+**Menu Bar:**
+- **Settings**: Access Azure AI Settings dialog with three profile tabs (Text, Image Gen, Video Gen)
+- **Help**: Access keyboard shortcuts and about information
+
+**Style Details Tab:**
+All style information fields are displayed with copy buttons:
+- **Style**: Style name
+- **Mood**: Mood description
+- **Tempo (BPM)**: Tempo range
+- **Instrumentation**: Instrument details
+- **Vocal Style**: Vocal characteristics
+- **Sample Artists**: Example artists for this style
+- **Decade Range**: Time period (e.g., "1970s-1980s")
+- **Production Notes**: Production style information
+- **Prompt**: Style prompt for AI generation
+
+**Song Details Tab:**
+- **Lyrics Field**: Character counter shows current count / 20,000 limit with color coding (gray = normal, orange = approaching limit, red = over limit)
+- **AI Results Tabs**: Switch between Album Cover and Video Loop prompts
+- **Album Cover Preview**: Displays generated images at up to 512x512 pixels (auto-scaled for large images)
+- **Video Options**: Dropdown menus for size and duration selection
+
 ### CSV File Format
 The tool expects a CSV file with music style information. Default location: `AI/suno/suno_sound_styles.csv`
 
 Example columns:
-- `style`: Style name
+- `style`: Style name (displayed in left panel list)
 - `mood`: Mood description
-- `tempo_bpm`: Tempo in BPM
+- `tempo_bpm`: Tempo in BPM (can be range like "120-140")
 - `instrumentation`: Instrumentation details
 - `vocal_style`: Vocal style description
-- `sample_artists`: Example artists
+- `sample_artists`: Example artists (comma-separated)
 - `decade_range`: Decade range (e.g., "1970s-1980s")
 - `production_notes`: Production style notes
 - `prompt`: Style prompt for AI generation
