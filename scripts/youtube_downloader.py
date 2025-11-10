@@ -361,7 +361,7 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
     def _fetch_streams_thread(self, url):
         try:
             result = subprocess.run(
-                ['yt-dlp', '-J', url],
+                [sys.executable, '-m', 'yt_dlp', '-J', url],
                 capture_output=True,
                 text=True,
                 creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
@@ -481,7 +481,8 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
             output_path = os.path.join(self.file_manager.get_folder_path('downloads'), filename)
             
             cmd = [
-                'yt-dlp',
+                sys.executable,
+                '-m', 'yt_dlp',
                 '-f', format_id,
                 '-o', output_path + '.%(ext)s',
                 url
@@ -602,7 +603,8 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
                 output_path = os.path.join(self.file_manager.get_folder_path('downloads'), filename)
                 
                 cmd = [
-                    'yt-dlp',
+                    sys.executable,
+                    '-m', 'yt_dlp',
                     '-f', format_id,
                     '-o', output_path + '.%(ext)s',
                     url

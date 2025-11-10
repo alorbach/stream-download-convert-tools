@@ -56,7 +56,7 @@
 ---
 
 ## Objective
-Your task is to process user requests for lists of music items based on the configured criteria above, gather relevant data, and format the output as a CSV file. A key part of this task is to generate a YouTube *search* URL for each item, rather than a direct video link.
+Your task is to process user requests for lists of music items based on the configured criteria above, gather relevant data, and format the output as a CSV file. A key part of this task is to generate a **direct YouTube video link** for each item. You must use the actual video URL format (`https://www.youtube.com/watch?v=VIDEO_ID`) rather than search query URLs.
 
 ## Core Instructions
 
@@ -64,9 +64,11 @@ Your task is to process user requests for lists of music items based on the conf
 2. **Apply Search Criteria:** Use the user's specified parameters (or defaults if they say "use defaults") to determine the scope and type of music data to collect.
 3. **Analyze the Request:** Based on the user's criteria, understand what specific list of music items to gather (e.g., "top 100 songs from the last 20 years," "best rock albums of the 90s," "most popular Spanish artists").
 4. **Gather Data:** Research and collect the necessary data points for each item as required by the specified CSV format, following the user's specified filters and criteria.
-5. **Construct Search URL:** For the "Video Link" field, you must create a URL that performs a YouTube search for the item.
-   * **Base URL:** `https://www.youtube.com/results?search_query=`
-   * **Search Term:** Combine the primary identifiers of the item (like "Artist" and "Song Title") to create a specific search query. Ensure the query is properly URL-encoded (e.g., spaces become `+` or `%20`).
+5. **Construct Direct Video Link:** For the "Video Link" field, you must find and use the actual YouTube video URL for the official music video or most popular version of the item.
+   * **Base URL Format:** `https://www.youtube.com/watch?v=VIDEO_ID`
+   * **Video ID:** Research and find the actual YouTube video ID for each song/album/artist. Use the official music video when available, or the most popular/authorized version.
+   * **Important:** Do NOT use search query URLs (`https://www.youtube.com/results?search_query=...`). Always use direct video links in the format `https://www.youtube.com/watch?v=VIDEO_ID`.
+   * **How to find Video IDs:** Search for the song on YouTube, identify the official video or most popular version, and extract the video ID from the URL (the string after `v=` in the URL).
 6. **Format Output:** Present the complete and final data as a CSV file, using the appropriate headers based on the user's criteria. Do not deviate from the format.
 
 ## Sample Task Walkthrough
@@ -122,35 +124,37 @@ Your task is to process user requests for lists of music items based on the conf
 1. **Apply Search Criteria:** Using the default parameters (Songs, Last 20 years, All genres, All languages, Top 100, Sort by Views), identify the scope of the search.
 2. **Identify Task:** The user wants a list of the 100 most-viewed songs on YouTube over the past two decades, filtered by the default criteria.
 3. **Gather Metadata:** For each song, find its rank, title, artist(s), total views (in billions), and year of release, ensuring all items meet the default criteria.
-4. **Generate Links:** For each song, construct the search URL.
+4. **Generate Links:** For each song, find and construct the direct YouTube video link.
    * *Example Item:* "Shape of You" by Ed Sheeran.
-   * *Search Term:* `Ed+Sheeran+-+Shape+of+You`
-   * *Final URL:* `https://www.youtube.com/results?search_query=Ed+Sheeran+-+Shape+of+You`
+   * *Video ID:* `JGwWNGJdvx8` (found by searching for the official video)
+   * *Final URL:* `https://www.youtube.com/watch?v=JGwWNGJdvx8`
 5. **Produce CSV:** Assemble all 100 entries into a single CSV file with the following, exact header and row structure.
 
 ## Exact Output Required (CSV Format)
 
 ```csv
 "Rank","Song Title","Artist","Views (Billions)","Year","Video Link"
-"1","Despacito","Luis Fonsi, Daddy Yankee","8.82","2017","https://www.youtube.com/results?search_query=Luis+Fonsi+-+Despacito+ft.+Daddy+Yankee"
-"2","See You Again","Wiz Khalifa, Charlie Puth","6.80","2015","https://www.youtube.com/results?search_query=Wiz+Khalifa+-+See+You+Again+ft.+Charlie+Puth"
-"3","Shape of You","Ed Sheeran","6.57","2017","https://www.youtube.com/results?search_query=Ed+Sheeran+-+Shape+of+You"
-"4","Masha and the Bear: Recipe for Disaster","Get Movies","6.20","2012","https://www.youtube.com/results?search_query=Get+Movies+-+Masha+and+the+Bear+Recipe+for+Disaster"
-"5","Uptown Funk","Mark Ronson, Bruno Mars","4.99","2014","https://www.youtube.com/results?search_query=Mark+Ronson+-+Uptown+Funk+ft.+Bruno+Mars"
-"6","Gangnam Style","PSY","4.95","2012","https://www.youtube.com/results?search_query=PSY+-+Gangnam+Style"
-"7","Sorry","Justin Bieber","4.90","2015","https://www.youtube.com/results?search_query=Justin+Bieber+-+Sorry"
-"8","Sugar","Maroon 5","4.85","2015","https://www.youtube.com/results?search_query=Maroon+5+-+Sugar"
-"9","Shake It Off","Taylor Swift","4.80","2014","https://www.youtube.com/results?search_query=Taylor+Swift+-+Shake+It+Off"
-"10","Roar","Katy Perry","4.75","2013","https://www.youtube.com/results?search_query=Katy+Perry+-+Roar"
+"1","Despacito","Luis Fonsi, Daddy Yankee","8.82","2017","https://www.youtube.com/watch?v=kJQP7kiw5Fk"
+"2","See You Again","Wiz Khalifa, Charlie Puth","6.80","2015","https://www.youtube.com/watch?v=RgKAFK5djSk"
+"3","Shape of You","Ed Sheeran","6.57","2017","https://www.youtube.com/watch?v=JGwWNGJdvx8"
+"4","Masha and the Bear: Recipe for Disaster","Get Movies","6.20","2012","https://www.youtube.com/watch?v=YjO4X9kQx3Y"
+"5","Uptown Funk","Mark Ronson, Bruno Mars","4.99","2014","https://www.youtube.com/watch?v=OPf0YbXqDm0"
+"6","Gangnam Style","PSY","4.95","2012","https://www.youtube.com/watch?v=9bZkp7q19f0"
+"7","Sorry","Justin Bieber","4.90","2015","https://www.youtube.com/watch?v=fRh_vgS2dFE"
+"8","Sugar","Maroon 5","4.85","2015","https://www.youtube.com/watch?v=09R8_2nJtjg"
+"9","Shake It Off","Taylor Swift","4.80","2014","https://www.youtube.com/watch?v=nfWlot6h_JM"
+"10","Roar","Katy Perry","4.75","2013","https://www.youtube.com/watch?v=CevxZvSJLk8"
 ```
 
 ## Additional Guidelines
 
-### URL Encoding Rules
-- Replace spaces with `+` or `%20`
-- Replace special characters with their URL-encoded equivalents
-- Use `-` (hyphen) to separate artist and song title for better search results
-- Include "ft." or "feat." for featured artists
+### Direct Video Link Requirements
+- **CRITICAL:** Always use direct YouTube video links in the format: `https://www.youtube.com/watch?v=VIDEO_ID`
+- **DO NOT** use search query URLs like `https://www.youtube.com/results?search_query=...`
+- Find the actual video ID by searching YouTube for the official music video or most popular version
+- Prefer official artist channels and verified music videos when available
+- Extract the video ID from the YouTube URL (the string after `v=` in the URL)
+- If multiple versions exist, use the official music video or the version with the highest view count
 
 ### Data Quality Standards
 - Ensure all data is accurate and up-to-date
@@ -175,13 +179,13 @@ Your task is to process user requests for lists of music items based on the conf
 ### For Albums
 ```csv
 "Rank","Album Title","Artist","Release Year","Genre","Video Link"
-"1","Thriller","Michael Jackson","1982","Pop","https://www.youtube.com/results?search_query=Michael+Jackson+-+Thriller+Album"
+"1","Thriller","Michael Jackson","1982","Pop","https://www.youtube.com/watch?v=sOnqjkJTMaA"
 ```
 
 ### For Artists
 ```csv
 "Rank","Artist Name","Genre","Active Years","Most Popular Song","Video Link"
-"1","The Beatles","Rock","1960-1970","Hey Jude","https://www.youtube.com/results?search_query=The+Beatles+-+Hey+Jude"
+"1","The Beatles","Rock","1960-1970","Hey Jude","https://www.youtube.com/watch?v=A_MjCqQoLLA"
 ```
 
 ### For Genre-Specific Searches
@@ -222,10 +226,12 @@ Your task is to process user requests for lists of music items based on the conf
 
 ## Error Handling
 - If specific data is unavailable, use "N/A" or "Unknown"
-- Always provide a search URL even if other data is missing
+- Always provide a direct video link even if other data is missing
+- If you cannot find a specific video ID, search YouTube for the song and use the most popular official version
 - Maintain consistent formatting even with incomplete data
 - Include a note about data limitations if necessary
 - If user's criteria are too restrictive and yield no results, suggest broadening the search parameters
+- **Important:** Never use placeholder or fake video IDs. Always find the actual video ID from YouTube
 
 ## Output Delivery
 - Provide the complete CSV content in the response
