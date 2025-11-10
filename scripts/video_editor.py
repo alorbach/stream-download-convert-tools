@@ -63,6 +63,10 @@ class VideoEditorGUI(BaseAudioGUI):
         # Grid layout dimensions
         self.grid_cols = 5
         
+        # Auto-export last frame option (default: False)
+        self.auto_export_enabled = False
+        self.auto_export_var = None  # Will be initialized in setup_ui()
+        
         # Settings file path
         self.settings_file = os.path.join(self.root_dir, "video_editor_settings.json")
         
@@ -127,6 +131,10 @@ class VideoEditorGUI(BaseAudioGUI):
         edit_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Edit", menu=edit_menu)
         edit_menu.add_command(label="Set Grid Columns", command=self.set_grid_columns)
+        edit_menu.add_separator()
+        self.auto_export_var = tk.BooleanVar(value=self.auto_export_enabled)
+        edit_menu.add_checkbutton(label="Auto-export Last Frame", variable=self.auto_export_var, 
+                                 command=self.toggle_auto_export)
         
         # Toolbar
         toolbar = ttk.Frame(main_frame)
@@ -148,6 +156,13 @@ class VideoEditorGUI(BaseAudioGUI):
         grid_spin = ttk.Spinbox(toolbar, from_=1, to=10, textvariable=self.grid_cols_var, width=5)
         grid_spin.pack(side='left', padx=5)
         grid_spin.bind('<Return>', lambda e: self.update_grid())
+        
+        ttk.Separator(toolbar, orient='vertical').pack(side='left', fill='y', padx=10)
+        
+        self.auto_export_checkbox = ttk.Checkbutton(toolbar, text="Auto-export Last Frame", 
+                                                    variable=self.auto_export_var,
+                                                    command=self.toggle_auto_export)
+        self.auto_export_checkbox.pack(side='left', padx=5)
         
         # Status bar
         self.status_var = tk.StringVar(value="Ready")
@@ -217,13 +232,19 @@ class VideoEditorGUI(BaseAudioGUI):
         )
         
         if files:
+            newly_added = []
             for file in files:
                 if file not in self.video_files:
                     self.video_files.append(file)
+                    newly_added.append(file)
             
             self.log(f"[INFO] Added {len(files)} video file(s)")
             self.refresh_grid()
             self.save_settings()
+            
+            # Automatically export last frame for newly added videos (if enabled)
+            if newly_added and self.auto_export_enabled:
+                self.auto_export_last_frames(newly_added)
     
     def remove_selected(self):
         """Remove selected videos."""
@@ -451,16 +472,20 @@ class VideoEditorGUI(BaseAudioGUI):
             
             if video_files:
                 # Add new videos
-                added_count = 0
+                newly_added = []
                 for video_file in video_files:
                     if video_file not in self.video_files:
                         self.video_files.append(video_file)
-                        added_count += 1
+                        newly_added.append(video_file)
                 
-                if added_count > 0:
-                    self.log(f"[INFO] Added {added_count} video file(s) via drag-and-drop")
+                if newly_added:
+                    self.log(f"[INFO] Added {len(newly_added)} video file(s) via drag-and-drop")
                     self.refresh_grid()
                     self.save_settings()
+                    
+                    # Automatically export last frame for newly added videos (if enabled)
+                    if self.auto_export_enabled:
+                        self.auto_export_last_frames(newly_added)
                 else:
                     self.log("[INFO] All dropped videos already added")
             else:
@@ -485,6 +510,104 @@ class VideoEditorGUI(BaseAudioGUI):
             self.log(f"[INFO] Removed: {os.path.basename(removed)}")
             self.refresh_grid()
             self.save_settings()
+    
+    def auto_export_last_frames(self, video_files):
+        """Automatically export last frame for newly added videos in background."""
+        if not video_files:
+            return
+        
+        def _export_thread():
+            for video_file in video_files:
+                try:
+                    self.export_frame_silent(video_file, 'last')
+                except Exception as e:
+                    self.root.after(0, lambda vf=video_file, err=str(e): 
+                                   self.log(f"[WARNING] Auto-export failed for {os.path.basename(vf)}: {err}"))
+        
+        thread = threading.Thread(target=_export_thread)
+        thread.daemon = True
+        thread.start()
+    
+    def export_frame_silent(self, video_file, frame_type):
+        """Export first or last frame as PNG (silent version without UI cursor changes)."""
+        try:
+            ffmpeg_cmd = self.get_ffmpeg_command()
+            base_name = os.path.splitext(video_file)[0]
+            output_file = f"{base_name}_{frame_type}.png"
+            
+            if not os.path.exists(ffmpeg_cmd):
+                self.root.after(0, lambda: self.log(f"[WARNING] FFmpeg not found, skipping frame export for {os.path.basename(video_file)}"))
+                return
+            
+            if frame_type == 'first':
+                # For first frame, use -ss after -i (input seeking)
+                cmd = f'{ffmpeg_cmd} -i "{video_file}" -ss 00:00:00 -vframes 1 -y "{output_file}"'
+            else:  # last
+                # Get video duration first
+                duration_cmd = f'{ffmpeg_cmd} -i "{video_file}" -f null -'
+                result = subprocess.run(duration_cmd, capture_output=True, text=True, shell=True)
+                
+                # Extract duration from stderr
+                duration = None
+                for line in result.stderr.split('\n'):
+                    if 'Duration:' in line:
+                        parts = line.split('Duration:')[1].split(',')[0].strip()
+                        duration = parts
+                        break
+                
+                if duration:
+                    # For last frame, seek to the end minus 1 frame
+                    # Parse duration and subtract a small amount
+                    try:
+                        # Duration format: HH:MM:SS.ms
+                        parts = duration.split(':')
+                        if len(parts) == 3:
+                            hours = int(parts[0])
+                            minutes = int(parts[1])
+                            sec_ms = parts[2].split('.')
+                            seconds = int(sec_ms[0])
+                            ms = int(sec_ms[1]) if len(sec_ms) > 1 else 0
+                            
+                            # Calculate total seconds and subtract 0.1 seconds
+                            total_seconds = hours * 3600 + minutes * 60 + seconds + ms / 100.0
+                            seek_time = max(0, total_seconds - 0.1)
+                            
+                            # Format back as HH:MM:SS.ms
+                            h = int(seek_time // 3600)
+                            m = int((seek_time % 3600) // 60)
+                            s = int(seek_time % 60)
+                            ms_val = int((seek_time % 1) * 100)
+                            seek_str = f"{h:02d}:{m:02d}:{s:02d}.{ms_val:02d}"
+                            
+                            cmd = f'{ffmpeg_cmd} -i "{video_file}" -ss {seek_str} -vframes 1 -y "{output_file}"'
+                        else:
+                            raise Exception("Could not parse duration")
+                    except Exception as e:
+                        self.root.after(0, lambda err=str(e): self.log(f"[WARNING] Could not parse duration: {err}, using -t instead"))
+                        # Alternative: use -t to get last second
+                        cmd = f'{ffmpeg_cmd} -i "{video_file}" -ss {duration} -t 00:00:01 -frames:v 1 -y "{output_file}"'
+                else:
+                    raise Exception("Could not determine video duration")
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, cwd=self.root_dir, shell=True)
+            
+            if result.returncode == 0:
+                # Check if file actually exists
+                if os.path.exists(output_file):
+                    file_size = os.path.getsize(output_file)
+                    self.root.after(0, lambda: self.log(f"[SUCCESS] Auto-exported {frame_type} frame: {os.path.basename(output_file)} ({file_size} bytes)"))
+                else:
+                    # Check if file exists in current directory
+                    alt_path = os.path.join(self.root_dir, os.path.basename(output_file))
+                    if os.path.exists(alt_path):
+                        self.root.after(0, lambda: self.log(f"[SUCCESS] Auto-exported {frame_type} frame: {os.path.basename(alt_path)}"))
+                    else:
+                        raise Exception(f"FFmpeg succeeded but file not found at: {output_file}")
+            else:
+                raise Exception(result.stderr)
+        
+        except Exception as e:
+            self.root.after(0, lambda err=str(e): self.log(f"[WARNING] Auto-export failed for {os.path.basename(video_file)}: {err}"))
     
     def export_frame(self, video_file, frame_type):
         """Export first or last frame as PNG."""
@@ -912,6 +1035,13 @@ class VideoEditorGUI(BaseAudioGUI):
         finally:
             self.root.after(0, lambda: self.root.config(cursor=''))
     
+    def toggle_auto_export(self):
+        """Toggle auto-export last frame option."""
+        self.auto_export_enabled = self.auto_export_var.get()
+        self.save_settings()
+        status_text = "enabled" if self.auto_export_enabled else "disabled"
+        self.log(f"[INFO] Auto-export last frame: {status_text}")
+    
     def set_grid_columns(self):
         """Set grid columns."""
         dialog = tk.Toplevel(self.root)
@@ -1022,6 +1152,7 @@ class VideoEditorGUI(BaseAudioGUI):
         try:
             settings = {
                 'grid_cols': self.grid_cols,
+                'auto_export_enabled': self.auto_export_enabled,
                 'video_files': self.video_files[:10]  # Save first 10 for quick restore
             }
             
@@ -1041,6 +1172,11 @@ class VideoEditorGUI(BaseAudioGUI):
                 if 'grid_cols' in settings:
                     self.grid_cols = settings['grid_cols']
                     self.grid_cols_var.set(str(self.grid_cols))
+                
+                if 'auto_export_enabled' in settings:
+                    self.auto_export_enabled = settings['auto_export_enabled']
+                    if self.auto_export_var is not None:
+                        self.auto_export_var.set(self.auto_export_enabled)
                 
                 self.log("[INFO] Settings loaded")
         
