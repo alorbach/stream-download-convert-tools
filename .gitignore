@@ -112,6 +112,10 @@ converted/
 converted_changed/
 ffmpeg/
 
+# Node.js dependencies
+node_modules/
+package-lock.json
+
 # IDE files
 .vscode/
 .idea/

@@ -2163,18 +2163,6 @@ class SunoStyleBrowser(tk.Tk):
         desc += f"Video Type: AI-Generated Music Cover\n"
         desc += f"Channel: Delta AI Covers\n\n"
         
-        # Keywords Section (hidden but SEO-important)
-        desc += "🎹 KEYWORDS FOR SEARCH:\n"
-        desc += f"{song_name} ai cover, {artist} ai cover, {style_name.lower()} cover, "
-        desc += f"ai music {song_name}, {song_name} remix, ai generated music, "
-        desc += f"{style_name.lower()} music, cover song ai, ai music generation\n\n"
-        
-        # Hashtags Section
-        desc += "🏷️ HASHTAGS:\n"
-        # Generate optimized hashtags using AI (max 500 chars)
-        hashtags = self.generate_youtube_hashtags(song_name, artist, style_description, style_info)
-        desc += hashtags + '\n\n'
-        
         # Channel Description
         desc += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         desc += "📺 ABOUT DELTA AI COVERS\n"
@@ -2199,7 +2187,24 @@ class SunoStyleBrowser(tk.Tk):
         desc += "We do not claim ownership of the original song and fully support the original artists.\n\n"
         desc += "Fair Use Disclaimer: This cover qualifies as fair use under copyright law as it is transformative, "
         desc += "uses minimal copyrighted material, has no commercial purpose, and promotes the original work.\n"
+
+        # Keywords Section (hidden but SEO-important)
+        desc += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        desc += "🎹 KEYWORDS FOR SEARCH\n"
+        desc += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        desc += f"{song_name} ai cover, {artist} ai cover, {style_name.lower()} cover, "
+        desc += f"ai music {song_name}, {song_name} remix, ai generated music, "
+        desc += f"{style_name.lower()} music, cover song ai, ai music generation\n\n"
         
+        # Hashtags Section
+        desc += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        desc += "🏷️ HASHTAGS:\n"
+        desc += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        # Generate optimized hashtags using AI (max 500 chars)
+        hashtags = self.generate_youtube_hashtags(song_name, artist, style_description, style_info)
+        desc += hashtags + '\n\n'
+
+
         return desc
     
     def save_song_details(self):
