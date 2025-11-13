@@ -47,6 +47,11 @@ class StreamDownloadConvertToolsUnifiedGUI(BaseAudioGUI):
         self.available_streams = []
         self.current_video_info = None
         
+        # Direct link tab attributes
+        self.direct_link_url = None
+        self.direct_link_streams = []
+        self.direct_link_video_info = None
+        
         # Video to MP3 Converter attributes
         self.selected_video_files = []
         self.conversion_queue = []
@@ -69,16 +74,19 @@ class StreamDownloadConvertToolsUnifiedGUI(BaseAudioGUI):
         self.tab_youtube = ttk.Frame(self.notebook)
         self.tab_converter = ttk.Frame(self.notebook)
         self.tab_modifier = ttk.Frame(self.notebook)
+        self.tab_direct_link = ttk.Frame(self.notebook)
         self.tab_settings = ttk.Frame(self.notebook)
         
         self.notebook.add(self.tab_youtube, text="YouTube Downloader")
         self.notebook.add(self.tab_converter, text="Video to MP3")
         self.notebook.add(self.tab_modifier, text="Audio Modifier")
+        self.notebook.add(self.tab_direct_link, text="Direct Link")
         self.notebook.add(self.tab_settings, text="Settings")
         
         self.setup_youtube_tab()
         self.setup_converter_tab()
         self.setup_modifier_tab()
+        self.setup_direct_link_tab()
         self.setup_settings_tab()
     
     def setup_youtube_tab(self):
@@ -362,6 +370,74 @@ class StreamDownloadConvertToolsUnifiedGUI(BaseAudioGUI):
         
         info_text = "Supported formats: MP3, M4A, WAV, OGG, FLAC | Speed: +/- tempo | Pitch: semitones | Requires FFmpeg"
         ttk.Label(info_frame, text=info_text, font=('Arial', 8)).pack()
+    
+    def setup_direct_link_tab(self):
+        # URL input frame
+        url_frame = ttk.LabelFrame(self.tab_direct_link, text="YouTube URL", padding=10)
+        url_frame.pack(fill='x', padx=10, pady=10)
+        
+        ttk.Label(url_frame, text="Enter YouTube URL:").pack(anchor='w', pady=(0, 5))
+        
+        url_input_frame = ttk.Frame(url_frame)
+        url_input_frame.pack(fill='x', pady=5)
+        
+        self.direct_link_url_var = tk.StringVar()
+        url_entry = ttk.Entry(url_input_frame, textvariable=self.direct_link_url_var, width=70)
+        url_entry.pack(side='left', fill='x', expand=True, padx=(0, 5))
+        url_entry.bind('<Return>', lambda e: self.fetch_direct_link_streams())
+        
+        ttk.Button(url_input_frame, text="Fetch Streams", command=self.fetch_direct_link_streams).pack(side='left')
+        
+        self.direct_link_progress = ttk.Progressbar(url_frame, mode='indeterminate')
+        self.direct_link_progress.pack(fill='x', pady=5)
+        self.direct_link_progress_label = ttk.Label(url_frame, text="")
+        self.direct_link_progress_label.pack(anchor='w')
+        
+        # Video info frame
+        info_frame = ttk.LabelFrame(self.tab_direct_link, text="Video Information", padding=10)
+        info_frame.pack(fill='x', padx=10, pady=10)
+        
+        self.direct_link_info_text = scrolledtext.ScrolledText(info_frame, height=4, wrap=tk.WORD)
+        self.direct_link_info_text.pack(fill='both', expand=True)
+        
+        # Streams frame
+        streams_frame = ttk.LabelFrame(self.tab_direct_link, text="Available Streams", padding=10)
+        streams_frame.pack(fill='both', expand=True, padx=10, pady=10)
+        
+        columns = ('Format ID', 'Extension', 'Resolution', 'FPS', 'File Size', 'Audio Codec', 'Video Codec')
+        self.direct_link_stream_tree = ttk.Treeview(streams_frame, columns=columns, show='tree headings', height=10)
+        
+        self.direct_link_stream_tree.heading('#0', text='Type')
+        self.direct_link_stream_tree.column('#0', width=100)
+        
+        for col in columns:
+            self.direct_link_stream_tree.heading(col, text=col)
+            self.direct_link_stream_tree.column(col, width=100)
+        
+        stream_scrollbar = ttk.Scrollbar(streams_frame, orient='vertical', command=self.direct_link_stream_tree.yview)
+        self.direct_link_stream_tree.configure(yscrollcommand=stream_scrollbar.set)
+        
+        self.direct_link_stream_tree.pack(side='left', fill='both', expand=True)
+        stream_scrollbar.pack(side='right', fill='y')
+        
+        # Download frame
+        download_frame = ttk.Frame(self.tab_direct_link)
+        download_frame.pack(fill='x', padx=10, pady=10)
+        
+        btn_frame = ttk.Frame(download_frame)
+        btn_frame.pack(fill='x', pady=5)
+        
+        ttk.Label(btn_frame, text="Filename:").pack(side='left', padx=5)
+        self.direct_link_filename_var = tk.StringVar()
+        filename_entry = ttk.Entry(btn_frame, textvariable=self.direct_link_filename_var, width=40)
+        filename_entry.pack(side='left', padx=5, fill='x', expand=True)
+        
+        ttk.Button(btn_frame, text="Download Selected Stream", command=self.download_direct_link_stream).pack(side='left', padx=5)
+        self.direct_link_cancel_button = ttk.Button(btn_frame, text="Cancel Download", command=self.cancel_direct_link_download, state='disabled')
+        self.direct_link_cancel_button.pack(side='left', padx=5)
+        
+        self.direct_link_log_text = scrolledtext.ScrolledText(download_frame, height=8)
+        self.direct_link_log_text.pack(fill='both', expand=True)
     
     def setup_settings_tab(self):
         # Settings Tab
@@ -1307,6 +1383,223 @@ Note: All tools require FFmpeg for processing.
         
         # Start modification with all files
         self.start_modification()
+    
+    # Direct Link Tab methods
+    def fetch_direct_link_streams(self):
+        if self.is_busy:
+            return
+        
+        url = self.direct_link_url_var.get().strip()
+        if not url:
+            messagebox.showwarning("Warning", "Please enter a YouTube URL")
+            return
+        
+        # Extract URL if it's in markdown format or validate it
+        extracted_url = self.extract_youtube_url(url)
+        if not extracted_url:
+            # Try to use the URL as-is (might be a search query or other format)
+            extracted_url = url
+        
+        self.direct_link_url = extracted_url
+        self.direct_link_log(f"[INFO] Fetching streams for: {extracted_url}")
+        self.set_direct_link_busy(True, "Fetching available streams...")
+        
+        thread = threading.Thread(target=self._fetch_direct_link_streams_thread, args=(extracted_url,))
+        thread.daemon = True
+        thread.start()
+    
+    def _fetch_direct_link_streams_thread(self, url):
+        try:
+            result = subprocess.run(
+                ['yt-dlp', '-J', url],
+                capture_output=True,
+                text=True,
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+            )
+            
+            if result.returncode != 0:
+                error_msg = result.stderr
+                self.root.after(0, lambda msg=error_msg: self.direct_link_log(f"[ERROR] {msg}"))
+                self.root.after(0, lambda: self.set_direct_link_busy(False))
+                return
+            
+            data = json.loads(result.stdout)
+            formats = data.get('formats', [])
+            
+            # Store video info
+            self.direct_link_video_info = {
+                'title': data.get('title', 'Unknown'),
+                'uploader': data.get('uploader', 'Unknown'),
+                'duration': data.get('duration', 0),
+                'view_count': data.get('view_count', 0),
+                'description': data.get('description', '')[:500]
+            }
+            
+            self.direct_link_streams = formats
+            self.root.after(0, lambda: self.display_direct_link_streams(formats, data))
+            self.root.after(0, lambda: self.set_direct_link_busy(False))
+            
+        except Exception as e:
+            error_msg = str(e)
+            self.root.after(0, lambda msg=error_msg: self.direct_link_log(f"[ERROR] Fetching streams: {msg}"))
+            self.root.after(0, lambda: self.set_direct_link_busy(False))
+    
+    def display_direct_link_streams(self, formats, video_data):
+        self.direct_link_stream_tree.delete(*self.direct_link_stream_tree.get_children())
+        self.direct_link_info_text.delete('1.0', tk.END)
+        
+        # Display video information
+        info_text = f"Title: {video_data.get('title', 'Unknown')}\n"
+        info_text += f"Uploader: {video_data.get('uploader', 'Unknown')}\n"
+        duration = video_data.get('duration', 0)
+        if duration:
+            minutes = duration // 60
+            seconds = duration % 60
+            info_text += f"Duration: {minutes}:{seconds:02d}\n"
+        info_text += f"Views: {video_data.get('view_count', 0):,}"
+        self.direct_link_info_text.insert('1.0', info_text)
+        
+        # Auto-generate filename from video title
+        title = video_data.get('title', 'video')
+        safe_title = "".join(c for c in title if c.isalnum() or c in (' ', '-', '_')).strip()
+        safe_title = safe_title.replace(' ', '_')[:50]
+        self.direct_link_filename_var.set(safe_title)
+        
+        # Display streams
+        combined = []
+        video_only = []
+        audio_only = []
+        
+        for fmt in formats:
+            if fmt.get('vcodec') != 'none' and fmt.get('acodec') != 'none':
+                combined.append(fmt)
+            elif fmt.get('vcodec') != 'none':
+                video_only.append(fmt)
+            elif fmt.get('acodec') != 'none':
+                audio_only.append(fmt)
+        
+        if combined:
+            parent = self.direct_link_stream_tree.insert('', 'end', text='Video + Audio', open=True)
+            for fmt in combined:
+                self._insert_direct_link_format(parent, fmt)
+        
+        if video_only:
+            parent = self.direct_link_stream_tree.insert('', 'end', text='Video Only', open=False)
+            for fmt in video_only:
+                self._insert_direct_link_format(parent, fmt)
+        
+        if audio_only:
+            parent = self.direct_link_stream_tree.insert('', 'end', text='Audio Only', open=False)
+            for fmt in audio_only:
+                self._insert_direct_link_format(parent, fmt)
+        
+        self.direct_link_log(f"[SUCCESS] Found {len(formats)} streams ({len(combined)} combined, {len(video_only)} video, {len(audio_only)} audio)")
+    
+    def _insert_direct_link_format(self, parent, fmt):
+        format_id = fmt.get('format_id', 'N/A')
+        ext = fmt.get('ext', 'N/A')
+        resolution = fmt.get('resolution', 'N/A')
+        fps = str(fmt.get('fps', 'N/A'))
+        filesize = self._format_filesize(fmt.get('filesize') or fmt.get('filesize_approx'))
+        acodec = fmt.get('acodec', 'none')
+        vcodec = fmt.get('vcodec', 'none')
+        
+        self.direct_link_stream_tree.insert(
+            parent, 'end',
+            values=(format_id, ext, resolution, fps, filesize, acodec, vcodec),
+            tags=(format_id,)
+        )
+    
+    def download_direct_link_stream(self):
+        if self.is_busy:
+            messagebox.showwarning("Warning", "Please wait for current operation to complete")
+            return
+        
+        selection = self.direct_link_stream_tree.selection()
+        if not selection:
+            messagebox.showwarning("Warning", "Please select a stream to download")
+            return
+        
+        if not self.direct_link_url:
+            messagebox.showerror("Error", "No URL available")
+            return
+        
+        item = selection[0]
+        format_id = str(self.direct_link_stream_tree.item(item)['values'][0])
+        
+        filename = self.direct_link_filename_var.get().strip()
+        if not filename:
+            filename = "video"
+        
+        self.direct_link_log(f"[INFO] Starting download: Format {format_id}")
+        self.direct_link_log(f"[INFO] Output file: {filename}")
+        self.set_direct_link_busy(True, "Downloading...")
+        
+        thread = threading.Thread(target=self._download_direct_link_thread, args=(self.direct_link_url, format_id, filename))
+        thread.daemon = True
+        thread.start()
+    
+    def _download_direct_link_thread(self, url, format_id, filename):
+        try:
+            output_path = os.path.join(self.file_manager.get_folder_path('downloads'), filename)
+            
+            cmd = [
+                'yt-dlp',
+                '-f', format_id,
+                '-o', output_path + '.%(ext)s',
+                url
+            ]
+            
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+            )
+            
+            for line in process.stdout:
+                line_text = line.strip()
+                if line_text:
+                    self.root.after(0, lambda l=line_text: self.direct_link_log(l))
+            
+            process.wait()
+            
+            if process.returncode == 0:
+                self.root.after(0, lambda: self.direct_link_log("[SUCCESS] Download completed successfully!"))
+                self.root.after(0, lambda: messagebox.showinfo("Success", "Download completed!"))
+                self.root.after(0, lambda: self.set_direct_link_busy(False))
+            else:
+                self.root.after(0, lambda: self.direct_link_log("[ERROR] Download failed!"))
+                self.root.after(0, lambda: self.set_direct_link_busy(False))
+                
+        except Exception as e:
+            error_msg = str(e)
+            self.root.after(0, lambda msg=error_msg: self.direct_link_log(f"[ERROR] Download error: {msg}"))
+            self.root.after(0, lambda: self.set_direct_link_busy(False))
+    
+    def cancel_direct_link_download(self):
+        """Cancel the current direct link download operation"""
+        self.is_busy = False
+        self.set_direct_link_busy(False)
+        self.direct_link_log("[INFO] Download cancelled by user")
+    
+    def set_direct_link_busy(self, busy=True, message=""):
+        self.is_busy = busy
+        if busy:
+            self.root.config(cursor="wait")
+            self.direct_link_progress.start(10)
+            self.direct_link_progress_label.config(text=message)
+            self.direct_link_cancel_button.config(state='normal')
+        else:
+            self.root.config(cursor="")
+            self.direct_link_progress.stop()
+            self.direct_link_progress_label.config(text="")
+            self.direct_link_cancel_button.config(state='disabled')
+    
+    def direct_link_log(self, message):
+        self.direct_link_log_text.insert(tk.END, f"{message}\n")
+        self.direct_link_log_text.see(tk.END)
     
     # Common FFmpeg methods
     def check_ffmpeg(self):
