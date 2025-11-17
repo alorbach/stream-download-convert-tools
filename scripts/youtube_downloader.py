@@ -26,6 +26,7 @@ import threading
 import subprocess
 import json
 import random
+import time
 from pathlib import Path
 
 # Import shared libraries
@@ -47,6 +48,9 @@ class YouTubeDownloaderGUI(BaseAudioGUI):
         self.current_process = None
         self.use_android_client = False  # Default: disabled (use web client for more formats)
         self.user_agent = self.generate_user_agent()  # Randomize user agent on startup
+        self.cookie_file = None  # Path to cookies file
+        self.download_delay = 2.0  # Delay between downloads in seconds
+        self.use_stealth_mode = True  # Enable additional stealth options
         
         # Direct link tab attributes
         self.direct_link_url = None
@@ -254,15 +258,43 @@ class YouTubeDownloaderGUI(BaseAudioGUI):
             row=3, column=0, columnspan=3, sticky='w', pady=5
         )
         
-        ttk.Label(frame, text="Android Client Mode:").grid(row=4, column=0, sticky='w', pady=5)
-        self.android_client_var = tk.BooleanVar(value=False)
-        android_check = ttk.Checkbutton(
+        ttk.Label(frame, text="Stealth Mode:").grid(row=4, column=0, sticky='w', pady=5)
+        self.stealth_mode_var = tk.BooleanVar(value=True)
+        stealth_check = ttk.Checkbutton(
             frame,
-            text="Use Android client (helps avoid 403 errors, but limits available formats)",
-            variable=self.android_client_var,
-            command=self.on_android_client_changed
+            text="Enable stealth mode (recommended to avoid 403 errors)",
+            variable=self.stealth_mode_var,
+            command=self.on_stealth_mode_changed
         )
-        android_check.grid(row=4, column=1, columnspan=2, sticky='w', padx=5)
+        stealth_check.grid(row=4, column=1, columnspan=2, sticky='w', padx=5)
+        
+        ttk.Label(frame, text="Client Type:").grid(row=5, column=0, sticky='w', pady=5)
+        self.client_type_var = tk.StringVar(value="web")
+        client_frame = ttk.Frame(frame)
+        client_frame.grid(row=5, column=1, columnspan=2, sticky='w', padx=5)
+        ttk.Radiobutton(client_frame, text="Web (more formats)", variable=self.client_type_var, value="web").pack(side='left', padx=5)
+        ttk.Radiobutton(client_frame, text="Android (better stealth)", variable=self.client_type_var, value="android").pack(side='left', padx=5)
+        ttk.Radiobutton(client_frame, text="iOS (best stealth)", variable=self.client_type_var, value="ios").pack(side='left', padx=5)
+        ttk.Radiobutton(client_frame, text="TV (alternative)", variable=self.client_type_var, value="tv").pack(side='left', padx=5)
+        
+        ttk.Label(frame, text="Cookie File (optional):").grid(row=6, column=0, sticky='w', pady=5)
+        cookie_frame = ttk.Frame(frame)
+        cookie_frame.grid(row=6, column=1, columnspan=2, sticky='ew', padx=5)
+        frame.grid_columnconfigure(1, weight=1)
+        self.cookie_file_var = tk.StringVar()
+        ttk.Entry(cookie_frame, textvariable=self.cookie_file_var, width=40).pack(side='left', fill='x', expand=True, padx=(0, 5))
+        ttk.Button(cookie_frame, text="Browse", command=self.browse_cookie_file).pack(side='left')
+        ttk.Label(frame, text="Export cookies from browser (Netscape format) for better stealth", foreground='gray', font=('TkDefaultFont', 8)).grid(
+            row=7, column=0, columnspan=3, sticky='w', padx=5
+        )
+        
+        ttk.Label(frame, text="Delay Between Downloads (seconds):").grid(row=8, column=0, sticky='w', pady=5)
+        self.delay_var = tk.DoubleVar(value=2.0)
+        delay_spin = ttk.Spinbox(frame, from_=0.0, to=60.0, increment=0.5, textvariable=self.delay_var, width=10)
+        delay_spin.grid(row=8, column=1, sticky='w', padx=5)
+        ttk.Label(frame, text="(Higher delay = less likely to be detected, but slower)", foreground='gray', font=('TkDefaultFont', 8)).grid(
+            row=9, column=0, columnspan=3, sticky='w', padx=5
+        )
         
         info_frame = ttk.LabelFrame(self.tab_settings, text="Information", padding=10)
         info_frame.pack(fill='both', expand=True, padx=10, pady=10)
@@ -274,14 +306,26 @@ Features:
 - View available video/audio streams
 - Select specific quality and format
 - Download with custom filenames based on CSV fields
+- Stealth mode to avoid 403 errors
+- Multiple client types (Web, Android, iOS, TV)
+- Cookie file support for better stealth
 - Automatic venv management via launcher scripts
+
+Stealth Mode Tips:
+- Enable Stealth Mode (recommended) to avoid 403 errors
+- Use iOS client for best stealth (may have fewer formats)
+- Use Android client for good balance of stealth and formats
+- Export browser cookies (Netscape format) and load them for better results
+- Increase delay between downloads if you still get 403 errors
+- The tool automatically tries alternative clients if 403 is detected
 
 Instructions:
 1. Load a CSV file containing YouTube links
-2. Select a video from the list
-3. Fetch available streams
-4. Choose your preferred stream (video+audio, video only, or audio only)
-5. Download to the configured folder
+2. Configure stealth settings in this tab
+3. Select a video from the list
+4. Fetch available streams
+5. Choose your preferred stream (video+audio, video only, or audio only)
+6. Download to the configured folder
 
 Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
 """
@@ -329,6 +373,21 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
     def on_android_client_changed(self):
         """Callback when Android client checkbox is toggled"""
         self.use_android_client = self.android_client_var.get()
+    
+    def on_stealth_mode_changed(self):
+        """Callback when stealth mode checkbox is toggled"""
+        self.use_stealth_mode = self.stealth_mode_var.get()
+    
+    def browse_cookie_file(self):
+        """Browse for cookie file"""
+        file_path = filedialog.askopenfilename(
+            title="Select Cookie File",
+            filetypes=[("Netscape Cookie File", "*.txt"), ("All Files", "*.*")],
+            initialdir=self.root_dir
+        )
+        if file_path:
+            self.cookie_file_var.set(file_path)
+            self.cookie_file = file_path
     
     def browse_folder(self):
         folder = super().browse_folder(self.folder_var.get())
@@ -450,7 +509,7 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
         return user_agent
     
     def build_ytdlp_command(self, base_args):
-        """Build yt-dlp command with anti-403 options
+        """Build yt-dlp command with anti-403 stealth options
         
         Args:
             base_args: List of yt-dlp arguments
@@ -458,11 +517,50 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
         cmd = [
             sys.executable,
             '-m', 'yt_dlp',
-            '--user-agent', self.user_agent,
         ]
         
-        if self.use_android_client:
-            cmd.extend(['--extractor-args', 'youtube:player_client=android'])
+        # User agent (always set)
+        cmd.extend(['--user-agent', self.user_agent])
+        
+        # Cookie file (if provided)
+        cookie_file = self.cookie_file_var.get().strip() if hasattr(self, 'cookie_file_var') else self.cookie_file
+        if cookie_file and os.path.isfile(cookie_file):
+            cmd.extend(['--cookies', cookie_file])
+        
+        # Client type based on settings
+        client_type = self.client_type_var.get() if hasattr(self, 'client_type_var') else ('android' if self.use_android_client else 'web')
+        
+        # Stealth mode options
+        if self.use_stealth_mode:
+            # Set referer to YouTube
+            cmd.extend(['--referer', 'https://www.youtube.com/'])
+            
+            # Add extractor args for client type
+            if client_type == 'android':
+                cmd.extend(['--extractor-args', 'youtube:player_client=android'])
+            elif client_type == 'ios':
+                cmd.extend(['--extractor-args', 'youtube:player_client=ios'])
+            elif client_type == 'tv':
+                cmd.extend(['--extractor-args', 'youtube:player_client=tv'])
+            # web is default, no extractor args needed
+            
+            # Additional stealth options
+            cmd.extend([
+                '--extractor-args', 'youtube:include_live_chat=false',  # Disable live chat to reduce requests
+                '--no-check-certificate',  # Skip certificate validation (may help with some proxies)
+            ])
+            
+            # Add headers to mimic browser
+            cmd.extend([
+                '--add-header', 'Accept-Language:en-US,en;q=0.9',
+                '--add-header', 'Accept:text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                '--add-header', 'Accept-Encoding:gzip, deflate',
+                '--add-header', 'DNT:1',
+            ])
+        else:
+            # Minimal stealth when disabled
+            if client_type == 'android':
+                cmd.extend(['--extractor-args', 'youtube:player_client=android'])
         
         return cmd + base_args
     
@@ -837,6 +935,11 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
                 
                 output_path = os.path.join(self.get_download_path(), filename)
                 
+                # Rotate user agent for each download to avoid detection
+                if i > 0 and i % 5 == 0:  # Change user agent every 5 downloads
+                    self.user_agent = self.generate_user_agent()
+                    self.root.after(0, lambda: self.log(f"[DEBUG] Rotated user agent for stealth"))
+                
                 cmd = self.build_ytdlp_command([
                     '-f', format_id,
                     '-o', output_path + '.%(ext)s',
@@ -872,10 +975,46 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
                 else:
                     error_count += 1
                     error_msg = stderr if stderr else "Unknown error"
-                    self.root.after(
-                        0,
-                        lambda err=error_msg: self.log(f"[ERROR] Download failed: {err[:200]}")
-                    )
+                    
+                    # If 403 error, try with different client
+                    if '403' in error_msg or 'Forbidden' in error_msg:
+                        self.root.after(0, lambda: self.log(f"[WARNING] 403 detected, trying alternative client..."))
+                        # Try with iOS client as fallback
+                        original_client = self.client_type_var.get() if hasattr(self, 'client_type_var') else 'web'
+                        if original_client != 'ios':
+                            self.client_type_var.set('ios') if hasattr(self, 'client_type_var') else None
+                            cmd_fallback = self.build_ytdlp_command([
+                                '-f', format_id,
+                                '-o', output_path + '.%(ext)s',
+                                url
+                            ])
+                            process_fallback = subprocess.run(
+                                cmd_fallback,
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE,
+                                text=True,
+                                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+                            )
+                            if process_fallback.returncode == 0:
+                                success_count += 1
+                                error_count -= 1
+                                self.root.after(0, lambda fname=filename: self.log(f"[SUCCESS] Downloaded with fallback client: {fname}"))
+                            else:
+                                self.root.after(0, lambda err=error_msg: self.log(f"[ERROR] Download failed: {err[:200]}"))
+                            if hasattr(self, 'client_type_var'):
+                                self.client_type_var.set(original_client)
+                        else:
+                            self.root.after(0, lambda err=error_msg: self.log(f"[ERROR] Download failed: {err[:200]}"))
+                    else:
+                        self.root.after(0, lambda err=error_msg: self.log(f"[ERROR] Download failed: {err[:200]}"))
+                
+                # Add delay between downloads to avoid rate limiting
+                if i < len(video_indices) - 1:  # Don't delay after last download
+                    delay = self.delay_var.get() if hasattr(self, 'delay_var') else self.download_delay
+                    if delay > 0:
+                        # Add some randomness to delay (80-120% of base delay)
+                        actual_delay = delay * random.uniform(0.8, 1.2)
+                        time.sleep(actual_delay)
                 
             except Exception as e:
                 if not self.cancel_download:

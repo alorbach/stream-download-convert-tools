@@ -85,8 +85,9 @@ class VideoEditorGUI(BaseAudioGUI):
         """Return a POSIX-style path with quotes escaped for ffmpeg concat demuxer."""
         # Normalize to absolute POSIX path to avoid backslash escaping issues on Windows
         posix_path = Path(file_path).resolve().as_posix()
-        # Escape single quotes per ffmpeg concat demuxer rules
-        return posix_path.replace("'", r"\'")
+        # Escape single quotes per ffmpeg concat demuxer rules: 'path'with'quote' becomes 'path'\''with'\''quote'
+        # This means: close quote, escaped quote, open quote
+        return posix_path.replace("'", r"'\''")
 
     def _write_concat_file(self) -> str:
         """Write concat list file with proper escaping and return its path."""
@@ -913,6 +914,7 @@ class VideoEditorGUI(BaseAudioGUI):
     
     def _create_final_video(self, output_file):
         """Create final high-quality video."""
+        concat_file = None
         try:
             ffmpeg_cmd = self.get_ffmpeg_command()
             
@@ -923,12 +925,6 @@ class VideoEditorGUI(BaseAudioGUI):
             cmd = f'{ffmpeg_cmd} -f concat -safe 0 -i "{concat_file}" -c copy -y "{output_file}"'
             
             result = subprocess.run(cmd, capture_output=True, text=True, cwd=self.root_dir, shell=True)
-            
-            # Clean up concat file
-            try:
-                os.remove(concat_file)
-            except:
-                pass
             
             if result.returncode == 0:
                 self.root.after(0, lambda: self.log(f"[SUCCESS] Final video saved: {os.path.basename(output_file)}"))
@@ -954,6 +950,14 @@ class VideoEditorGUI(BaseAudioGUI):
             self.root.after(0, lambda msg=error_msg: self.log(f"[ERROR] Exception: {msg}"))
             self.root.after(0, lambda: self.root.config(cursor=''))
             self.root.after(0, lambda msg=error_msg: messagebox.showerror("Error", f"Exception:\n{msg}"))
+        
+        finally:
+            # Clean up concat file after both attempts are complete
+            if concat_file:
+                try:
+                    os.remove(concat_file)
+                except:
+                    pass
     
     def export_combined_video(self):
         """Export combined video without preview."""
@@ -991,6 +995,7 @@ class VideoEditorGUI(BaseAudioGUI):
     
     def _combine_videos_thread(self, output_file):
         """Combine videos in background thread."""
+        concat_file = None
         try:
             ffmpeg_cmd = self.get_ffmpeg_command()
             
@@ -1004,12 +1009,6 @@ class VideoEditorGUI(BaseAudioGUI):
             self.root.after(0, lambda: self.log(f"[DEBUG] FFmpeg command: {' '.join(cmd)}"))
             
             result = subprocess.run(cmd, capture_output=True, text=True, cwd=self.root_dir)
-            
-            # Clean up concat file
-            try:
-                os.remove(concat_file)
-            except:
-                pass
             
             if result.returncode == 0:
                 self.root.after(0, lambda: self.log(f"[SUCCESS] Combined video saved: {os.path.basename(output_file)}"))
@@ -1033,6 +1032,12 @@ class VideoEditorGUI(BaseAudioGUI):
             self.root.after(0, lambda msg=error_msg: messagebox.showerror("Error", f"Exception:\n{msg}"))
         
         finally:
+            # Clean up concat file after both attempts are complete
+            if concat_file:
+                try:
+                    os.remove(concat_file)
+                except:
+                    pass
             self.root.after(0, lambda: self.root.config(cursor=''))
     
     def toggle_auto_export(self):
