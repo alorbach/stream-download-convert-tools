@@ -1,0 +1,24 @@
+Create a seamless looping video animation based on this album cover design: {ALBUM_COVER_DESCRIPTION}
+
+Transform the static album cover design into a subtle animated video sequence.
+
+Technical Requirements:
+- Format: 1x1 aspect ratio (square format)
+- Style: {STYLE_DESCRIPTION} aesthetic with {VISUAL_ELEMENTS}
+- Duration: Seamless loop (no start/end visible)
+
+Visual Composition:
+Scene: {VIDEO_SCENE_DESCRIPTION}
+Mood: {MOOD_KEYWORDS}
+Camera: {CAMERA_STYLE}
+Lighting: {LIGHTING_DESCRIPTION}
+Animation: {ANIMATION_DESCRIPTION}
+
+Content Guidelines:
+- Professional, artistic music video visualizer
+- Abstract and symbolic imagery only
+- Focus on colors, shapes, patterns, and motion
+- Safe for work content appropriate for music visualization
+- No explicit, violent, or inappropriate elements
+
+Maintain the original album cover's color palette, composition, and overall visual mood. Create a gentle, continuous motion that loops seamlessly without jarring transitions.

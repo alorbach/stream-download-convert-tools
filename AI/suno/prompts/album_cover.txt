@@ -1,0 +1,30 @@
+Design an epic, visually striking album cover for: "{AI_COVER_NAME}"
+
+Your cover art must:
+- Capture bold emotion and grand scale—make it cinematic, iconic, and unforgettable.
+- Channel the mood and distinct visual character of the musical style, elevating it to legendary status.
+- Incorporate imaginative, dramatic, and awe-inspiring elements. Think big: sweeping scenery, dynamic lighting, expressive visuals, and visceral impact.
+- Suggest a sense of timelessness, power, or wonder. It should stand out and feel worthy of a classic, platinum-selling album.
+
+SPECIFICATIONS:
+- Style: {STYLE_DESCRIPTION}
+- Mood: {MOOD_DESCRIPTION}
+- Visual tone: {VISUAL_TONE}
+- Imagery: {SUGGESTED_VISUAL_ELEMENTS}
+- Typography: {TYPOGRAPHY_STYLE}
+- Layout: Dynamic, balanced composition inspired by legendary vinyl album covers, with centered, powerful text and visual focus. Create depth, drama, and an epic vibe within a square (1:1) frame.
+- Format: High-resolution, suitable for streaming platforms.
+
+TEXT TO DISPLAY ON COVER (in order of importance):
+1. "AI COVER" - Prominently displayed at the top center in bold, distinctive typography
+2. Song Title: "{SONG_TITLE}" - Large, prominent text below AI COVER label
+3. Artist: "{ORIGINAL_ARTIST}" - Smaller but readable text below song title
+
+The cover name "{AI_COVER_NAME}" provides context for the musical style transformation.
+
+RULES:
+- NEVER show or reference the original artist's face or any real person.
+- NO clutter, NO incoherent elements, NO weak backgrounds—focus on impact and unity.
+- Ensure "AI COVER" text is the most prominent element, clearly visible and readable.
+- The AI COVER label must be stylized and eye-catching to indicate this is an AI-generated cover version.
+- Output only the final descriptive prompt for image generation, nothing else.

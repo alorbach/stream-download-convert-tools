@@ -1,0 +1,8 @@
+Given the following style keywords of a song, suggest a single modified style that would maximize viral potential. Output only the transformed style.
+
+Song Name: {SONG_NAME}
+Artist: {ARTIST}
+Current Styles: {STYLE_KEYWORDS}
+
+Output Format: Single line, comma-separated keywords only.
+

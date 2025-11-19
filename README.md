@@ -319,9 +319,10 @@ The application features a clean, organized interface with three main sections:
 2. **Save**: Save song details to config (Ctrl+S)
 3. **Load**: Load song details from JSON file
 4. **Merge Styles**: Combine multiple styles using AI
-5. **Generate AI Cover Name**: Create cover name from song and style
-6. **Gen Album Cover Prompt**: Generate album cover prompt
-7. **Gen Video Loop Prompt**: Generate video loop prompt
+5. **Transform Style**: Transform style for viral potential using AI
+6. **Generate AI Cover Name**: Create cover name from song and style
+7. **Gen Album Cover Prompt**: Generate album cover prompt
+8. **Gen Video Loop Prompt**: Generate video loop prompt
 
 **Row 2 - Execution and Export:**
 1. **Run Album Cover Prompt**: Generate album cover image from prompt
@@ -333,10 +334,11 @@ The application features a clean, organized interface with three main sections:
 2. **Select Style**: Click on a style in the left panel to view detailed information
 3. **Enter Song Details**: Fill in song name, artist, lyrics (up to 20,000 characters), and select styles
 4. **Merge Styles**: Enter multiple style names and use AI to merge them into a unique description
-5. **Generate AI Cover Name**: Create a creative name for your AI cover
-6. **Generate Album Cover**: Create an AI prompt, review it, then generate the album cover image
-7. **Generate Video Loop**: Create an AI prompt and generate video loop for music visualization
-8. **Export YouTube Description**: Export complete YouTube description with SEO optimization
+5. **Transform Style**: Transform current styles, song name, and artist into a viral style description
+6. **Generate AI Cover Name**: Create a creative name for your AI cover
+7. **Generate Album Cover**: Create an AI prompt, review it, then generate the album cover image
+8. **Generate Video Loop**: Create an AI prompt and generate video loop for music visualization
+9. **Export YouTube Description**: Export complete YouTube description with SEO optimization
 
 ### Configuration
 Before using AI features, configure Azure AI settings:

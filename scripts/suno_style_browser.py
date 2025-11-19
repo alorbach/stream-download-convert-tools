@@ -1229,6 +1229,10 @@ class SunoStyleBrowser(tk.Tk):
         merge_btn = ttk.Button(btn_row1, text='Merge Styles', command=self.merge_styles)
         merge_btn.pack(side=tk.LEFT, padx=5)
         create_tooltip(merge_btn, 'Merge multiple styles using AI')
+
+        transform_btn = ttk.Button(btn_row1, text='Transform Style', command=self.transform_style)
+        transform_btn.pack(side=tk.LEFT, padx=5)
+        create_tooltip(transform_btn, 'Transform style for viral potential using AI')
         
         gen_name_btn = ttk.Button(btn_row1, text='Generate AI Cover Name', command=self.generate_ai_cover_name)
         gen_name_btn.pack(side=tk.LEFT, padx=5)
@@ -1510,6 +1514,60 @@ class SunoStyleBrowser(tk.Tk):
             self.merged_style_text.insert('1.0', f'Error: {result["error"]}')
             self.log_debug('ERROR', f'Failed to merge styles: {result["error"]}')
             messagebox.showerror('Merge Styles', f'Failed to merge styles:\n{result["error"]}')
+
+    def transform_style(self):
+        """Transform style for viral potential using AI."""
+        song_name = self.song_name_var.get().strip()
+        artist = self.artist_var.get().strip()
+        
+        if not song_name or not artist:
+            messagebox.showinfo('Transform Style', 'Please enter Song Name and Artist.')
+            return
+
+        styles = self.styles_text.get('1.0', tk.END).strip()
+        if not styles:
+            messagebox.showinfo('Transform Style', 'Please enter styles to transform.')
+            return
+        
+        self.log_debug('INFO', 'Starting style transformation')
+        
+        # Show processing message
+        self.merged_style_text.delete('1.0', tk.END)
+        self.merged_style_text.insert('1.0', 'Processing... Please wait.')
+        self.update()
+        
+        # Get prompt template
+        template = get_prompt_template('transform_style')
+        if not template:
+            self.log_debug('ERROR', 'Failed to load transform_style template')
+            messagebox.showerror('Transform Style', 'Failed to load prompt template')
+            return
+            
+        self.log_debug('DEBUG', 'Loaded transform_style template')
+        
+        # Replace template variables
+        prompt = template.replace('{SONG_NAME}', song_name)
+        prompt = prompt.replace('{ARTIST}', artist)
+        prompt = prompt.replace('{STYLE_KEYWORDS}', styles)
+        
+        # Call Azure AI
+        self.log_debug('INFO', 'Calling Azure AI API...')
+        self.config(cursor='wait')
+        self.update()
+        try:
+            result = call_azure_ai(self.ai_config, prompt, profile='text')
+        finally:
+            self.config(cursor='')
+            
+        # Display result
+        self.merged_style_text.delete('1.0', tk.END)
+        if result['success']:
+            self.merged_style_text.insert('1.0', result['content'])
+            self.log_debug('INFO', 'Style transformed successfully')
+        else:
+            self.merged_style_text.insert('1.0', f'Error: {result["error"]}')
+            self.log_debug('ERROR', f'Failed to transform style: {result["error"]}')
+            messagebox.showerror('Transform Style', f'Failed to transform style:\n{result["error"]}')
     
     def generate_ai_cover_name(self):
         """Generate AI Cover Name using style keywords."""

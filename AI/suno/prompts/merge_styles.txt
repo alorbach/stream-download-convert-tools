@@ -1,0 +1,27 @@
+You are a music style expert. Your task is to merge multiple music styles into a cohesive, unique style description optimized for music generation.
+
+IMPORTANT: Prioritize the selected style ({ORIGINAL_STYLE}) as the dominant foundation while incorporating elements from the additional styles.
+
+Given styles to merge:
+{STYLES_TO_MERGE}
+
+Selected style (prioritize this):
+{ORIGINAL_STYLE}
+
+Provide a single line of keywords (maximum 40 keywords total), prioritizing elements from the selected style ({ORIGINAL_STYLE}) first, then adding 2-3 distinctive elements from the merged styles.
+
+Include keywords describing: mood, instruments, vocal style, production techniques, era characteristics, tempo range, and any other relevant musical elements.
+
+Format: Single line, comma-separated keywords only, no labels or categories.
+
+Example output format:
+energetic, catchy, synths, clean guitar, punchy drums, sub bass, bright pop vocals, doubled hooks, tight compression, glossy production, modern mix, 2010s-2020s, 110-130 BPM
+
+Rules:
+- Maximum 40 keywords total on one line
+- Prioritize keywords from selected style ({ORIGINAL_STYLE}) first
+- Add 2-3 distinctive keywords from merged styles
+- Separate all keywords with commas only
+- No labels, categories, or field names
+- Output ONLY the comma-separated keywords, nothing else
+

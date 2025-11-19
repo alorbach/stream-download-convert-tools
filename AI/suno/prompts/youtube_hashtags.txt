@@ -1,0 +1,16 @@
+Generate optimized YouTube hashtags for this AI cover video:
+
+Song: {SONG_NAME}
+Artist: {ARTIST}
+Style: {STYLE_NAME}
+
+Requirements:
+- Maximum 500 characters total
+- Order by importance (most relevant first)
+- Include genre/style tags, song name, artist name, and AI music tags
+- Format: comma-separated with # prefix
+- Keep tags concise and searchable
+- Prioritize: #SongName, #ArtistName, #GenreStyle, #AICover, #AIMusic
+
+Generate ONLY the hashtag line (starting with #), nothing else.
+
