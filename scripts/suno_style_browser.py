@@ -174,7 +174,7 @@ def load_config() -> dict:
                                 config[key][sub_key] = default_config['song_details'][sub_key]
                 return config
         except Exception as exc:
-            messagebox.showerror('Config Error', f'Failed to load config:\n{exc}')
+            print(f'Config Error: Failed to load config:\n{exc}')
             return default_config
     else:
         # Create default config file
@@ -182,7 +182,7 @@ def load_config() -> dict:
             with open(config_path, 'w', encoding='utf-8') as f:
                 json.dump(default_config, f, indent=4)
         except Exception as exc:
-            messagebox.showerror('Config Error', f'Failed to create config:\n{exc}')
+            print(f'Config Error: Failed to create config:\n{exc}')
         return default_config
 
 
@@ -194,7 +194,7 @@ def save_config(config: dict):
             json.dump(config, f, indent=4)
         return True
     except Exception as exc:
-        messagebox.showerror('Config Error', f'Failed to save config:\n{exc}')
+        print(f'Config Error: Failed to save config:\n{exc}')
         return False
 
 
@@ -206,9 +206,9 @@ def load_styles(csv_path: str):
             for row in reader:
                 styles.append(row)
     except FileNotFoundError:
-        messagebox.showerror('Error', f'CSV not found:\n{csv_path}')
+        print(f'Error: CSV not found:\n{csv_path}')
     except Exception as exc:
-        messagebox.showerror('Error', f'Failed to read CSV:\n{exc}')
+        print(f'Error: Failed to read CSV:\n{exc}')
     return styles
 
 
@@ -1123,7 +1123,7 @@ class SunoStyleBrowser(tk.Tk):
                 text = self.lyrics_text.clipboard_get()
                 current = self.lyrics_text.get('1.0', tk.END)
                 if len(current) + len(text) > 20000:
-                    messagebox.showwarning('Lyrics Limit', 'Pasted text exceeds the 20000 character limit.')
+                    self.log_debug('WARNING', 'Lyrics Limit: Pasted text exceeds the 20000 character limit.')
                     return 'break'
                 self.after(10, update_lyrics_counter)
             except:
@@ -1454,35 +1454,35 @@ class SunoStyleBrowser(tk.Tk):
     def copy_field(self, field_key):
         """Copy a specific field to clipboard."""
         if not self.current_row:
-            messagebox.showinfo('Copy Field', 'No style selected.')
+            self.log_debug('WARNING', 'Copy Field: No style selected.')
             return
         
         value = self.current_row.get(field_key, '')
         if not value:
-            messagebox.showinfo('Copy Field', f'Field {field_key} is empty.')
+            self.log_debug('WARNING', f'Copy Field: Field {field_key} is empty.')
             return
         
         self.clipboard_clear()
         self.clipboard_append(value)
         self.update()
-        messagebox.showinfo('Copy Field', f'{self.detail_fields[field_key]} copied to clipboard.')
+        self.log_debug('INFO', f'{self.detail_fields[field_key]} copied to clipboard.')
     
     def copy_to_clipboard(self, text_widget):
         """Copy text from a text widget to clipboard."""
         text = text_widget.get('1.0', tk.END).strip()
         if not text:
-            messagebox.showinfo('Copy', 'No text to copy.')
+            self.log_debug('WARNING', 'Copy: No text to copy.')
             return
         self.clipboard_clear()
         self.clipboard_append(text)
         self.update()
-        messagebox.showinfo('Copy', 'Text copied to clipboard.')
+        self.log_debug('INFO', 'Text copied to clipboard.')
     
     def merge_styles(self):
         """Merge multiple styles using AI."""
         styles = self.styles_text.get('1.0', tk.END).strip()
         if not styles:
-            messagebox.showinfo('Merge Styles', 'Please enter styles to merge.')
+            self.log_debug('WARNING', 'Merge Styles: Please enter styles to merge.')
             return
         
         self.log_debug('INFO', 'Starting style merge operation')
@@ -1504,7 +1504,6 @@ class SunoStyleBrowser(tk.Tk):
         template = get_prompt_template('merge_styles')
         if not template:
             self.log_debug('ERROR', 'Failed to load merge_styles template')
-            messagebox.showerror('Merge Styles', 'Failed to load prompt template')
             return
         
         self.log_debug('DEBUG', 'Loaded merge_styles template')
@@ -1530,7 +1529,6 @@ class SunoStyleBrowser(tk.Tk):
         else:
             self.merged_style_text.insert('1.0', f'Error: {result["error"]}')
             self.log_debug('ERROR', f'Failed to merge styles: {result["error"]}')
-            messagebox.showerror('Merge Styles', f'Failed to merge styles:\n{result["error"]}')
 
     def transform_style(self, merge_original=False):
         """Transform style for viral potential using AI.
@@ -1542,7 +1540,7 @@ class SunoStyleBrowser(tk.Tk):
         artist = self.artist_var.get().strip()
         
         if not song_name or not artist:
-            messagebox.showinfo('Transform Style', 'Please enter Song Name and Artist.')
+            self.log_debug('WARNING', 'Transform Style: Please enter Song Name and Artist.')
             return
 
         styles = self.styles_text.get('1.0', tk.END).strip()
@@ -1556,7 +1554,7 @@ class SunoStyleBrowser(tk.Tk):
                 original_style = self.current_row.get('style', '')
             
             if not original_style and not styles:
-                messagebox.showinfo('Merge+Transform Style', 'Please select a style or enter styles to merge.')
+                self.log_debug('WARNING', 'Merge+Transform Style: Please select a style or enter styles to merge.')
                 return
 
             # 2. Perform Merge if we have both, or just use what we have
@@ -1572,7 +1570,6 @@ class SunoStyleBrowser(tk.Tk):
                  template = get_prompt_template('merge_styles')
                  if not template:
                     self.log_debug('ERROR', 'Failed to load merge_styles template')
-                    messagebox.showerror('Merge+Transform Style', 'Failed to load merge_styles template')
                     return
                 
                  prompt = template.replace('{STYLES_TO_MERGE}', styles)
@@ -1597,7 +1594,7 @@ class SunoStyleBrowser(tk.Tk):
                 styles = original_style
 
         if not styles:
-            messagebox.showinfo('Transform Style', 'Please enter styles to transform.')
+            self.log_debug('WARNING', 'Transform Style: Please enter styles to transform.')
             return
         
         self.log_debug('INFO', f'Starting style transformation (Merge={merge_original})')
@@ -1611,7 +1608,6 @@ class SunoStyleBrowser(tk.Tk):
         template = get_prompt_template('transform_style')
         if not template:
             self.log_debug('ERROR', 'Failed to load transform_style template')
-            messagebox.showerror('Transform Style', 'Failed to load prompt template')
             return
             
         self.log_debug('DEBUG', 'Loaded transform_style template')
@@ -1638,7 +1634,6 @@ class SunoStyleBrowser(tk.Tk):
         else:
             self.merged_style_text.insert('1.0', f'Error: {result["error"]}')
             self.log_debug('ERROR', f'Failed to transform style: {result["error"]}')
-            messagebox.showerror('Transform Style', f'Failed to transform style:\n{result["error"]}')
     
     def generate_ai_cover_name(self):
         """Generate AI Cover Name using style keywords."""
@@ -1646,7 +1641,7 @@ class SunoStyleBrowser(tk.Tk):
         artist = self.artist_var.get().strip()
         
         if not song_name or not artist:
-            messagebox.showinfo('Generate AI Cover Name', 'Please enter Song Name and Artist.')
+            self.log_debug('WARNING', 'Generate AI Cover Name: Please enter Song Name and Artist.')
             return
         
         # Get style keywords - prefer Merged Style, fallback to Styles field
@@ -1655,7 +1650,7 @@ class SunoStyleBrowser(tk.Tk):
             style_keywords = self.styles_text.get('1.0', tk.END).strip()
         
         if not style_keywords:
-            messagebox.showinfo('Generate AI Cover Name', 'Please merge styles first or enter styles in the Styles field.')
+            self.log_debug('WARNING', 'Generate AI Cover Name: Please merge styles first or enter styles in the Styles field.')
             return
         
         self.log_debug('INFO', 'Starting AI Cover Name generation')
@@ -1668,7 +1663,6 @@ class SunoStyleBrowser(tk.Tk):
         template = get_prompt_template('ai_cover_name')
         if not template:
             self.log_debug('ERROR', 'Failed to load ai_cover_name template')
-            messagebox.showerror('Generate AI Cover Name', 'Failed to load prompt template')
             return
         
         self.log_debug('DEBUG', 'Loaded ai_cover_name template')
@@ -1694,7 +1688,6 @@ class SunoStyleBrowser(tk.Tk):
         else:
             self.ai_cover_name_var.set(f'Error: {result["error"]}')
             self.log_debug('ERROR', f'Failed to generate AI Cover Name: {result["error"]}')
-            messagebox.showerror('Generate AI Cover Name', f'Failed to generate AI Cover Name:\n{result["error"]}')
     
     def generate_album_cover(self):
         """Generate album cover prompt using AI."""
@@ -1702,7 +1695,7 @@ class SunoStyleBrowser(tk.Tk):
         artist = self.artist_var.get().strip()
         
         if not song_name or not artist:
-            messagebox.showinfo('Generate Album Cover', 'Please enter Song Name and Artist.')
+            self.log_debug('WARNING', 'Generate Album Cover: Please enter Song Name and Artist.')
             return
         
         # Get style - prefer Merged Style result, fallback to Styles field
@@ -1711,11 +1704,11 @@ class SunoStyleBrowser(tk.Tk):
             style_keywords = self.styles_text.get('1.0', tk.END).strip()
         
         if not style_keywords:
-            messagebox.showinfo('Generate Album Cover', 'Please merge styles first or enter styles in the Styles field.')
+            self.log_debug('WARNING', 'Generate Album Cover: Please merge styles first or enter styles in the Styles field.')
             return
         
         if not self.current_row:
-            messagebox.showinfo('Generate Album Cover', 'Please select a music style from the list.')
+            self.log_debug('WARNING', 'Generate Album Cover: Please select a music style from the list.')
             return
         
         self.log_debug('INFO', 'Starting album cover generation')
@@ -1749,7 +1742,6 @@ class SunoStyleBrowser(tk.Tk):
         template = get_prompt_template('album_cover')
         if not template:
             self.log_debug('ERROR', 'Failed to load album_cover template')
-            messagebox.showerror('Generate Album Cover', 'Failed to load prompt template')
             return
         
         self.log_debug('DEBUG', 'Loaded album_cover template')
@@ -1788,7 +1780,6 @@ class SunoStyleBrowser(tk.Tk):
         else:
             self.album_cover_text.insert('1.0', f'Error: {result["error"]}')
             self.log_debug('ERROR', f'Failed to generate album cover: {result["error"]}')
-            messagebox.showerror('Generate Album Cover', f'Failed to generate album cover:\n{result["error"]}')
     
     def generate_video_loop(self):
         """Generate video loop prompt from album cover and style."""
@@ -1796,11 +1787,11 @@ class SunoStyleBrowser(tk.Tk):
         album_cover_description = self.album_cover_text.get('1.0', tk.END).strip()
         
         if not album_cover_description or album_cover_description.startswith('Error:'):
-            messagebox.showinfo('Generate Video Loop', 'Please generate an album cover prompt first.')
+            self.log_debug('WARNING', 'Generate Video Loop: Please generate an album cover prompt first.')
             return
         
         if not self.current_row:
-            messagebox.showinfo('Generate Video Loop', 'Please select a music style from the list.')
+            self.log_debug('WARNING', 'Generate Video Loop: Please select a music style from the list.')
             return
         
         self.log_debug('INFO', 'Starting video loop generation')
@@ -1853,7 +1844,6 @@ class SunoStyleBrowser(tk.Tk):
         template = get_prompt_template('video_loop')
         if not template:
             self.log_debug('ERROR', 'Failed to load video_loop template')
-            messagebox.showerror('Generate Video Loop', 'Failed to load prompt template')
             return
         
         self.log_debug('DEBUG', 'Loaded video_loop template')
@@ -1888,7 +1878,6 @@ class SunoStyleBrowser(tk.Tk):
         else:
             self.video_loop_text.insert('1.0', f'Error: {result["error"]}')
             self.log_debug('ERROR', f'Failed to generate video loop: {result["error"]}')
-            messagebox.showerror('Generate Video Loop', f'Failed to generate video loop:\n{result["error"]}')
 
     def run_video_loop_model(self):
         """Placeholder for running the video loop model using the generated prompt."""
@@ -1896,7 +1885,7 @@ class SunoStyleBrowser(tk.Tk):
         # Retrieve current prompt
         prompt = self.video_loop_text.get('1.0', tk.END).strip()
         if not prompt or prompt.startswith('Error:'):
-            messagebox.showinfo('Run Video Loop Prompt', 'Please generate a video loop prompt first.')
+            self.log_debug('WARNING', 'Run Video Loop Prompt: Please generate a video loop prompt first.')
             return
 
         # Show dialog to inject extra commands
@@ -1935,21 +1924,19 @@ class SunoStyleBrowser(tk.Tk):
                 self.log_debug('DEBUG', f"Video call options: size={dbg.get('size','')}, seconds={dbg.get('seconds','')}, model={dbg.get('model','')}, api_version={dbg.get('api_version','')}")
                 if dbg.get('body_preview'):
                     self.log_debug('DEBUG', f"Body preview: {dbg.get('body_preview')}")
-            messagebox.showerror('Run Video Loop Prompt', f"Failed to generate video:\n{result['error']}")
+            # messagebox.showerror('Run Video Loop Prompt', f"Failed to generate video:\n{result['error']}")
             return
 
         # If URL returned, show and optionally open
         url = result.get('url', '')
         if url:
-            self.log_debug('INFO', f'Video URL returned: {url}')
-            messagebox.showinfo('Run Video Loop Prompt', f'Video generated. URL:\n{url}')
+            self.log_debug('INFO', f'Video generated. URL: {url}')
             return
 
         # If bytes returned, ask to save
         video_bytes = result.get('video_bytes', b'')
         if not video_bytes:
-            self.log_debug('ERROR', 'No video content returned')
-            messagebox.showerror('Run Video Loop Prompt', 'No video content returned from the API.')
+            self.log_debug('ERROR', 'No video content returned from the API.')
             return
 
         # Choose filename
@@ -1969,17 +1956,15 @@ class SunoStyleBrowser(tk.Tk):
             with open(filename, 'wb') as f:
                 f.write(video_bytes)
             self.log_debug('INFO', f'Video saved to {filename}')
-            messagebox.showinfo('Run Video Loop Prompt', f'Successfully saved video to:\n{filename}')
         except Exception as e:
             self.log_debug('ERROR', f'Failed to save video: {e}')
-            messagebox.showerror('Run Video Loop Prompt', f'Failed to save video:\n{e}')
 
     def run_image_model(self):
         """Run the image generation model on the Album Cover prompt and save the image."""
         # Ensure there is an album cover prompt
         prompt = self.album_cover_text.get('1.0', tk.END).strip()
         if not prompt or prompt.startswith('Error:'):
-            messagebox.showinfo('Run Image Model', 'Please generate an album cover prompt first.')
+            self.log_debug('WARNING', 'Run Image Model: Please generate an album cover prompt first.')
             return
 
         # Show dialog to inject extra commands
@@ -2023,13 +2008,11 @@ class SunoStyleBrowser(tk.Tk):
 
         if not result['success']:
             self.log_debug('ERROR', f"Image generation failed: {result['error']}")
-            messagebox.showerror('Run Image Model', f"Failed to generate image:\n{result['error']}")
             return
 
         img_bytes = result.get('image_bytes', b'')
         if not img_bytes:
             self.log_debug('ERROR', 'No image bytes received from image model')
-            messagebox.showerror('Run Image Model', 'No image received from the image model.')
             return
 
         # Show preview inside UI
@@ -2065,7 +2048,6 @@ class SunoStyleBrowser(tk.Tk):
             with open(filename, 'wb') as f:
                 f.write(img_bytes)
             self.log_debug('INFO', f'Image saved to {filename}')
-            messagebox.showinfo('Run Image Model', f'Successfully saved image to:\n{filename}')
             # Persist last saved image path and dir
             try:
                 song_details = self.ai_config.get('song_details', {})
@@ -2077,7 +2059,6 @@ class SunoStyleBrowser(tk.Tk):
                 self.log_debug('ERROR', f'Failed to persist last image path: {e}')
         except Exception as e:
             self.log_debug('ERROR', f'Failed to save image: {e}')
-            messagebox.showerror('Run Image Model', f'Failed to save image:\n{e}')
 
     def try_load_last_album_cover(self):
         """Attempt to load last album cover image from saved path or directory."""
@@ -2118,7 +2099,7 @@ class SunoStyleBrowser(tk.Tk):
         artist = self.artist_var.get().strip()
         
         if not song_name or not artist:
-            messagebox.showinfo('Export', 'Please enter Song Name and Artist.')
+            self.log_debug('WARNING', 'Export: Please enter Song Name and Artist.')
             return
         
         # Get all fields
@@ -2169,12 +2150,16 @@ class SunoStyleBrowser(tk.Tk):
         content += youtube_desc
         
         # Ask for save location
-        safe_title = title.replace(' ', '_').replace(':', '_').replace('/', '_')
+        if ai_cover_name:
+            safe_basename = ai_cover_name.replace(':', '_').replace('/', '_').replace('\\', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace("'", '_').replace('<', '_').replace('>', '_').replace('|', '_')
+        else:
+            safe_basename = title.replace(' ', '_').replace(':', '_').replace('/', '_')
+
         filename = filedialog.asksaveasfilename(
             title='Save YouTube Description',
             defaultextension='.txt',
             filetypes=[('Text Files', '*.txt'), ('All Files', '*.*')],
-            initialfile=f"{safe_title}.txt"
+            initialfile=f"{safe_basename}.txt"
         )
         
         if filename:
@@ -2182,10 +2167,8 @@ class SunoStyleBrowser(tk.Tk):
                 with open(filename, 'w', encoding='utf-8') as f:
                     f.write(content)
                 self.log_debug('INFO', f'YouTube description exported to {filename}')
-                messagebox.showinfo('Export', f'Successfully exported to:\n{filename}')
             except Exception as e:
                 self.log_debug('ERROR', f'Failed to export: {e}')
-                messagebox.showerror('Export', f'Failed to export file:\n{e}')
     
     def generate_youtube_hashtags(self, song_name, artist, style_description, style_info):
         """Generate optimized YouTube hashtags using AI, max 500 characters."""
@@ -2384,10 +2367,8 @@ class SunoStyleBrowser(tk.Tk):
                             with open(filename, 'w', encoding='utf-8') as f:
                                 json.dump(song_details, f, indent=4)
                             self.log_debug('INFO', f'Song details saved to {filename}')
-                            messagebox.showinfo('Save Settings', f'Settings saved successfully to:\n{filename}')
                         except Exception as e:
                             self.log_debug('ERROR', f'Failed to save settings file: {e}')
-                            messagebox.showerror('Save Settings', f'Failed to save settings file:\n{e}')
     
     def load_song_details(self):
         """Load song details from a settings file."""
@@ -2428,15 +2409,12 @@ class SunoStyleBrowser(tk.Tk):
                 self.video_loop_text.insert('1.0', song_details.get('video_loop', ''))
                 
                 self.log_debug('INFO', f'Song details loaded from {filename}')
-                messagebox.showinfo('Load Settings', f'Settings loaded successfully from:\n{filename}')
             else:
-                messagebox.showerror('Load Settings', 'Invalid settings file format.')
+                self.log_debug('ERROR', 'Load Settings: Invalid settings file format.')
         except json.JSONDecodeError as e:
             self.log_debug('ERROR', f'Failed to parse JSON file: {e}')
-            messagebox.showerror('Load Settings', f'Failed to parse JSON file:\n{e}')
         except Exception as e:
             self.log_debug('ERROR', f'Failed to load settings file: {e}')
-            messagebox.showerror('Load Settings', f'Failed to load settings file:\n{e}')
     
     def restore_song_details(self):
         """Restore song details from config file."""
@@ -2497,7 +2475,7 @@ Ctrl+F          - Focus search field
 F5              - Reload CSV file
 
 All shortcuts work globally when the application is focused."""
-        messagebox.showinfo('Keyboard Shortcuts', shortcuts)
+        self.log_debug('INFO', shortcuts)
     
     def show_about(self):
         """Show about dialog."""
@@ -2513,7 +2491,7 @@ Features:
 - Export YouTube descriptions
 
 Version: 1.0"""
-        messagebox.showinfo('About', about_text)
+        self.log_debug('INFO', about_text)
     
     def open_settings(self):
         """Open settings dialog."""
@@ -2522,7 +2500,9 @@ Version: 1.0"""
         if dialog.result:
             self.ai_config = dialog.result
             if save_config(self.ai_config):
-                messagebox.showinfo('Settings', 'Settings saved successfully.')
+                self.log_debug('INFO', 'Settings saved successfully.')
+            else:
+                self.log_debug('ERROR', 'Failed to save settings.')
 
     def choose_csv(self):
         initial = os.path.dirname(self.csv_path) if os.path.exists(self.csv_path) else os.path.dirname(resolve_csv_path())
