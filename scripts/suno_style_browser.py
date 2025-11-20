@@ -838,12 +838,14 @@ class SunoStyleBrowser(tk.Tk):
         self.csv_path = csv_path
         self.styles = load_styles(csv_path)
         self.filtered = list(self.styles)
-        self.sort_column = 'decade_range'
+        self.sort_column = 'style'
         self.sort_reverse = False
         self.ai_config = load_config()
         self.current_row = None
 
         self.create_widgets()
+        # Sort initially by style
+        self.sort_by_column('style')
         self.populate_tree(self.filtered)
         self.restore_song_details()
         self.restore_last_selected_style()
@@ -1213,7 +1215,8 @@ class SunoStyleBrowser(tk.Tk):
         btn_row2 = ttk.Frame(btn_frame)
         btn_row2.pack(fill=tk.X, expand=True, pady=(6, 0))
 
-        # Row 1: Setup and Album Cover workflow
+        # Row 1: Data & Styles (Grouped)
+        # 1. Data Management
         clear_btn = ttk.Button(btn_row1, text='Clear All', command=self.clear_song_fields)
         clear_btn.pack(side=tk.LEFT, padx=5)
         create_tooltip(clear_btn, 'Clear all song detail fields')
@@ -1225,35 +1228,49 @@ class SunoStyleBrowser(tk.Tk):
         load_btn = ttk.Button(btn_row1, text='Load', command=self.load_song_details)
         load_btn.pack(side=tk.LEFT, padx=5)
         create_tooltip(load_btn, 'Load song details from settings file')
-        
+
+        ttk.Separator(btn_row1, orient=tk.VERTICAL).pack(side=tk.LEFT, padx=10, fill=tk.Y)
+
+        # 2. Style Operations
         merge_btn = ttk.Button(btn_row1, text='Merge Styles', command=self.merge_styles)
         merge_btn.pack(side=tk.LEFT, padx=5)
         create_tooltip(merge_btn, 'Merge multiple styles using AI')
 
-        transform_btn = ttk.Button(btn_row1, text='Transform Style', command=self.transform_style)
+        transform_btn = ttk.Button(btn_row1, text='Transform Style', command=lambda: self.transform_style(merge_original=False))
         transform_btn.pack(side=tk.LEFT, padx=5)
         create_tooltip(transform_btn, 'Transform style for viral potential using AI')
+
+        merge_transform_btn = ttk.Button(btn_row1, text='Merge+Transform Style', command=lambda: self.transform_style(merge_original=True))
+        merge_transform_btn.pack(side=tk.LEFT, padx=5)
+        create_tooltip(merge_transform_btn, 'Merge selected style and transform for viral potential')
         
         gen_name_btn = ttk.Button(btn_row1, text='Generate AI Cover Name', command=self.generate_ai_cover_name)
         gen_name_btn.pack(side=tk.LEFT, padx=5)
         create_tooltip(gen_name_btn, 'Generate AI cover name from song and style')
+
+        # Row 2: Media & Export
         
-        gen_cover_btn = ttk.Button(btn_row1, text='Gen Album Cover Prompt', command=self.generate_album_cover)
+        # Album Cover
+        gen_cover_btn = ttk.Button(btn_row2, text='Gen Album Cover Prompt', command=self.generate_album_cover)
         gen_cover_btn.pack(side=tk.LEFT, padx=5)
         create_tooltip(gen_cover_btn, 'Generate album cover prompt using AI')
-        
-        gen_video_btn = ttk.Button(btn_row1, text='Gen Video Loop Prompt', command=self.generate_video_loop)
-        gen_video_btn.pack(side=tk.LEFT, padx=5)
-        create_tooltip(gen_video_btn, 'Generate video loop prompt using AI')
 
-        # Row 2: Video workflow and final actions
         run_cover_btn = ttk.Button(btn_row2, text='Run Album Cover Prompt', command=self.run_image_model)
         run_cover_btn.pack(side=tk.LEFT, padx=5)
         create_tooltip(run_cover_btn, 'Generate album cover image from prompt')
         
+        ttk.Separator(btn_row2, orient=tk.VERTICAL).pack(side=tk.LEFT, padx=10, fill=tk.Y)
+
+        # Video Loop
+        gen_video_btn = ttk.Button(btn_row2, text='Gen Video Loop Prompt', command=self.generate_video_loop)
+        gen_video_btn.pack(side=tk.LEFT, padx=5)
+        create_tooltip(gen_video_btn, 'Generate video loop prompt using AI')
+        
         run_video_btn = ttk.Button(btn_row2, text='Run Video Loop Prompt', command=self.run_video_loop_model)
         run_video_btn.pack(side=tk.LEFT, padx=5)
         create_tooltip(run_video_btn, 'Generate video loop from prompt')
+
+        ttk.Separator(btn_row2, orient=tk.VERTICAL).pack(side=tk.LEFT, padx=10, fill=tk.Y)
         
         export_btn = ttk.Button(btn_row2, text='Export YouTube Description', command=self.export_youtube_description)
         export_btn.pack(side=tk.LEFT, padx=5)
@@ -1515,8 +1532,12 @@ class SunoStyleBrowser(tk.Tk):
             self.log_debug('ERROR', f'Failed to merge styles: {result["error"]}')
             messagebox.showerror('Merge Styles', f'Failed to merge styles:\n{result["error"]}')
 
-    def transform_style(self):
-        """Transform style for viral potential using AI."""
+    def transform_style(self, merge_original=False):
+        """Transform style for viral potential using AI.
+        
+        Args:
+            merge_original: If True, merges the selected row's style with the styles in the text box using merge_styles logic, then transforms.
+        """
         song_name = self.song_name_var.get().strip()
         artist = self.artist_var.get().strip()
         
@@ -1525,11 +1546,61 @@ class SunoStyleBrowser(tk.Tk):
             return
 
         styles = self.styles_text.get('1.0', tk.END).strip()
+        
+        # If merge_original is True, we first need to "merge" the styles intelligently
+        # instead of just string concatenation.
+        if merge_original:
+            # 1. Get Original Style
+            original_style = ''
+            if self.current_row:
+                original_style = self.current_row.get('style', '')
+            
+            if not original_style and not styles:
+                messagebox.showinfo('Merge+Transform Style', 'Please select a style or enter styles to merge.')
+                return
+
+            # 2. Perform Merge if we have both, or just use what we have
+            if original_style and styles:
+                # We need to call the AI to merge them first
+                 self.log_debug('INFO', 'Step 1/2: Merging styles...')
+                 
+                 # Show processing message
+                 self.merged_style_text.delete('1.0', tk.END)
+                 self.merged_style_text.insert('1.0', 'Step 1/2: Merging styles...')
+                 self.update()
+
+                 template = get_prompt_template('merge_styles')
+                 if not template:
+                    self.log_debug('ERROR', 'Failed to load merge_styles template')
+                    messagebox.showerror('Merge+Transform Style', 'Failed to load merge_styles template')
+                    return
+                
+                 prompt = template.replace('{STYLES_TO_MERGE}', styles)
+                 prompt = prompt.replace('{ORIGINAL_STYLE}', original_style)
+                 
+                 self.config(cursor='wait')
+                 self.update()
+                 try:
+                    result = call_azure_ai(self.ai_config, prompt, profile='text')
+                 finally:
+                    self.config(cursor='')
+                
+                 if not result['success']:
+                     self.merged_style_text.insert('1.0', f'Error merging: {result["error"]}')
+                     return
+                 
+                 # Update styles with the merged result for the transformation step
+                 styles = result['content']
+                 self.log_debug('INFO', 'Styles merged successfully. Step 2/2: Transforming...')
+
+            elif original_style:
+                styles = original_style
+
         if not styles:
             messagebox.showinfo('Transform Style', 'Please enter styles to transform.')
             return
         
-        self.log_debug('INFO', 'Starting style transformation')
+        self.log_debug('INFO', f'Starting style transformation (Merge={merge_original})')
         
         # Show processing message
         self.merged_style_text.delete('1.0', tk.END)

@@ -45,7 +45,8 @@ stream-download-convert-tools/
 │   ├── video_to_mp3_converter.py   # Individual Video to MP3 converter
 │   ├── audio_modifier.py           # Individual Audio modifier
 │   ├── mp3_to_video_converter.py   # Individual MP3 to Video converter
-│   └── video_editor.py             # Individual Video Editor
+│   ├── video_editor.py             # Individual Video Editor
+│   └── suno_style_browser.py       # Individual Suno Style Browser
 ├── launchers/              # Launcher scripts
 │   ├── stream_download_convert_tools_unified.bat     # Windows launcher (Unified - RECOMMENDED)
 │   ├── stream_download_convert_tools_unified.sh      # Linux/Mac launcher (Unified - RECOMMENDED)
@@ -58,7 +59,9 @@ stream-download-convert-tools/
 │   ├── mp3_to_video_converter.bat  # Windows launcher (Individual)
 │   ├── mp3_to_video_converter.sh   # Linux/Mac launcher (Individual)
 │   ├── video_editor.bat             # Windows launcher (Individual)
-│   └── video_editor.sh              # Linux/Mac launcher (Individual)
+│   ├── video_editor.sh              # Linux/Mac launcher (Individual)
+│   ├── suno_style_browser.bat       # Windows launcher (Individual)
+│   └── suno_style_browser.sh        # Linux/Mac launcher (Individual)
 ├── requirements.txt        # Python dependencies
 ├── .gitignore             # Git ignore rules
 ├── AGENT.md               # This file

@@ -314,20 +314,21 @@ The application features a clean, organized interface with three main sections:
 
 ### Workflow
 
-**Row 1 - Setup and Generation:**
+**Row 1 - Data & Style Operations:**
 1. **Clear All**: Reset all song detail fields
 2. **Save**: Save song details to config (Ctrl+S)
 3. **Load**: Load song details from JSON file
 4. **Merge Styles**: Combine multiple styles using AI
 5. **Transform Style**: Transform style for viral potential using AI
-6. **Generate AI Cover Name**: Create cover name from song and style
-7. **Gen Album Cover Prompt**: Generate album cover prompt
-8. **Gen Video Loop Prompt**: Generate video loop prompt
+6. **Merge+Transform Style**: Merge selected style with input styles and transform
+7. **Generate AI Cover Name**: Create cover name from song and style
 
-**Row 2 - Execution and Export:**
-1. **Run Album Cover Prompt**: Generate album cover image from prompt
-2. **Run Video Loop Prompt**: Generate video loop from prompt
-3. **Export YouTube Description**: Export complete YouTube description
+**Row 2 - Media Generation & Export:**
+1. **Gen Album Cover Prompt**: Generate album cover prompt
+2. **Run Album Cover Prompt**: Generate album cover image from prompt
+3. **Gen Video Loop Prompt**: Generate video loop prompt
+4. **Run Video Loop Prompt**: Generate video loop from prompt
+5. **Export YouTube Description**: Export complete YouTube description
 
 ### Usage
 1. **Browse Styles**: Load a CSV file with music styles and use filters to find the perfect style
