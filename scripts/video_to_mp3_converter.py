@@ -91,16 +91,21 @@ class VideoToMP3ConverterGUI(BaseAudioGUI):
         settings_frame = ttk.LabelFrame(self.root, text="Conversion Settings", padding=10)
         settings_frame.pack(fill='x', padx=10, pady=10)
         
-        ttk.Label(settings_frame, text="Output Folder:").grid(row=0, column=0, sticky='w', pady=5)
-        self.folder_var = tk.StringVar(value=self.file_manager.get_folder_path('converted'))
-        ttk.Entry(settings_frame, textvariable=self.folder_var, width=50).grid(row=0, column=1, padx=5)
-        ttk.Button(settings_frame, text="Browse", command=self.browse_folder).grid(row=0, column=2)
+        ttk.Label(settings_frame, text="Downloads Folder:").grid(row=0, column=0, sticky='w', pady=5)
+        self.downloads_folder_var = tk.StringVar(value=self.file_manager.get_folder_path('downloads'))
+        ttk.Entry(settings_frame, textvariable=self.downloads_folder_var, width=50).grid(row=0, column=1, padx=5)
+        ttk.Button(settings_frame, text="Browse", command=self.browse_downloads_folder).grid(row=0, column=2)
         
-        ttk.Label(settings_frame, text="Audio Quality:").grid(row=1, column=0, sticky='w', pady=5)
+        ttk.Label(settings_frame, text="Output Folder:").grid(row=1, column=0, sticky='w', pady=5)
+        self.folder_var = tk.StringVar(value=self.file_manager.get_folder_path('converted'))
+        ttk.Entry(settings_frame, textvariable=self.folder_var, width=50).grid(row=1, column=1, padx=5)
+        ttk.Button(settings_frame, text="Browse", command=self.browse_output_folder).grid(row=1, column=2)
+        
+        ttk.Label(settings_frame, text="Audio Quality:").grid(row=2, column=0, sticky='w', pady=5)
         self.quality_var = tk.StringVar(value="192k")
         quality_combo = ttk.Combobox(settings_frame, textvariable=self.quality_var, width=20, state='readonly')
         quality_combo['values'] = ('128k', '192k', '256k', '320k')
-        quality_combo.grid(row=1, column=1, sticky='w', padx=5)
+        quality_combo.grid(row=2, column=1, sticky='w', padx=5)
         
         convert_frame = ttk.Frame(self.root)
         convert_frame.pack(fill='x', padx=10, pady=10)
@@ -139,7 +144,13 @@ class VideoToMP3ConverterGUI(BaseAudioGUI):
             self.root.config(cursor="")
             self.progress_label.config(text="")
     
-    def browse_folder(self):
+    def browse_downloads_folder(self):
+        folder = super().browse_folder(self.downloads_folder_var.get())
+        if folder:
+            self.downloads_folder_var.set(folder)
+            self.file_manager.set_folder_path('downloads', folder)
+    
+    def browse_output_folder(self):
         folder = super().browse_folder(self.folder_var.get())
         if folder:
             self.folder_var.set(folder)
@@ -149,7 +160,7 @@ class VideoToMP3ConverterGUI(BaseAudioGUI):
         files = super().select_files(
             title="Select Video/Audio Files",
             filetypes=self.file_manager.get_video_filetypes(),
-            initial_dir=self.file_manager.get_folder_path('downloads')
+            initial_dir=self.downloads_folder_var.get()
         )
         
         if files:
@@ -344,7 +355,7 @@ class VideoToMP3ConverterGUI(BaseAudioGUI):
             messagebox.showwarning("Warning", "Conversion already in progress")
             return
         
-        downloads_folder = self.file_manager.get_folder_path('downloads')
+        downloads_folder = self.downloads_folder_var.get()
         if not os.path.exists(downloads_folder):
             messagebox.showerror("Error", "Downloads folder does not exist")
             return
