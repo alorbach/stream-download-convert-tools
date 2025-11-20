@@ -838,7 +838,7 @@ class SunoStyleBrowser(tk.Tk):
         self.csv_path = csv_path
         self.styles = load_styles(csv_path)
         self.filtered = list(self.styles)
-        self.sort_column = 'style'
+        self.sort_column = None
         self.sort_reverse = False
         self.ai_config = load_config()
         self.current_row = None
