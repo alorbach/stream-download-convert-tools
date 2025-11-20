@@ -167,6 +167,13 @@ class YouTubeDownloaderGUI(BaseAudioGUI):
         self.cancel_button = ttk.Button(batch_frame, text="Cancel Download", command=self.cancel_download_action, state='disabled')
         self.cancel_button.pack(side='left', padx=5)
         
+        # Auto-download lowest resolution buttons
+        auto_frame = ttk.Frame(bottom_frame)
+        auto_frame.pack(fill='x', pady=5)
+        ttk.Label(auto_frame, text="Auto Download (Lowest Resolution):", font=('TkDefaultFont', 9, 'bold')).pack(side='left', padx=5)
+        ttk.Button(auto_frame, text="Selected Videos", command=self.auto_download_lowest_resolution_selected).pack(side='left', padx=5)
+        ttk.Button(auto_frame, text="All Videos", command=self.auto_download_lowest_resolution_all).pack(side='left', padx=5)
+        
         self.log_text = scrolledtext.ScrolledText(bottom_frame, height=8)
         self.log_text.pack(fill='both', expand=True)
     
@@ -1047,6 +1054,328 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
                 0,
                 lambda s=success_count, e=error_count:
                 self.log(f"\n[CANCELLED] Batch download stopped: {s} succeeded, {e} failed")
+            )
+        
+        self.root.after(0, lambda: self.set_busy(False))
+    
+    def auto_download_lowest_resolution_selected(self):
+        """Auto-download lowest resolution for selected videos"""
+        if self.is_busy:
+            messagebox.showwarning("Warning", "Please wait for current operation to complete")
+            return
+        
+        selection = self.video_listbox.curselection()
+        if not selection:
+            messagebox.showwarning("Warning", "Please select at least one video")
+            return
+        
+        self.cancel_download = False
+        self.current_process = None
+        
+        selected_indices = list(selection)
+        self.log(f"[INFO] Starting auto-download of lowest resolution for {len(selected_indices)} videos")
+        
+        self.set_busy(True, f"Auto-downloading {len(selected_indices)} videos (lowest resolution)...")
+        
+        thread = threading.Thread(target=self._auto_download_lowest_resolution_thread, args=(selected_indices,))
+        thread.daemon = True
+        thread.start()
+    
+    def auto_download_lowest_resolution_all(self):
+        """Auto-download lowest resolution for all videos"""
+        if self.is_busy:
+            messagebox.showwarning("Warning", "Please wait for current operation to complete")
+            return
+        
+        if not self.csv_data:
+            messagebox.showwarning("Warning", "No CSV data loaded")
+            return
+        
+        self.cancel_download = False
+        self.current_process = None
+        
+        all_indices = list(range(len(self.csv_data)))
+        self.log(f"[INFO] Starting auto-download of lowest resolution for all {len(all_indices)} videos")
+        
+        self.set_busy(True, f"Auto-downloading all {len(all_indices)} videos (lowest resolution)...")
+        
+        thread = threading.Thread(target=self._auto_download_lowest_resolution_thread, args=(all_indices,))
+        thread.daemon = True
+        thread.start()
+    
+    def _find_lowest_resolution_stream(self, formats):
+        """Find video streams sorted from lowest to highest resolution
+        
+        Args:
+            formats: List of format dictionaries from yt-dlp
+            
+        Returns:
+            List of format_ids sorted from lowest to highest resolution, or empty list if none found
+        """
+        if not formats:
+            return []
+        
+        # Filter for video streams (combined video+audio preferred, then video-only)
+        video_streams = []
+        for fmt in formats:
+            vcodec = fmt.get('vcodec', 'none')
+            if vcodec != 'none':
+                # Prefer combined streams (have both video and audio)
+                is_combined = fmt.get('acodec', 'none') != 'none'
+                resolution = fmt.get('resolution', 'unknown')
+                height = fmt.get('height', 0)
+                width = fmt.get('width', 0)
+                
+                # Extract numeric height if resolution is like "720p" or "480p"
+                if not height and resolution and resolution != 'unknown':
+                    height_match = re.search(r'(\d+)p?', str(resolution))
+                    if height_match:
+                        height = int(height_match.group(1))
+                
+                video_streams.append({
+                    'format_id': fmt.get('format_id'),
+                    'height': height,
+                    'width': width,
+                    'resolution': resolution,
+                    'is_combined': is_combined,
+                    'format': fmt
+                })
+        
+        if not video_streams:
+            return []
+        
+        # Sort by height (lowest first), prefer combined streams
+        video_streams.sort(key=lambda x: (x['height'] or 0, not x['is_combined']))
+        
+        # Return list of format_ids sorted from lowest to highest
+        return [stream['format_id'] for stream in video_streams]
+    
+    def _auto_download_lowest_resolution_thread(self, video_indices):
+        """Thread that handles auto-download of lowest resolution streams"""
+        success_count = 0
+        error_count = 0
+        skipped_count = 0
+        
+        for i, index in enumerate(video_indices):
+            if self.cancel_download:
+                self.root.after(0, lambda: self.log("[INFO] Auto-download cancelled by user"))
+                break
+            
+            try:
+                row = self.csv_data[index]
+                url = self.extract_youtube_url(row.get('Video Link', ''))
+                
+                if not url:
+                    error_count += 1
+                    self.root.after(0, lambda idx=index+1: self.log(f"[ERROR] Video {idx}: Could not extract URL"))
+                    continue
+                
+                filename_pattern = self.filename_var.get()
+                filename = self.create_filename_from_pattern(filename_pattern, row)
+                
+                self.root.after(
+                    0,
+                    lambda idx=i+1, total=len(video_indices), name=row.get('Song Title', 'Unknown'):
+                    self.set_busy(True, f"Auto-downloading {idx}/{total}: {name} (fetching streams...)")
+                )
+                
+                self.root.after(
+                    0,
+                    lambda msg=f"\n[INFO] Processing ({i+1}/{len(video_indices)}): {row.get('Song Title', 'Unknown')} - {row.get('Artist', 'Unknown')}":
+                    self.log(msg)
+                )
+                
+                # Fetch available streams
+                cmd = self.build_ytdlp_command(['-J', url])
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+                )
+                
+                # Try alternative client if 403 error
+                if (result.returncode != 0 and 
+                    ('403' in result.stderr or 'Forbidden' in result.stderr)):
+                    self.root.after(0, lambda: self.log(f"[WARNING] 403 detected, trying alternative client..."))
+                    original_client = self.client_type_var.get() if hasattr(self, 'client_type_var') else 'web'
+                    if original_client != 'ios':
+                        if hasattr(self, 'client_type_var'):
+                            self.client_type_var.set('ios')
+                        cmd = self.build_ytdlp_command(['-J', url])
+                        result = subprocess.run(
+                            cmd,
+                            capture_output=True,
+                            text=True,
+                            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+                        )
+                        if hasattr(self, 'client_type_var'):
+                            self.client_type_var.set(original_client)
+                
+                if result.returncode != 0:
+                    error_count += 1
+                    error_msg = result.stderr[:200] if result.stderr else "Unknown error"
+                    self.root.after(0, lambda err=error_msg, idx=index+1: self.log(f"[ERROR] Video {idx}: Failed to fetch streams - {err}"))
+                    continue
+                
+                # Parse stream data
+                try:
+                    data = json.loads(result.stdout)
+                    formats = data.get('formats', [])
+                except json.JSONDecodeError:
+                    error_count += 1
+                    self.root.after(0, lambda idx=index+1: self.log(f"[ERROR] Video {idx}: Failed to parse stream data"))
+                    continue
+                
+                # Find all video streams sorted from lowest to highest resolution
+                format_ids = self._find_lowest_resolution_stream(formats)
+                if not format_ids:
+                    skipped_count += 1
+                    self.root.after(0, lambda idx=index+1: self.log(f"[WARNING] Video {idx}: No video streams found, skipping"))
+                    continue
+                
+                # Rotate user agent periodically
+                if i > 0 and i % 5 == 0:
+                    self.user_agent = self.generate_user_agent()
+                    self.root.after(0, lambda: self.log(f"[DEBUG] Rotated user agent for stealth"))
+                
+                # Try each resolution from lowest to highest until one works
+                output_path = os.path.join(self.get_download_path(), filename)
+                download_success = False
+                
+                for attempt_idx, format_id in enumerate(format_ids):
+                    if self.cancel_download:
+                        break
+                    
+                    # Get stream info for logging
+                    stream_info = next((f for f in formats if f.get('format_id') == format_id), None)
+                    resolution = stream_info.get('resolution', 'unknown') if stream_info else 'unknown'
+                    
+                    if attempt_idx == 0:
+                        self.root.after(0, lambda res=resolution, fid=format_id: self.log(f"[INFO] Trying lowest resolution: {res} (format {fid})"))
+                    else:
+                        self.root.after(0, lambda res=resolution, fid=format_id, att=attempt_idx+1: self.log(f"[INFO] Previous failed, trying next resolution ({att}/{len(format_ids)}): {res} (format {fid})"))
+                    
+                    # Try download with current format
+                    cmd = self.build_ytdlp_command([
+                        '-f', format_id,
+                        '-o', output_path + '.%(ext)s',
+                        url
+                    ])
+                    
+                    process = subprocess.Popen(
+                        cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+                    )
+                    
+                    self.current_process = process
+                    
+                    stdout, stderr = process.communicate()
+                    
+                    if self.cancel_download:
+                        try:
+                            process.terminate()
+                        except:
+                            pass
+                        self.root.after(0, lambda: self.log("[INFO] Auto-download cancelled by user"))
+                        break
+                    
+                    if process.returncode == 0:
+                        # Success! Stop trying other resolutions
+                        download_success = True
+                        success_count += 1
+                        self.root.after(
+                            0,
+                            lambda out=filename, res=resolution: self.log(f"[SUCCESS] Downloaded: {out} (resolution: {res})")
+                        )
+                        break
+                    else:
+                        error_msg = stderr[:200] if stderr else "Unknown error"
+                        
+                        # Try with iOS client as fallback if 403
+                        if '403' in error_msg or 'Forbidden' in error_msg:
+                            self.root.after(0, lambda: self.log(f"[WARNING] 403 detected, trying iOS client fallback..."))
+                            original_client = self.client_type_var.get() if hasattr(self, 'client_type_var') else 'web'
+                            if original_client != 'ios':
+                                if hasattr(self, 'client_type_var'):
+                                    self.client_type_var.set('ios')
+                                cmd_fallback = self.build_ytdlp_command([
+                                    '-f', format_id,
+                                    '-o', output_path + '.%(ext)s',
+                                    url
+                                ])
+                                process_fallback = subprocess.run(
+                                    cmd_fallback,
+                                    stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE,
+                                    text=True,
+                                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+                                )
+                                if hasattr(self, 'client_type_var'):
+                                    self.client_type_var.set(original_client)
+                                
+                                if process_fallback.returncode == 0:
+                                    # Success with fallback client!
+                                    download_success = True
+                                    success_count += 1
+                                    self.root.after(0, lambda fname=filename, res=resolution: self.log(f"[SUCCESS] Downloaded with fallback client: {fname} (resolution: {res})"))
+                                    break
+                                else:
+                                    # Fallback also failed, continue to next resolution
+                                    self.root.after(0, lambda err=error_msg, res=resolution: self.log(f"[WARNING] Resolution {res} failed: {err[:100]}"))
+                            else:
+                                # Already using iOS, continue to next resolution
+                                self.root.after(0, lambda err=error_msg, res=resolution: self.log(f"[WARNING] Resolution {res} failed: {err[:100]}"))
+                        else:
+                            # Non-403 error, continue to next resolution
+                            self.root.after(0, lambda err=error_msg, res=resolution: self.log(f"[WARNING] Resolution {res} failed: {err[:100]}"))
+                
+                # If all resolutions failed, mark as error
+                if not download_success and not self.cancel_download:
+                    error_count += 1
+                    self.root.after(0, lambda idx=index+1, total=len(format_ids): self.log(f"[ERROR] Video {idx}: All {total} resolutions failed, skipping"))
+                
+                # Add delay between downloads
+                if i < len(video_indices) - 1:
+                    delay = self.delay_var.get() if hasattr(self, 'delay_var') else self.download_delay
+                    if delay > 0:
+                        actual_delay = delay * random.uniform(0.8, 1.2)
+                        time.sleep(actual_delay)
+                
+            except Exception as e:
+                if not self.cancel_download:
+                    error_count += 1
+                    error_msg = str(e)
+                    self.root.after(
+                        0,
+                        lambda msg=error_msg: self.log(f"[ERROR] Exception: {msg}")
+                    )
+            finally:
+                self.current_process = None
+        
+        if not self.cancel_download:
+            self.root.after(
+                0,
+                lambda s=success_count, e=error_count, sk=skipped_count:
+                self.log(f"\n[COMPLETE] Auto-download finished: {s} succeeded, {e} failed, {sk} skipped")
+            )
+            
+            self.root.after(
+                0,
+                lambda s=success_count, e=error_count, sk=skipped_count:
+                messagebox.showinfo(
+                    "Auto-Download Complete",
+                    f"Auto-download finished!\n\nSuccessful: {s}\nFailed: {e}\nSkipped: {sk}"
+                )
+            )
+        else:
+            self.root.after(
+                0,
+                lambda s=success_count, e=error_count, sk=skipped_count:
+                self.log(f"\n[CANCELLED] Auto-download stopped: {s} succeeded, {e} failed, {sk} skipped")
             )
         
         self.root.after(0, lambda: self.set_busy(False))
