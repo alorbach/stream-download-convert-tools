@@ -1737,6 +1737,32 @@ class SunoStyleBrowser(tk.Tk):
             self.ai_cover_name_var.set(f'Error: {result["error"]}')
             self.log_debug('ERROR', f'Failed to generate AI Cover Name: {result["error"]}')
     
+    def _get_filtered_artists(self):
+        """Get list of sample artists excluding the current original artist."""
+        if not self.current_row:
+            return []
+        
+        sample_artists_str = self.current_row.get('sample_artists', '')
+        if not sample_artists_str:
+            return []
+            
+        # Split by semicolon and strip
+        artists = [a.strip() for a in sample_artists_str.split(';') if a.strip()]
+        
+        # Filter out original artist
+        original_artist = self.artist_var.get().strip().lower()
+        if original_artist:
+            # Filter if artist name is similar
+            filtered_artists = []
+            for artist in artists:
+                a_lower = artist.lower()
+                # Check for exact match or if one contains the other (to catch variations)
+                if original_artist != a_lower and original_artist not in a_lower and a_lower not in original_artist:
+                    filtered_artists.append(artist)
+            return filtered_artists
+            
+        return artists
+
     def generate_album_cover(self):
         """Generate album cover prompt using AI."""
         song_name = self.song_name_var.get().strip()
@@ -1759,6 +1785,12 @@ class SunoStyleBrowser(tk.Tk):
             self.log_debug('WARNING', 'Generate Album Cover: Please select a music style from the list.')
             return
         
+        # Embed similar artists
+        similar_artists = self._get_filtered_artists()
+        if similar_artists:
+            artists_str = ", ".join(similar_artists)
+            style_keywords += f". Musical style similar to: {artists_str}"
+        
         self.log_debug('INFO', 'Starting album cover generation')
         
         # Get style properties from selected row
@@ -1772,6 +1804,10 @@ class SunoStyleBrowser(tk.Tk):
         # Derive visual elements from instrumentation and style
         instrumentation = self.current_row.get('instrumentation', '')
         suggested_elements = f'musical instruments, {instrumentation}, {mood_description} atmosphere'
+        
+        if similar_artists:
+            artists_str = ", ".join(similar_artists)
+            suggested_elements += f", musicians or band performing with the visual aesthetic of: {artists_str}"
         
         # Derive typography from era
         if '1980s' in decade_range or '1990s' in decade_range:
@@ -1846,6 +1882,13 @@ class SunoStyleBrowser(tk.Tk):
         
         # Get style properties from selected row
         style_description = self.current_row.get('style', '')
+        
+        # Prepare style string for prompt with embedded artists
+        style_for_prompt = style_description
+        similar_artists = self._get_filtered_artists()
+        if similar_artists:
+            artists_str = ", ".join(similar_artists)
+            style_for_prompt += f". Musical style similar to: {artists_str}"
         mood_description = self.current_row.get('mood', '')
         instrumentation = self.current_row.get('instrumentation', '')
         decade_range = self.current_row.get('decade_range', '')
@@ -1883,6 +1926,10 @@ class SunoStyleBrowser(tk.Tk):
         # Create video scene description based on album cover
         video_scene_description = f'A professional music visualizer scene representing the {style_description} aesthetic. Animate the album cover design elements with subtle motion and visual effects suitable for music visualization.'
         
+        if similar_artists:
+            artists_str = ", ".join(similar_artists)
+            video_scene_description += f" The scene should feature musicians or a band performing, with a visual style inspired by: {artists_str}."
+        
         # Show processing message
         self.video_loop_text.delete('1.0', tk.END)
         self.video_loop_text.insert('1.0', 'Generating video loop prompt... Please wait.')
@@ -1898,7 +1945,7 @@ class SunoStyleBrowser(tk.Tk):
         
         # Replace template variables
         prompt = template.replace('{ALBUM_COVER_DESCRIPTION}', album_cover_description)
-        prompt = prompt.replace('{STYLE_DESCRIPTION}', style_description)
+        prompt = prompt.replace('{STYLE_DESCRIPTION}', style_for_prompt)
         prompt = prompt.replace('{MOOD_DESCRIPTION}', mood_description)
         prompt = prompt.replace('{VIDEO_SCENE_DESCRIPTION}', video_scene_description)
         prompt = prompt.replace('{MOOD_KEYWORDS}', mood_keywords)
