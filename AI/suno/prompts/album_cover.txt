@@ -7,10 +7,10 @@ Your cover art must:
 - Suggest a sense of timelessness, power, or wonder. It should stand out and feel worthy of a classic, platinum-selling album.
 
 SPECIFICATIONS:
-- Style: {STYLE_DESCRIPTION}
-- Mood: {MOOD_DESCRIPTION}
-- Visual tone: {VISUAL_TONE}
-- Imagery: {SUGGESTED_VISUAL_ELEMENTS}
+- Primary Style: {STYLE_DESCRIPTION} (This is the most important visual directive. Ensure the cover reflects this specific style above all else.)
+- Underlying Mood: {MOOD_DESCRIPTION}
+- Era/Tone: {VISUAL_TONE}
+- Suggested Imagery: {SUGGESTED_VISUAL_ELEMENTS}
 - Typography: {TYPOGRAPHY_STYLE}
 - Layout: Dynamic, balanced composition inspired by legendary vinyl album covers, with centered, powerful text and visual focus. Create depth, drama, and an epic vibe within a square (1:1) frame.
 - Format: High-resolution, suitable for streaming platforms.

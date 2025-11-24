@@ -121,6 +121,7 @@ def load_config() -> dict:
         "song_details": {
             "song_name": "",
             "artist": "",
+            "singer_gender": "Female",
             "lyrics": "",
             "styles": "",
             "merged_style": "",
@@ -1131,9 +1132,17 @@ class SunoStyleBrowser(tk.Tk):
             row=2, column=1, columnspan=2, sticky=tk.W+tk.E, pady=5, padx=5
         )
         
+        # Singer Gender
+        ttk.Label(main_frame, text='Singer:', font=('TkDefaultFont', 9, 'bold')).grid(
+            row=3, column=0, sticky=tk.W, pady=5
+        )
+        self.singer_gender_var = tk.StringVar(value='Female')
+        self.singer_gender_combo = ttk.Combobox(main_frame, textvariable=self.singer_gender_var, values=['Female', 'Male'], width=10, state='readonly')
+        self.singer_gender_combo.grid(row=3, column=1, sticky=tk.W, pady=5, padx=5)
+        
         # Lyrics with character counter
         lyrics_label_frame = ttk.Frame(main_frame)
-        lyrics_label_frame.grid(row=3, column=0, sticky=tk.NW, pady=5)
+        lyrics_label_frame.grid(row=4, column=0, sticky=tk.NW, pady=5)
         ttk.Label(lyrics_label_frame, text='Lyrics:', font=('TkDefaultFont', 9, 'bold')).pack(anchor=tk.W)
         self.lyrics_char_count = tk.StringVar(value='0 / 20000')
         lyrics_counter = ttk.Label(lyrics_label_frame, textvariable=self.lyrics_char_count, font=('TkDefaultFont', 7), foreground='gray')
@@ -1143,7 +1152,7 @@ class SunoStyleBrowser(tk.Tk):
         ttk.Button(lyrics_label_frame, text='Fix Lyrics', command=self.fix_lyrics, width=10).pack(anchor=tk.W, pady=(5, 0))
         
         self.lyrics_text = scrolledtext.ScrolledText(main_frame, height=4, wrap=tk.WORD, width=60)
-        self.lyrics_text.grid(row=3, column=1, columnspan=2, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
+        self.lyrics_text.grid(row=4, column=1, columnspan=2, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
         def update_lyrics_counter(event=None):
             current = self.lyrics_text.get('1.0', tk.END)
             char_count = len(current.rstrip('\n'))
@@ -1185,26 +1194,26 @@ class SunoStyleBrowser(tk.Tk):
         
         # Styles (can add multiple)
         ttk.Label(main_frame, text='Styles:', font=('TkDefaultFont', 9, 'bold')).grid(
-            row=4, column=0, sticky=tk.NW, pady=5
+            row=5, column=0, sticky=tk.NW, pady=5
         )
         self.styles_text = scrolledtext.ScrolledText(main_frame, height=3, wrap=tk.WORD, width=60)
-        self.styles_text.grid(row=4, column=1, columnspan=2, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
+        self.styles_text.grid(row=5, column=1, columnspan=2, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
         
         # Merged Style Result
         ttk.Label(main_frame, text='Merged Style:', font=('TkDefaultFont', 9, 'bold')).grid(
-            row=5, column=0, sticky=tk.NW, pady=5
+            row=6, column=0, sticky=tk.NW, pady=5
         )
         self.merged_style_text = scrolledtext.ScrolledText(main_frame, height=3, wrap=tk.WORD, width=60)
-        self.merged_style_text.grid(row=5, column=1, columnspan=2, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
+        self.merged_style_text.grid(row=6, column=1, columnspan=2, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
         
         # AI Results (tabbed)
         ttk.Label(main_frame, text='AI Results:', font=('TkDefaultFont', 9, 'bold')).grid(
-            row=6, column=0, sticky=tk.NW, pady=5
+            row=7, column=0, sticky=tk.NW, pady=5
         )
         
         # Create notebook for AI results
         ai_results_notebook = ttk.Notebook(main_frame)
-        ai_results_notebook.grid(row=6, column=1, columnspan=2, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
+        ai_results_notebook.grid(row=7, column=1, columnspan=2, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
         
         # Tab 1: Album Cover Prompt
         album_cover_frame = ttk.Frame(ai_results_notebook)
@@ -1234,14 +1243,14 @@ class SunoStyleBrowser(tk.Tk):
 
         # Album Cover Preview section
         preview_frame = ttk.LabelFrame(main_frame, text='Album Cover Preview', padding=5)
-        preview_frame.grid(row=7, column=0, columnspan=3, sticky=tk.W+tk.E, pady=(8, 0))
+        preview_frame.grid(row=8, column=0, columnspan=3, sticky=tk.W+tk.E, pady=(8, 0))
         self.album_cover_photo = None
         self.album_cover_preview = ttk.Label(preview_frame, text='No image generated yet')
         self.album_cover_preview.pack(fill=tk.BOTH, expand=True)
 
         # Video Options (size/seconds)
         video_opts = ttk.LabelFrame(main_frame, text='Video Options', padding=5)
-        video_opts.grid(row=8, column=0, columnspan=3, sticky=tk.W+tk.E, pady=(8, 0))
+        video_opts.grid(row=9, column=0, columnspan=3, sticky=tk.W+tk.E, pady=(8, 0))
         ttk.Label(video_opts, text='Size:').pack(side=tk.LEFT)
         self.video_size_var = tk.StringVar(value='720x1280')
         sizes = ['720x1280', '1280x720']
@@ -1255,7 +1264,7 @@ class SunoStyleBrowser(tk.Tk):
         
         # Buttons frame
         btn_frame = ttk.Frame(main_frame)
-        btn_frame.grid(row=9, column=0, columnspan=3, pady=10, sticky=tk.W)
+        btn_frame.grid(row=10, column=0, columnspan=3, pady=10, sticky=tk.W)
 
         # Two rows of buttons
         btn_row1 = ttk.Frame(btn_frame)
@@ -1803,7 +1812,8 @@ class SunoStyleBrowser(tk.Tk):
         
         # Derive visual elements from instrumentation and style
         instrumentation = self.current_row.get('instrumentation', '')
-        suggested_elements = f'musical instruments, {instrumentation}, {mood_description} atmosphere'
+        singer_gender = self.singer_gender_var.get()
+        suggested_elements = f'{singer_gender} singer, musical instruments, {instrumentation}, {mood_description} atmosphere'
         
         if similar_artists:
             artists_str = ", ".join(similar_artists)
@@ -1880,15 +1890,23 @@ class SunoStyleBrowser(tk.Tk):
         
         self.log_debug('INFO', 'Starting video loop generation')
         
-        # Get style properties from selected row
-        style_description = self.current_row.get('style', '')
+        # Get style - prefer Merged Style result, fallback to Styles field
+        style_keywords = self.merged_style_text.get('1.0', tk.END).strip()
+        if not style_keywords or style_keywords.startswith('Error:'):
+            style_keywords = self.styles_text.get('1.0', tk.END).strip()
         
-        # Prepare style string for prompt with embedded artists
-        style_for_prompt = style_description
+        # Get style properties from selected row
+        row_style = self.current_row.get('style', '')
+        
+        # Prepare style string for prompt
+        # Use merged/input style if available, otherwise use selected row style
+        style_for_prompt = style_keywords if style_keywords else row_style
+        
         similar_artists = self._get_filtered_artists()
         if similar_artists:
             artists_str = ", ".join(similar_artists)
             style_for_prompt += f". Musical style similar to: {artists_str}"
+        
         mood_description = self.current_row.get('mood', '')
         instrumentation = self.current_row.get('instrumentation', '')
         decade_range = self.current_row.get('decade_range', '')
@@ -1905,7 +1923,7 @@ class SunoStyleBrowser(tk.Tk):
             camera_style = 'Cinematic static shot with subtle movement, shallow depth of field'
         
         # Determine lighting based on mood and era
-        if '80s' in decade_range or 'retro' in style_description.lower():
+        if '80s' in decade_range or 'retro' in style_for_prompt.lower():
             lighting_description = 'Retro neon color palette with warm tones and soft ambient illumination'
         elif 'warm' in mood_description.lower() or 'cozy' in mood_description.lower():
             lighting_description = 'Warm color temperature with soft illumination and gentle ambient transitions'
@@ -1913,22 +1931,26 @@ class SunoStyleBrowser(tk.Tk):
             lighting_description = 'Professional video lighting with balanced shadows and highlights for visual clarity'
         
         # Generate visual elements for video
-        visual_elements = f'{instrumentation}, {mood_description} atmosphere'
+        singer_gender = self.singer_gender_var.get()
+        visual_elements = f'{singer_gender} singer, {instrumentation}, {mood_description} atmosphere'
         
         # Animation/effects description
-        if 'lo-fi' in style_description.lower() or 'vinyl' in instrumentation.lower():
+        if 'lo-fi' in style_for_prompt.lower() or 'vinyl' in instrumentation.lower():
             animation_description = 'Gentle analog texture overlay, subtle film grain, peaceful ambient motion'
-        elif 'rock' in style_description.lower() or 'energetic' in mood_description.lower():
+        elif 'rock' in style_for_prompt.lower() or 'energetic' in mood_description.lower():
             animation_description = 'Dynamic lighting shifts, occasional camera motion, energetic feel'
         else:
             animation_description = 'Subtle atmospheric movement, soft transitions, cinematic effects'
         
         # Create video scene description based on album cover
-        video_scene_description = f'A professional music visualizer scene representing the {style_description} aesthetic. Animate the album cover design elements with subtle motion and visual effects suitable for music visualization.'
+        video_scene_description = f'A professional music visualizer scene representing the {style_for_prompt} aesthetic. Animate the album cover design elements with subtle motion and visual effects suitable for music visualization.'
         
         if similar_artists:
             artists_str = ", ".join(similar_artists)
             video_scene_description += f" The scene should feature musicians or a band performing, with a visual style inspired by: {artists_str}."
+            
+        # Add singer movement
+        video_scene_description += f" The {singer_gender} singer should move slightly to the rhythm of the music, with subtle, natural gestures."
         
         # Show processing message
         self.video_loop_text.delete('1.0', tk.END)
@@ -2362,18 +2384,18 @@ class SunoStyleBrowser(tk.Tk):
         desc += "💬 Comment your song requests for future covers!\n\n"
         
         # Credits Section
-        desc += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        desc += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         desc += "📋 CREDITS & INFORMATION\n"
-        desc += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        desc += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         desc += f"Original Song: \"{song_name}\" by {artist}\n"
         desc += f"AI Cover Style: {style_name}\n"
         desc += f"Video Type: AI-Generated Music Cover\n"
         desc += f"Channel: Delta AI Covers\n\n"
         
         # Channel Description
-        desc += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        desc += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         desc += "📺 ABOUT DELTA AI COVERS\n"
-        desc += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        desc += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         desc += "Delta AI Covers transforms your favorite songs into completely new genres and styles using advanced AI music generation. "
         desc += "From classic hits to modern pop, we create unique covers in styles like jazz, lo-fi, swing, and more. "
         desc += "Subscribe to discover how AI can reinvent music!\n\n"
@@ -2385,9 +2407,9 @@ class SunoStyleBrowser(tk.Tk):
         desc += "• Twitter: [Your Twitter]\n\n"
         
         # Disclaimer (important for avoiding strikes)
-        desc += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        desc += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         desc += "⚠️ DISCLAIMER\n"
-        desc += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        desc += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         desc += "This is an AI-generated cover version of the original song. "
         desc += "All rights to the original composition belong to their respective owners. "
         desc += "This video is created for entertainment and artistic purposes only. "
@@ -2396,17 +2418,17 @@ class SunoStyleBrowser(tk.Tk):
         desc += "uses minimal copyrighted material, has no commercial purpose, and promotes the original work.\n"
 
         # Keywords Section (hidden but SEO-important)
-        desc += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        desc += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         desc += "🎹 KEYWORDS FOR SEARCH\n"
-        desc += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        desc += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         desc += f"{song_name} ai cover, {artist} ai cover, {style_name.lower()} cover, "
         desc += f"ai music {song_name}, {song_name} remix, ai generated music, "
         desc += f"{style_name.lower()} music, cover song ai, ai music generation\n\n"
         
         # Hashtags Section
-        desc += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        desc += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         desc += "🏷️ HASHTAGS:\n"
-        desc += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        desc += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         # Generate optimized hashtags using AI (max 500 chars)
         hashtags = self.generate_youtube_hashtags(song_name, artist, style_description, style_info)
         desc += hashtags + '\n\n'
@@ -2420,6 +2442,7 @@ class SunoStyleBrowser(tk.Tk):
             'ai_cover_name': self.ai_cover_name_var.get(),
             'song_name': self.song_name_var.get(),
             'artist': self.artist_var.get(),
+            'singer_gender': self.singer_gender_var.get(),
             'lyrics': self.lyrics_text.get('1.0', tk.END).strip(),
             'styles': self.styles_text.get('1.0', tk.END).strip(),
             'merged_style': self.merged_style_text.get('1.0', tk.END).strip(),
@@ -2492,6 +2515,7 @@ class SunoStyleBrowser(tk.Tk):
                 self.ai_cover_name_var.set(song_details.get('ai_cover_name', ''))
                 self.song_name_var.set(song_details.get('song_name', ''))
                 self.artist_var.set(song_details.get('artist', ''))
+                self.singer_gender_var.set(song_details.get('singer_gender', 'Female'))
                 self.lyrics_text.delete('1.0', tk.END)
                 self.lyrics_text.insert('1.0', song_details.get('lyrics', ''))
                 self.styles_text.delete('1.0', tk.END)
@@ -2518,6 +2542,7 @@ class SunoStyleBrowser(tk.Tk):
             self.ai_cover_name_var.set(song_details.get('ai_cover_name', ''))
             self.song_name_var.set(song_details.get('song_name', ''))
             self.artist_var.set(song_details.get('artist', ''))
+            self.singer_gender_var.set(song_details.get('singer_gender', 'Female'))
             self.lyrics_text.delete('1.0', tk.END)
             self.lyrics_text.insert('1.0', song_details.get('lyrics', ''))
             self.styles_text.delete('1.0', tk.END)
