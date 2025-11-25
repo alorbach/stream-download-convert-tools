@@ -91,10 +91,39 @@ def resolve_prompts_path() -> str:
     return default_path
 
 
+def get_csv_file_path(config: dict) -> str:
+    """
+    Get the CSV file path from config, resolving relative paths to AI/suno directory.
+    Falls back to default if config value is empty or file not found.
+    """
+    csv_file = config.get('general', {}).get('csv_file_path', 'suno_sound_styles.csv')
+    
+    # If it's an absolute path and exists, use it
+    if os.path.isabs(csv_file) and os.path.exists(csv_file):
+        return csv_file
+    
+    # Try it as a filename in the AI/suno directory
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.abspath(os.path.join(script_dir, os.pardir))
+    suno_dir = os.path.join(project_root, 'AI', 'suno')
+    full_path = os.path.join(suno_dir, csv_file)
+    
+    if os.path.exists(full_path):
+        return full_path
+    
+    # Fall back to default
+    return resolve_csv_path()
+
+
+
 def load_config() -> dict:
     """Load configuration from JSON file, create default if it doesn't exist."""
     config_path = get_config_path()
     default_config = {
+        "general": {
+            "csv_file_path": "suno/suno_sound_styles.csv",
+            "default_save_path": ""
+        },
         "profiles": {
             "text": {
                 "endpoint": "https://your-endpoint.cognitiveservices.azure.com/",
@@ -168,6 +197,11 @@ def load_config() -> dict:
                                 for setting_key in default_config['profiles'][profile_name]:
                                     if setting_key not in config['profiles'][profile_name]:
                                         config['profiles'][profile_name][setting_key] = default_config['profiles'][profile_name][setting_key]
+                    elif key == 'general' and isinstance(config[key], dict):
+                        # Merge general sub-dict
+                        for sub_key in default_config['general']:
+                            if sub_key not in config[key]:
+                                config[key][sub_key] = default_config['general'][sub_key]
                     elif key == 'song_details' and isinstance(config[key], dict):
                         # Merge song_details sub-dict
                         for sub_key in default_config['song_details']:
@@ -739,11 +773,11 @@ class ExtraCommandsDialog(tk.Toplevel):
 
 
 class SettingsDialog(tk.Toplevel):
-    """Dialog for editing Azure AI configuration settings with multiple profiles."""
+    """Dialog for editing configuration settings including general and Azure AI profiles."""
     
     def __init__(self, parent, config):
         super().__init__(parent)
-        self.title('Azure AI Settings')
+        self.title('Settings')
         self.geometry('600x500')
         self.transient(parent)
         self.grab_set()
@@ -769,6 +803,32 @@ class SettingsDialog(tk.Toplevel):
         # Create notebook for tabs
         notebook = ttk.Notebook(main_frame)
         notebook.pack(fill=tk.BOTH, expand=True)
+        
+        # General settings tab
+        general_frame = ttk.Frame(notebook, padding=10)
+        notebook.add(general_frame, text='General')
+        
+        general_data = self.config.get('general', {})
+        self.general_vars = {}
+        
+        # CSV File Path
+        ttk.Label(general_frame, text='Suno Styles CSV File:', font=('TkDefaultFont', 9, 'bold')).grid(row=0, column=0, sticky=tk.W, pady=(5, 2), columnspan=3)
+        ttk.Label(general_frame, text='Filename:', font=('TkDefaultFont', 8)).grid(row=1, column=0, sticky=tk.W, pady=5, padx=(10, 0))
+        self.general_vars['csv_file_path'] = tk.StringVar(value=general_data.get('csv_file_path', 'suno_sound_styles.csv'))
+        csv_entry = ttk.Entry(general_frame, textvariable=self.general_vars['csv_file_path'], width=40)
+        csv_entry.grid(row=1, column=1, pady=5, padx=5, sticky=tk.W)
+        ttk.Button(general_frame, text='Browse...', command=self.browse_csv).grid(row=1, column=2, pady=5, padx=5)
+        
+        # Default Save Path
+        ttk.Label(general_frame, text='Default Save Location:', font=('TkDefaultFont', 9, 'bold')).grid(row=2, column=0, sticky=tk.W, pady=(15, 2), columnspan=3)
+        ttk.Label(general_frame, text='Path:', font=('TkDefaultFont', 8)).grid(row=3, column=0, sticky=tk.W, pady=5, padx=(10, 0))
+        self.general_vars['default_save_path'] = tk.StringVar(value=general_data.get('default_save_path', ''))
+        save_path_entry = ttk.Entry(general_frame, textvariable=self.general_vars['default_save_path'], width=40)
+        save_path_entry.grid(row=3, column=1, pady=5, padx=5, sticky=tk.W)
+        ttk.Button(general_frame, text='Browse...', command=self.browse_save_path).grid(row=3, column=2, pady=5, padx=5)
+        
+        ttk.Label(general_frame, text='Note: Leave empty to use current working directory', 
+                 font=('TkDefaultFont', 7, 'italic')).grid(row=4, column=0, sticky=tk.W, pady=(0, 5), padx=(10, 0), columnspan=3)
         
         # Get profiles from config
         profiles = self.config.get('profiles', {})
@@ -814,7 +874,46 @@ class SettingsDialog(tk.Toplevel):
         ttk.Button(btn_frame, text='Save', command=self.save_settings).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_frame, text='Cancel', command=self.destroy).pack(side=tk.LEFT, padx=5)
     
+    
+    def browse_csv(self):
+        """Browse for a CSV file."""
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.abspath(os.path.join(script_dir, os.pardir))
+        suno_dir = os.path.join(project_root, 'AI', 'suno')
+        
+        initial_dir = suno_dir if os.path.exists(suno_dir) else project_root
+        
+        path = filedialog.askopenfilename(
+            title='Select Suno Styles CSV',
+            filetypes=[('CSV Files', '*.csv'), ('All Files', '*.*')],
+            initialdir=initial_dir
+        )
+        if path:
+            # Store just the filename if it's in the AI/suno directory, otherwise full path
+            if os.path.dirname(path) == suno_dir:
+                self.general_vars['csv_file_path'].set(os.path.basename(path))
+            else:
+                self.general_vars['csv_file_path'].set(path)
+    
+    def browse_save_path(self):
+        """Browse for a directory to use as default save location."""
+        current = self.general_vars['default_save_path'].get()
+        initial_dir = current if current and os.path.exists(current) else os.getcwd()
+        
+        path = filedialog.askdirectory(
+            title='Select Default Save Location',
+            initialdir=initial_dir
+        )
+        if path:
+            self.general_vars['default_save_path'].set(path)
+    
     def save_settings(self):
+        # Update general settings in config
+        general = {
+            'csv_file_path': self.general_vars['csv_file_path'].get(),
+            'default_save_path': self.general_vars['default_save_path'].get()
+        }
+        
         # Update profiles in config
         profiles = {}
         for profile_name, vars_dict in self.profile_vars.items():
@@ -826,22 +925,31 @@ class SettingsDialog(tk.Toplevel):
                 'api_version': vars_dict['api_version'].get()
             }
         
+        self.config['general'] = general
         self.config['profiles'] = profiles
         self.result = self.config
         self.destroy()
 
 
 class SunoStyleBrowser(tk.Tk):
-    def __init__(self, csv_path: str):
+    def __init__(self, csv_path: str = None):
         super().__init__()
         self.title('Suno Style Browser')
         self.geometry('1280x900')
-        self.csv_path = csv_path
-        self.styles = load_styles(csv_path)
+        
+        # Load config first
+        self.ai_config = load_config()
+        
+        # Use provided CSV path or get from config
+        if csv_path:
+            self.csv_path = csv_path
+        else:
+            self.csv_path = get_csv_file_path(self.ai_config)
+        
+        self.styles = load_styles(self.csv_path)
         self.filtered = list(self.styles)
         self.sort_column = None
         self.sort_reverse = False
-        self.ai_config = load_config()
         self.current_row = None
 
         self.create_widgets()
@@ -852,6 +960,14 @@ class SunoStyleBrowser(tk.Tk):
         self.restore_last_selected_style()
         # Try load last saved album cover preview if available
         self.try_load_last_album_cover()
+    
+    def get_default_save_dir(self) -> str:
+        """Get the default save directory from config, or current directory if not set."""
+        save_path = self.ai_config.get('general', {}).get('default_save_path', '')
+        if save_path and os.path.exists(save_path) and os.path.isdir(save_path):
+            return save_path
+        return os.getcwd()
+
 
     def create_widgets(self):
         # Menu bar
@@ -860,7 +976,7 @@ class SunoStyleBrowser(tk.Tk):
         
         settings_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label='Settings', menu=settings_menu)
-        settings_menu.add_command(label='Azure AI Settings...', command=self.open_settings)
+        settings_menu.add_command(label='Settings...', command=self.open_settings)
         
         help_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label='Help', menu=help_menu)
@@ -2615,12 +2731,19 @@ Version: 1.0"""
     
     def open_settings(self):
         """Open settings dialog."""
+        old_csv_path = self.csv_path
         dialog = SettingsDialog(self, self.ai_config)
         self.wait_window(dialog)
         if dialog.result:
             self.ai_config = dialog.result
             if save_config(self.ai_config):
                 self.log_debug('INFO', 'Settings saved successfully.')
+                # Check if CSV path changed
+                new_csv_path = get_csv_file_path(self.ai_config)
+                if new_csv_path != old_csv_path:
+                    self.csv_path = new_csv_path
+                    self.reload_csv()
+                    self.log_debug('INFO', f'CSV file changed to: {self.csv_path}')
             else:
                 self.log_debug('ERROR', 'Failed to save settings.')
 
@@ -2643,9 +2766,11 @@ Version: 1.0"""
 
 
 def main():
-    csv_path = resolve_csv_path()
+    # Allow command line override of CSV path
+    csv_path = None
     if len(sys.argv) > 1:
         csv_path = sys.argv[1]
+    # Otherwise it will be loaded from config in __init__
     app = SunoStyleBrowser(csv_path)
     app.mainloop()
 
