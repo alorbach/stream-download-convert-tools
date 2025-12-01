@@ -1,0 +1,4199 @@
+import json
+import os
+import sys
+import tkinter as tk
+from tkinter import ttk, messagebox, filedialog, scrolledtext
+import requests
+import base64
+import urllib.parse
+import glob
+import time
+import shutil
+import re
+from PIL import Image, ImageTk
+
+# Try to import mutagen for MP3 duration
+try:
+    from mutagen.mp3 import MP3
+    from mutagen.id3 import ID3NoHeaderError
+    MUTAGEN_AVAILABLE = True
+except ImportError:
+    MUTAGEN_AVAILABLE = False
+
+
+class ToolTip:
+    """Create a tooltip for a widget."""
+    def __init__(self, widget, text=''):
+        self.widget = widget
+        self.text = text
+        self.tipwindow = None
+        self.id = None
+        self.x = self.y = 0
+        self.widget.bind('<Enter>', self.enter)
+        self.widget.bind('<Leave>', self.leave)
+        self.widget.bind('<ButtonPress>', self.leave)
+    
+    def enter(self, event=None):
+        self.schedule()
+    
+    def leave(self, event=None):
+        self.unschedule()
+        self.hidetip()
+    
+    def schedule(self):
+        self.unschedule()
+        self.id = self.widget.after(500, self.showtip)
+    
+    def unschedule(self):
+        id = self.id
+        self.id = None
+        if id:
+            self.widget.after_cancel(id)
+    
+    def showtip(self):
+        x, y, cx, cy = self.widget.bbox("insert") if hasattr(self.widget, 'bbox') else (0, 0, 0, 0)
+        x += self.widget.winfo_rootx() + 25
+        y += self.widget.winfo_rooty() + 20
+        
+        self.tipwindow = tw = tk.Toplevel(self.widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry("+%d+%d" % (x, y))
+        
+        label = tk.Label(tw, text=self.text, justify=tk.LEFT,
+                        background="#ffffe0", relief=tk.SOLID, borderwidth=1,
+                        font=("tahoma", "8", "normal"), wraplength=300)
+        label.pack(ipadx=1)
+    
+    def hidetip(self):
+        tw = self.tipwindow
+        self.tipwindow = None
+        if tw:
+            tw.destroy()
+    
+    def set_text(self, text):
+        self.text = text
+
+
+def create_tooltip(widget, text):
+    """Helper function to create a tooltip."""
+    return ToolTip(widget, text)
+
+
+def get_config_path() -> str:
+    """Get the path to the config.json file in the script's directory."""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(script_dir, 'suno_persona_config.json')
+
+
+def resolve_personas_path() -> str:
+    """Resolve default Personas path in AI/Personas/ relative to project root."""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.abspath(os.path.join(script_dir, os.pardir))
+    default_path = os.path.join(project_root, 'AI', 'Personas')
+    return default_path
+
+
+def resolve_prompts_path() -> str:
+    """Resolve default prompts path in AI/suno/prompts/ relative to project root."""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.abspath(os.path.join(script_dir, os.pardir))
+    default_path = os.path.join(project_root, 'AI', 'suno', 'prompts')
+    return default_path
+
+
+def load_config() -> dict:
+    """Load configuration from JSON file, create default if it doesn't exist."""
+    config_path = get_config_path()
+    default_config = {
+        "general": {
+            "personas_path": "AI/Personas",
+            "default_save_path": ""
+        },
+        "profiles": {
+            "text": {
+                "endpoint": "https://your-endpoint.cognitiveservices.azure.com/",
+                "model_name": "gpt-4",
+                "deployment": "gpt-4",
+                "subscription_key": "<your-api-key>",
+                "api_version": "2024-12-01-preview"
+            },
+            "image_gen": {
+                "endpoint": "https://your-endpoint.cognitiveservices.azure.com/",
+                "model_name": "dall-e-3",
+                "deployment": "dall-e-3",
+                "subscription_key": "<your-api-key>",
+                "api_version": "2024-02-15-preview"
+            },
+            "video_gen": {
+                "endpoint": "https://your-endpoint.cognitiveservices.azure.com/",
+                "model_name": "imagevideo",
+                "deployment": "imagevideo",
+                "subscription_key": "<your-api-key>",
+                "api_version": "2024-02-15-preview"
+            }
+        }
+    }
+    
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+                
+                # Merge with defaults to ensure all keys exist
+                for key in default_config:
+                    if key not in config:
+                        config[key] = default_config[key]
+                    elif key == 'profiles' and isinstance(config[key], dict):
+                        for profile_name in default_config['profiles']:
+                            if profile_name not in config['profiles']:
+                                config['profiles'][profile_name] = default_config['profiles'][profile_name]
+                            else:
+                                for setting_key in default_config['profiles'][profile_name]:
+                                    if setting_key not in config['profiles'][profile_name]:
+                                        config['profiles'][profile_name][setting_key] = default_config['profiles'][profile_name][setting_key]
+                    elif key == 'general' and isinstance(config[key], dict):
+                        for sub_key in default_config['general']:
+                            if sub_key not in config[key]:
+                                config[key][sub_key] = default_config['general'][sub_key]
+                return config
+        except Exception as exc:
+            print(f'Config Error: Failed to load config:\n{exc}')
+            return default_config
+    else:
+        try:
+            with open(config_path, 'w', encoding='utf-8') as f:
+                json.dump(default_config, f, indent=4)
+        except Exception as exc:
+            print(f'Config Error: Failed to create config:\n{exc}')
+        return default_config
+
+
+def save_config(config: dict):
+    """Save configuration to JSON file."""
+    config_path = get_config_path()
+    try:
+        with open(config_path, 'w', encoding='utf-8') as f:
+            json.dump(config, f, indent=4)
+        return True
+    except Exception as exc:
+        print(f'Config Error: Failed to save config:\n{exc}')
+        return False
+
+
+def get_personas_path(config: dict) -> str:
+    """Get the Personas directory path from config, resolving relative paths."""
+    personas_path = config.get('general', {}).get('personas_path', 'AI/Personas')
+    
+    if os.path.isabs(personas_path) and os.path.exists(personas_path):
+        return personas_path
+    
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.abspath(os.path.join(script_dir, os.pardir))
+    full_path = os.path.join(project_root, personas_path)
+    
+    if os.path.exists(full_path):
+        return full_path
+    
+    return resolve_personas_path()
+
+
+def get_prompt_template(template_name: str) -> str:
+    """Get prompt template by name from file system."""
+    prompts_dir = resolve_prompts_path()
+    template_file = os.path.join(prompts_dir, f'{template_name}.txt')
+    
+    try:
+        if os.path.exists(template_file):
+            with open(template_file, 'r', encoding='utf-8') as f:
+                return f.read()
+        else:
+            print(f'Warning: Template file not found: {template_file}')
+            return ''
+    except Exception as e:
+        print(f'Error loading template {template_name}: {e}')
+        return ''
+
+
+def call_azure_ai(config: dict, prompt: str, system_message: str = None, profile: str = 'text', max_tokens: int = 8000) -> dict:
+    """Generic Azure AI caller function."""
+    try:
+        profiles = config.get('profiles', {})
+        if profile not in profiles:
+            return {
+                'success': False,
+                'content': '',
+                'error': f'Profile "{profile}" not found in configuration.'
+            }
+        
+        profile_config = profiles[profile]
+        endpoint = profile_config.get('endpoint', '').rstrip('/')
+        deployment = profile_config.get('deployment', '')
+        api_version = profile_config.get('api_version', '2024-12-01-preview')
+        subscription_key = profile_config.get('subscription_key', '')
+        
+        if not all([endpoint, deployment, subscription_key]):
+            return {
+                'success': False,
+                'content': '',
+                'error': f'Missing Azure AI configuration for profile "{profile}". Please configure settings.'
+            }
+        
+        url = f"{endpoint}/openai/deployments/{deployment}/chat/completions?api-version={api_version}"
+        
+        headers = {
+            'Content-Type': 'application/json',
+            'api-key': subscription_key
+        }
+        
+        messages = []
+        if system_message:
+            messages.append({'role': 'system', 'content': system_message})
+        messages.append({'role': 'user', 'content': prompt})
+        
+        # Use max_completion_tokens for newer Azure models (required by newer models)
+        # Fallback to max_tokens for older API versions if needed
+        # GPT-4/5 models support much higher limits (8k-128k depending on model)
+        payload = {
+            'messages': messages,
+            'temperature': 0.7,
+            'max_completion_tokens': max_tokens
+        }
+        
+        response = requests.post(url, headers=headers, json=payload, timeout=30)
+        
+        # Handle model-specific parameter restrictions
+        if response.status_code == 400:
+            try:
+                error_data = response.json()
+                error_msg = str(error_data.get('error', {}).get('message', '')).lower()
+                
+                # Handle temperature restriction (some models only support default temperature=1)
+                if 'temperature' in error_msg and ('not support' in error_msg or 'only the default' in error_msg):
+                    # Remove temperature parameter to use default (1)
+                    payload.pop('temperature', None)
+                    response = requests.post(url, headers=headers, json=payload, timeout=30)
+                    # If still error, continue to other checks
+                    if response.status_code == 200:
+                        pass  # Success, will be handled below
+                    elif response.status_code == 400:
+                        error_data = response.json()
+                        error_msg = str(error_data.get('error', {}).get('message', '')).lower()
+                
+                # Handle max_completion_tokens restriction (fallback to max_tokens for older API versions)
+                if response.status_code == 400 and 'max_completion_tokens' in error_msg and 'not supported' in error_msg:
+                    payload.pop('max_completion_tokens', None)
+                    payload['max_tokens'] = max_tokens
+                    response = requests.post(url, headers=headers, json=payload, timeout=30)
+            except:
+                pass
+        
+        if response.status_code == 200:
+            result = response.json()
+            content = result['choices'][0]['message']['content']
+            return {
+                'success': True,
+                'content': content,
+                'error': ''
+            }
+        else:
+            return {
+                'success': False,
+                'content': '',
+                'error': f'Azure AI error: {response.status_code} - {response.text}'
+            }
+    
+    except requests.exceptions.RequestException as e:
+        return {
+            'success': False,
+            'content': '',
+            'error': f'Request error: {str(e)}'
+        }
+    except Exception as e:
+        return {
+            'success': False,
+            'content': '',
+            'error': f'Unexpected error: {str(e)}'
+        }
+
+
+def call_azure_vision(config: dict, image_paths: list, prompt: str, system_message: str = None, profile: str = 'text') -> dict:
+    """Call Azure Vision API with multiple images."""
+    try:
+        profiles = config.get('profiles', {})
+        if profile not in profiles:
+            return {
+                'success': False,
+                'content': '',
+                'error': f'Profile "{profile}" not found in configuration.'
+            }
+        
+        profile_config = profiles[profile]
+        endpoint = profile_config.get('endpoint', '').rstrip('/')
+        deployment = profile_config.get('deployment', '')
+        api_version = profile_config.get('api_version', '2024-12-01-preview')
+        subscription_key = profile_config.get('subscription_key', '')
+        
+        if not all([endpoint, deployment, subscription_key]):
+            return {
+                'success': False,
+                'content': '',
+                'error': f'Missing Azure AI configuration for profile "{profile}". Please configure settings.'
+            }
+        
+        url = f"{endpoint}/openai/deployments/{deployment}/chat/completions?api-version={api_version}"
+        
+        headers = {
+            'Content-Type': 'application/json',
+            'api-key': subscription_key
+        }
+        
+        # Read and encode images
+        image_contents = []
+        for img_path in image_paths:
+            try:
+                with open(img_path, 'rb') as f:
+                    img_data = f.read()
+                    img_base64 = base64.b64encode(img_data).decode('utf-8')
+                    # Determine image format from extension
+                    ext = os.path.splitext(img_path)[1].lower()
+                    if ext in ['.png']:
+                        mime_type = 'image/png'
+                    elif ext in ['.jpg', '.jpeg']:
+                        mime_type = 'image/jpeg'
+                    elif ext in ['.gif']:
+                        mime_type = 'image/gif'
+                    elif ext in ['.webp']:
+                        mime_type = 'image/webp'
+                    else:
+                        mime_type = 'image/png'  # default
+                    
+                    image_contents.append({
+                        'type': 'image_url',
+                        'image_url': {
+                            'url': f'data:{mime_type};base64,{img_base64}'
+                        }
+                    })
+            except Exception as e:
+                return {
+                    'success': False,
+                    'content': '',
+                    'error': f'Failed to read image {img_path}: {str(e)}'
+                }
+        
+        # Build messages with images
+        messages = []
+        if system_message:
+            messages.append({'role': 'system', 'content': system_message})
+        
+        # Create user message with text and images
+        user_content = [{'type': 'text', 'text': prompt}]
+        user_content.extend(image_contents)
+        messages.append({'role': 'user', 'content': user_content})
+        
+        payload = {
+            'messages': messages,
+            'max_completion_tokens': 2000
+        }
+        
+        response = requests.post(url, headers=headers, json=payload, timeout=60)
+        
+        # Handle model-specific parameter restrictions
+        if response.status_code == 400:
+            try:
+                error_data = response.json()
+                error_msg = str(error_data.get('error', {}).get('message', '')).lower()
+                
+                # Handle max_completion_tokens restriction
+                if 'max_completion_tokens' in error_msg and 'not supported' in error_msg:
+                    payload.pop('max_completion_tokens', None)
+                    payload['max_tokens'] = 2000
+                    response = requests.post(url, headers=headers, json=payload, timeout=60)
+            except:
+                pass
+        
+        if response.status_code == 200:
+            result = response.json()
+            content = result['choices'][0]['message']['content']
+            return {
+                'success': True,
+                'content': content,
+                'error': ''
+            }
+        else:
+            return {
+                'success': False,
+                'content': '',
+                'error': f'Azure Vision error: {response.status_code} - {response.text}'
+            }
+    
+    except requests.exceptions.RequestException as e:
+        return {
+            'success': False,
+            'content': '',
+            'error': f'Request error: {str(e)}'
+        }
+    except Exception as e:
+        return {
+            'success': False,
+            'content': '',
+            'error': f'Unexpected error: {str(e)}'
+        }
+
+
+def _sanitize_azure_endpoint(raw_endpoint: str) -> str:
+    """Return base Azure endpoint without extra path or query."""
+    if not raw_endpoint:
+        return ''
+    raw = raw_endpoint.strip().rstrip('/')
+    try:
+        parsed = urllib.parse.urlparse(raw)
+        if parsed.scheme and parsed.netloc:
+            return f"{parsed.scheme}://{parsed.netloc}"
+    except Exception:
+        pass
+    return raw
+
+
+def call_azure_image(config: dict, prompt: str, size: str = '1024x1024', profile: str = 'image_gen', quality: str = 'medium', output_format: str = 'png', output_compression: int = 100) -> dict:
+    """Call Azure OpenAI Images API to generate an image from a prompt.
+    
+    Args:
+        config: Configuration dictionary
+        prompt: Text prompt for image generation
+        size: Image size (e.g., '1024x1024')
+        profile: Profile name from config
+        quality: Image quality ('standard' or 'hd')
+        output_format: Output format ('png' or 'jpeg')
+        output_compression: Compression level (0-100)
+    """
+    try:
+        profiles = config.get('profiles', {})
+        if profile not in profiles:
+            return {
+                'success': False,
+                'image_bytes': b'',
+                'error': f'Profile "{profile}" not found in configuration.'
+            }
+
+        profile_config = profiles[profile]
+        endpoint_raw = profile_config.get('endpoint', '')
+        endpoint = _sanitize_azure_endpoint(endpoint_raw)
+        deployment = profile_config.get('deployment', '')
+        api_version = profile_config.get('api_version', '2024-02-15-preview')
+        subscription_key = profile_config.get('subscription_key', '')
+
+        if not all([endpoint, deployment, subscription_key]):
+            return {
+                'success': False,
+                'image_bytes': b'',
+                'error': f'Missing Azure Image configuration for profile "{profile}". Please configure settings.'
+            }
+
+        url = f"{endpoint}/openai/deployments/{deployment}/images/generations?api-version={api_version}"
+
+        headers = {
+            'Content-Type': 'application/json',
+            'api-key': subscription_key
+        }
+
+        payload = {
+            'prompt': prompt,
+            'size': size,
+            'quality': quality,
+            'output_compression': output_compression,
+            'output_format': output_format,
+            'n': 1
+        }
+        
+        # Note: Azure DALL-E API doesn't support reference images directly
+        # Reference images are handled by analyzing them first and including the description in the prompt
+
+        response = requests.post(url, headers=headers, json=payload, timeout=60)
+        if response.status_code == 200:
+            result = response.json()
+            data = result.get('data', [])
+            if not data:
+                return {'success': False, 'image_bytes': b'', 'error': 'No image data returned.'}
+            b64 = data[0].get('b64_json', '')
+            if not b64:
+                return {'success': False, 'image_bytes': b'', 'error': 'Missing b64_json in response.'}
+            img_bytes = base64.b64decode(b64)
+            return {'success': True, 'image_bytes': img_bytes, 'error': ''}
+
+        if response.status_code == 404 and api_version != '2025-04-01-preview':
+            fallback_version = '2025-04-01-preview'
+            fallback_url = f"{endpoint}/openai/deployments/{deployment}/images/generations?api-version={fallback_version}"
+            response_fb = requests.post(fallback_url, headers=headers, json=payload, timeout=60)
+            if response_fb.status_code == 200:
+                result = response_fb.json()
+                data = result.get('data', [])
+                if not data:
+                    return {'success': False, 'image_bytes': b'', 'error': 'No image data returned.'}
+                b64 = data[0].get('b64_json', '')
+                if not b64:
+                    return {'success': False, 'image_bytes': b'', 'error': 'Missing b64_json in response.'}
+                img_bytes = base64.b64decode(b64)
+                return {'success': True, 'image_bytes': img_bytes, 'error': ''}
+
+        return {
+            'success': False,
+            'image_bytes': b'',
+            'error': f'Azure Images error: {response.status_code} - {response.text}'
+        }
+    except requests.exceptions.RequestException as e:
+        return {
+            'success': False,
+            'image_bytes': b'',
+            'error': f'Request error: {e}'
+        }
+    except Exception as e:
+        return {
+            'success': False,
+            'image_bytes': b'',
+            'error': f'Unexpected error: {e}'
+        }
+
+
+class ExtraCommandsDialog(tk.Toplevel):
+    """Dialog for entering extra commands to inject into the prompt."""
+    
+    def __init__(self, parent, current_prompt: str = ''):
+        super().__init__(parent)
+        self.title('Inject Extra Commands')
+        self.geometry('700x450')
+        self.transient(parent)
+        self.grab_set()
+        
+        self.result = None
+        
+        self.create_widgets(current_prompt)
+        
+        self.update_idletasks()
+        x = parent.winfo_x() + (parent.winfo_width() // 2) - (self.winfo_width() // 2)
+        y = parent.winfo_y() + (parent.winfo_height() // 2) - (self.winfo_height() // 2)
+        self.geometry(f"+{x}+{y}")
+        
+        self.extra_commands_text.focus_set()
+    
+    def create_widgets(self, current_prompt: str):
+        main_frame = ttk.Frame(self, padding=10)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        ttk.Label(main_frame, text='Enter extra commands to inject into the prompt:', font=('TkDefaultFont', 9, 'bold')).pack(anchor=tk.W, pady=(0, 5))
+        
+        ttk.Label(main_frame, text='Current prompt:', font=('TkDefaultFont', 8)).pack(anchor=tk.W, pady=(5, 2))
+        prompt_preview = scrolledtext.ScrolledText(main_frame, height=4, wrap=tk.WORD, state=tk.DISABLED, font=('Consolas', 8))
+        prompt_preview.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        prompt_preview.config(state=tk.NORMAL)
+        prompt_preview.insert('1.0', current_prompt[:500] + ('...' if len(current_prompt) > 500 else ''))
+        prompt_preview.config(state=tk.DISABLED)
+        
+        ttk.Label(main_frame, text='Extra commands (leave empty to use prompt as-is):', font=('TkDefaultFont', 8)).pack(anchor=tk.W, pady=(5, 2))
+        self.extra_commands_text = scrolledtext.ScrolledText(main_frame, height=4, wrap=tk.WORD, font=('Consolas', 9))
+        self.extra_commands_text.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(fill=tk.X, pady=(5, 0))
+        ttk.Button(btn_frame, text='OK', command=self.ok_clicked).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text='Cancel', command=self.cancel_clicked).pack(side=tk.LEFT, padx=5)
+        
+        self.bind('<Escape>', lambda e: self.cancel_clicked())
+    
+    def ok_clicked(self):
+        extra_commands = self.extra_commands_text.get('1.0', tk.END).strip()
+        self.result = extra_commands if extra_commands else ''
+        self.destroy()
+    
+    def cancel_clicked(self):
+        self.result = None
+        self.destroy()
+
+
+class AIPromptDialog(tk.Toplevel):
+    """Dialog for AI prompt enhancement with extra instructions."""
+    
+    def __init__(self, parent, field_name: str, current_value: str = ''):
+        super().__init__(parent)
+        self.title(f'AI Enhance: {field_name}')
+        self.geometry('600x400')
+        self.transient(parent)
+        self.grab_set()
+        
+        self.result = None
+        
+        self.create_widgets(field_name, current_value)
+        
+        self.update_idletasks()
+        x = parent.winfo_x() + (parent.winfo_width() // 2) - (self.winfo_width() // 2)
+        y = parent.winfo_y() + (parent.winfo_height() // 2) - (self.winfo_height() // 2)
+        self.geometry(f"+{x}+{y}")
+        
+        self.extra_instructions_text.focus_set()
+    
+    def create_widgets(self, field_name: str, current_value: str):
+        main_frame = ttk.Frame(self, padding=10)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        ttk.Label(main_frame, text=f'Enhance "{field_name}" with AI:', font=('TkDefaultFont', 9, 'bold')).pack(anchor=tk.W, pady=(0, 5))
+        
+        ttk.Label(main_frame, text='Current value:', font=('TkDefaultFont', 8)).pack(anchor=tk.W, pady=(5, 2))
+        current_preview = scrolledtext.ScrolledText(main_frame, height=3, wrap=tk.WORD, state=tk.DISABLED, font=('Consolas', 8))
+        current_preview.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        current_preview.config(state=tk.NORMAL)
+        current_preview.insert('1.0', current_value[:300] + ('...' if len(current_value) > 300 else ''))
+        current_preview.config(state=tk.DISABLED)
+        
+        ttk.Label(main_frame, text='Additional instructions (optional):', font=('TkDefaultFont', 8)).pack(anchor=tk.W, pady=(5, 2))
+        self.extra_instructions_text = scrolledtext.ScrolledText(main_frame, height=4, wrap=tk.WORD, font=('Consolas', 9))
+        self.extra_instructions_text.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(fill=tk.X, pady=(5, 0))
+        ttk.Button(btn_frame, text='Generate', command=self.ok_clicked).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text='Cancel', command=self.cancel_clicked).pack(side=tk.LEFT, padx=5)
+        
+        self.bind('<Escape>', lambda e: self.cancel_clicked())
+    
+    def ok_clicked(self):
+        extra_instructions = self.extra_instructions_text.get('1.0', tk.END).strip()
+        self.result = extra_instructions
+        self.destroy()
+    
+    def cancel_clicked(self):
+        self.result = None
+        self.destroy()
+
+
+class ProgressDialog(tk.Toplevel):
+    """Dialog for showing progress and allowing cancellation."""
+    
+    def __init__(self, parent, total_items: int, title: str = 'Progress'):
+        super().__init__(parent)
+        self.title(title)
+        self.geometry('400x150')
+        self.transient(parent)
+        self.grab_set()
+        
+        self.total_items = total_items
+        self.current_item = 0
+        self.cancelled = False
+        
+        self.create_widgets()
+        
+        self.update_idletasks()
+        x = parent.winfo_x() + (parent.winfo_width() // 2) - (self.winfo_width() // 2)
+        y = parent.winfo_y() + (parent.winfo_height() // 2) - (self.winfo_height() // 2)
+        self.geometry(f"+{x}+{y}")
+    
+    def create_widgets(self):
+        main_frame = ttk.Frame(self, padding=10)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        self.status_label = ttk.Label(main_frame, text='Initializing...', font=('TkDefaultFont', 9))
+        self.status_label.pack(pady=5)
+        
+        self.progress_var = tk.DoubleVar()
+        self.progress_bar = ttk.Progressbar(main_frame, variable=self.progress_var, maximum=100, length=350)
+        self.progress_bar.pack(pady=10)
+        
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(pady=5)
+        ttk.Button(btn_frame, text='Cancel', command=self.cancel).pack()
+        
+        self.protocol("WM_DELETE_WINDOW", self.cancel)
+    
+    def update_progress(self, current: int, status_text: str = ''):
+        """Update progress bar and status text."""
+        self.current_item = current
+        progress = (current / self.total_items) * 100 if self.total_items > 0 else 0
+        self.progress_var.set(progress)
+        if status_text:
+            self.status_label.config(text=status_text)
+        self.update()
+    
+    def cancel(self):
+        """Mark as cancelled."""
+        self.cancelled = True
+        self.status_label.config(text='Cancelling...')
+        self.update()
+    
+    def is_cancelled(self):
+        """Check if cancelled."""
+        return self.cancelled
+
+
+class SettingsDialog(tk.Toplevel):
+    """Dialog for editing configuration settings."""
+    
+    def __init__(self, parent, config):
+        super().__init__(parent)
+        self.title('Settings')
+        self.geometry('600x500')
+        self.transient(parent)
+        self.grab_set()
+        
+        self.config = config.copy()
+        self.result = None
+        
+        self.profile_vars = {}
+        
+        self.create_widgets()
+        
+        self.update_idletasks()
+        x = parent.winfo_x() + (parent.winfo_width() // 2) - (self.winfo_width() // 2)
+        y = parent.winfo_y() + (parent.winfo_height() // 2) - (self.winfo_height() // 2)
+        self.geometry(f"+{x}+{y}")
+    
+    def create_widgets(self):
+        main_frame = ttk.Frame(self, padding=10)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        notebook = ttk.Notebook(main_frame)
+        notebook.pack(fill=tk.BOTH, expand=True)
+        
+        general_frame = ttk.Frame(notebook, padding=10)
+        notebook.add(general_frame, text='General')
+        
+        general_data = self.config.get('general', {})
+        self.general_vars = {}
+        
+        ttk.Label(general_frame, text='Personas Directory:', font=('TkDefaultFont', 9, 'bold')).grid(row=0, column=0, sticky=tk.W, pady=(5, 2), columnspan=3)
+        ttk.Label(general_frame, text='Path:', font=('TkDefaultFont', 8)).grid(row=1, column=0, sticky=tk.W, pady=5, padx=(10, 0))
+        self.general_vars['personas_path'] = tk.StringVar(value=general_data.get('personas_path', 'AI/Personas'))
+        path_entry = ttk.Entry(general_frame, textvariable=self.general_vars['personas_path'], width=40)
+        path_entry.grid(row=1, column=1, pady=5, padx=5, sticky=tk.W)
+        ttk.Button(general_frame, text='Browse...', command=self.browse_personas_path).grid(row=1, column=2, pady=5, padx=5)
+        
+        profiles = self.config.get('profiles', {})
+        
+        self.profile_vars = {}
+        for profile_name in ['text', 'image_gen', 'video_gen']:
+            profile_data = profiles.get(profile_name, {})
+            self.profile_vars[profile_name] = {}
+            
+            profile_frame = ttk.Frame(notebook, padding=10)
+            notebook.add(profile_frame, text=profile_name.replace('_', ' ').title())
+            
+            ttk.Label(profile_frame, text='Endpoint:').grid(row=0, column=0, sticky=tk.W, pady=5)
+            self.profile_vars[profile_name]['endpoint'] = tk.StringVar(value=profile_data.get('endpoint', ''))
+            ttk.Entry(profile_frame, textvariable=self.profile_vars[profile_name]['endpoint'], width=50).grid(row=0, column=1, pady=5, padx=5)
+            
+            ttk.Label(profile_frame, text='Model Name:').grid(row=1, column=0, sticky=tk.W, pady=5)
+            self.profile_vars[profile_name]['model_name'] = tk.StringVar(value=profile_data.get('model_name', ''))
+            ttk.Entry(profile_frame, textvariable=self.profile_vars[profile_name]['model_name'], width=50).grid(row=1, column=1, pady=5, padx=5)
+            
+            ttk.Label(profile_frame, text='Deployment:').grid(row=2, column=0, sticky=tk.W, pady=5)
+            self.profile_vars[profile_name]['deployment'] = tk.StringVar(value=profile_data.get('deployment', ''))
+            ttk.Entry(profile_frame, textvariable=self.profile_vars[profile_name]['deployment'], width=50).grid(row=2, column=1, pady=5, padx=5)
+            
+            ttk.Label(profile_frame, text='Subscription Key:').grid(row=3, column=0, sticky=tk.W, pady=5)
+            self.profile_vars[profile_name]['subscription_key'] = tk.StringVar(value=profile_data.get('subscription_key', ''))
+            ttk.Entry(profile_frame, textvariable=self.profile_vars[profile_name]['subscription_key'], width=50, show='*').grid(row=3, column=1, pady=5, padx=5)
+            
+            ttk.Label(profile_frame, text='API Version:').grid(row=4, column=0, sticky=tk.W, pady=5)
+            self.profile_vars[profile_name]['api_version'] = tk.StringVar(value=profile_data.get('api_version', ''))
+            ttk.Entry(profile_frame, textvariable=self.profile_vars[profile_name]['api_version'], width=50).grid(row=4, column=1, pady=5, padx=5)
+        
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(fill=tk.X, pady=10)
+        ttk.Button(btn_frame, text='Save', command=self.save_settings).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text='Cancel', command=self.destroy).pack(side=tk.LEFT, padx=5)
+    
+    def browse_personas_path(self):
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.abspath(os.path.join(script_dir, os.pardir))
+        initial_dir = os.path.join(project_root, 'AI', 'Personas')
+        
+        if not os.path.exists(initial_dir):
+            initial_dir = project_root
+        
+        path = filedialog.askdirectory(
+            title='Select Personas Directory',
+            initialdir=initial_dir
+        )
+        if path:
+            # Store relative path if within project
+            try:
+                rel_path = os.path.relpath(path, project_root)
+                if not rel_path.startswith('..'):
+                    self.general_vars['personas_path'].set(rel_path.replace('\\', '/'))
+                else:
+                    self.general_vars['personas_path'].set(path)
+            except:
+                self.general_vars['personas_path'].set(path)
+    
+    def save_settings(self):
+        general = {
+            'personas_path': self.general_vars['personas_path'].get(),
+            'default_save_path': self.config.get('general', {}).get('default_save_path', '')
+        }
+        
+        profiles = {}
+        for profile_name, vars_dict in self.profile_vars.items():
+            profiles[profile_name] = {
+                'endpoint': vars_dict['endpoint'].get(),
+                'model_name': vars_dict['model_name'].get(),
+                'deployment': vars_dict['deployment'].get(),
+                'subscription_key': vars_dict['subscription_key'].get(),
+                'api_version': vars_dict['api_version'].get()
+            }
+        
+        self.config['general'] = general
+        self.config['profiles'] = profiles
+        self.result = self.config
+        self.destroy()
+
+
+def call_azure_video(config: dict, prompt: str, size: str = '720x1280', seconds: str = '4', profile: str = 'video_gen') -> dict:
+    """Call a video generations endpoint."""
+    try:
+        profiles = config.get('profiles', {})
+        if profile not in profiles:
+            return {'success': False, 'video_bytes': b'', 'url': '', 'error': f'Profile "{profile}" not found'}
+
+        profile_config = profiles[profile]
+        endpoint = (profile_config.get('endpoint', '') or '').strip()
+        model_name = profile_config.get('model_name', 'sora-2')
+        deployment = profile_config.get('deployment', '')
+        api_version = profile_config.get('api_version', '')
+        subscription_key = profile_config.get('subscription_key', '')
+
+        if not endpoint or not subscription_key:
+            return {'success': False, 'video_bytes': b'', 'url': '', 'error': 'Missing video endpoint or key'}
+
+        url = endpoint.rstrip('/')
+        try:
+            parsed = urllib.parse.urlparse(endpoint)
+            path_lower = (parsed.path or '').lower()
+            is_base = (path_lower == '' or path_lower == '/')
+        except Exception:
+            is_base = False
+            path_lower = ''
+
+        use_jobs_api = False
+        public_url = jobs_url = ''
+        if 'openai/v1/video' in path_lower:
+            if not url.endswith('/jobs'):
+                url = f"{url}/jobs"
+            use_jobs_api = True
+        elif is_base and deployment:
+            public_url = f"{url}/openai/deployments/{deployment}/video/generations"
+            jobs_url = f"{url}/openai/deployments/{deployment}/video/generations/jobs"
+            url = public_url
+            use_jobs_api = False
+        else:
+            url = f"{url}/openai/v1/video/generations/jobs"
+            use_jobs_api = True
+
+        if api_version and 'api-version=' not in url:
+            sep = '&' if '?' in url else '?'
+            url = f"{url}{sep}api-version={api_version}"
+
+        headers = {
+            'Content-Type': 'application/json',
+            'Api-key': subscription_key
+        }
+
+        width, height = None, None
+        try:
+            parts = size.lower().split('x')
+            if len(parts) == 2:
+                width = str(int(parts[0]))
+                height = str(int(parts[1]))
+        except Exception:
+            pass
+
+        using_jobs_api = (
+            ('/openai/v1/video/' in url) or ('/openai/deployments/' in url and '/video/generations/jobs' in url)
+        ) and (url.endswith('/jobs') or '/jobs?' in url)
+
+        if using_jobs_api:
+            payload = {
+                'prompt': prompt,
+                'n_variants': '1',
+                'n_seconds': str(seconds),
+                'height': height or '1280',
+                'width': width or '720',
+                'model': model_name or deployment or 'sora-2'
+            }
+        else:
+            payload = {
+                'model': model_name or deployment or 'sora-2',
+                'prompt': prompt,
+                'size': size,
+                'seconds': str(seconds)
+            }
+
+        resp = requests.post(url, headers=headers, json=payload, timeout=120)
+        ctype = resp.headers.get('Content-Type', '')
+        debug_info = {
+            'url': url,
+            'api_version': api_version,
+            'model': model_name,
+            'size': size,
+            'seconds': str(seconds),
+            'status': resp.status_code,
+            'content_type': ctype,
+        }
+        if resp.status_code == 200 and not using_jobs_api:
+            if 'video' in ctype or 'application/octet-stream' in ctype:
+                return {'success': True, 'video_bytes': resp.content, 'url': '', 'error': '', 'debug': debug_info}
+            try:
+                data = resp.json()
+                if isinstance(data, dict):
+                    url_value = data.get('url') or data.get('video_url') or ''
+                    if url_value:
+                        return {'success': True, 'video_bytes': b'', 'url': url_value, 'error': '', 'debug': debug_info}
+                    b64 = ''
+                    if 'data' in data and isinstance(data['data'], list) and data['data']:
+                        b64 = data['data'][0].get('b64_json', '') or data['data'][0].get('video_b64', '')
+                    b64 = b64 or data.get('b64_json', '') or data.get('video_b64', '')
+                    if b64:
+                        return {'success': True, 'video_bytes': base64.b64decode(b64), 'url': '', 'error': '', 'debug': debug_info}
+                debug_info['body_preview'] = resp.text[:500]
+                return {'success': False, 'video_bytes': b'', 'url': '', 'error': 'Unknown video response format', 'debug': debug_info}
+            except Exception as e:
+                body_preview = ''
+                try:
+                    body_preview = resp.text[:500]
+                except Exception:
+                    pass
+                debug_info['body_preview'] = body_preview
+                return {'success': False, 'video_bytes': b'', 'url': '', 'error': f'Invalid JSON response: {e}', 'debug': debug_info}
+        
+        if (resp.status_code in (400, 404)) and (public_url and jobs_url) and (not using_jobs_api):
+            body_text = ''
+            try:
+                body_text = resp.text
+            except Exception:
+                pass
+            if ('private preview' in body_text.lower()) or (resp.status_code == 404):
+                url = jobs_url
+                if api_version and 'api-version=' not in url:
+                    sep = '&' if '?' in url else '?'
+                    url = f"{url}{sep}api-version={api_version}"
+                payload = {
+                    'prompt': prompt,
+                    'n_variants': '1',
+                    'n_seconds': str(seconds),
+                    'height': height or '1280',
+                    'width': width or '720',
+                    'model': model_name or deployment or 'sora-2'
+                }
+                resp = requests.post(url, headers=headers, json=payload, timeout=120)
+                ctype = resp.headers.get('Content-Type', '')
+                debug_info.update({'url': url, 'status': resp.status_code, 'content_type': ctype})
+                using_jobs_api = True
+
+        if using_jobs_api:
+            try:
+                job = resp.json()
+            except Exception as e:
+                debug_info['body_preview'] = resp.text[:500] if resp.text else ''
+                return {'success': False, 'video_bytes': b'', 'url': '', 'error': f'Invalid jobs JSON response: {e}', 'debug': debug_info}
+
+            job_id = job.get('id') or job.get('job_id')
+            status = job.get('status', '').lower()
+            if not job_id:
+                debug_info['body_preview'] = resp.text[:500] if resp.text else ''
+                return {'success': False, 'video_bytes': b'', 'url': '', 'error': 'No job id in response', 'debug': debug_info}
+
+            base = endpoint.rstrip('/')
+            status_url = f"{base}/openai/v1/video/generations/jobs/{job_id}"
+            if api_version and 'api-version=' not in status_url:
+                status_url += f"?api-version={api_version}"
+
+            start_time = time.time()
+            while status not in ['succeeded', 'failed'] and (time.time() - start_time) < 300:
+                time.sleep(5)
+                poll_resp = requests.get(status_url, headers=headers, timeout=60)
+                try:
+                    poll_json = poll_resp.json()
+                except Exception:
+                    return {'success': False, 'video_bytes': b'', 'url': '', 'error': f'Invalid status JSON ({poll_resp.status_code})', 'debug': debug_info}
+                status = (poll_json.get('status') or '').lower()
+
+            if status != 'succeeded':
+                return {'success': False, 'video_bytes': b'', 'url': '', 'error': f'Job status: {status or "unknown"}', 'debug': debug_info}
+
+            generations = poll_json.get('generations') or []
+            if not generations:
+                return {'success': False, 'video_bytes': b'', 'url': '', 'error': 'No generations returned', 'debug': debug_info}
+            generation_id = generations[0].get('id') or generations[0].get('generation_id')
+            if not generation_id:
+                return {'success': False, 'video_bytes': b'', 'url': '', 'error': 'No generation id in response', 'debug': debug_info}
+
+            video_url = f"{base}/openai/v1/video/generations/{generation_id}/content/video"
+            if api_version and 'api-version=' not in video_url:
+                video_url += f"?api-version={api_version}"
+            vid_resp = requests.get(video_url, headers=headers, timeout=300)
+            if vid_resp.ok and ('video' in vid_resp.headers.get('Content-Type', '') or vid_resp.content):
+                return {'success': True, 'video_bytes': vid_resp.content, 'url': '', 'error': '', 'debug': {**debug_info, 'download_url': video_url}}
+            return {'success': False, 'video_bytes': b'', 'url': '', 'error': f'Failed to download video ({vid_resp.status_code})', 'debug': {**debug_info, 'download_url': video_url}}
+        else:
+            body_preview = ''
+            try:
+                body_preview = resp.text[:500]
+            except Exception:
+                pass
+            debug_info['body_preview'] = body_preview
+            return {'success': False, 'video_bytes': b'', 'url': '', 'error': f'Video API error {resp.status_code}: {resp.text}', 'debug': debug_info}
+    except requests.exceptions.RequestException as e:
+        return {'success': False, 'video_bytes': b'', 'url': '', 'error': f'Request error: {e}'}
+    except Exception as e:
+        return {'success': False, 'video_bytes': b'', 'url': '', 'error': f'Unexpected error: {e}'}
+
+
+def load_persona_config(persona_path: str) -> dict:
+    """Load persona config.json from persona folder."""
+    config_file = os.path.join(persona_path, 'config.json')
+    default_config = {
+        'name': '',
+        'age': '',
+        'tagline': '',
+        'vibe': '',
+        'visual_aesthetic': '',
+        'base_image_prompt': '',
+        'bio': '',
+        'genre_tags': [],
+        'voice_style': '',
+        'lyrics_style': ''
+    }
+    
+    if os.path.exists(config_file):
+        try:
+            with open(config_file, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+                # Merge with defaults
+                for key in default_config:
+                    if key not in config:
+                        config[key] = default_config[key]
+                return config
+        except Exception as e:
+            print(f'Error loading persona config: {e}')
+            return default_config
+    return default_config
+
+
+def save_persona_config(persona_path: str, config: dict):
+    """Save persona config.json to persona folder."""
+    config_file = os.path.join(persona_path, 'config.json')
+    try:
+        os.makedirs(persona_path, exist_ok=True)
+        with open(config_file, 'w', encoding='utf-8') as f:
+            json.dump(config, f, indent=4)
+        return True
+    except Exception as e:
+        print(f'Error saving persona config: {e}')
+        return False
+
+
+def load_song_config(song_path: str) -> dict:
+    """Load song config.json from song folder."""
+    config_file = os.path.join(song_path, 'config.json')
+    default_config = {
+        'song_name': '',
+        'full_song_name': '',
+        'lyric_ideas': '',
+        'lyrics': '',
+        'song_style': '',
+        'merged_style': '',
+        'album_cover': '',
+        'video_loop': '',
+        'storyboard': [],
+        'storyboard_seconds_per_video': 8,
+        'storyboard_image_size': '3:2 (1536x1024)',
+        'album_cover_size': '1:1 (1024x1024)',
+        'album_cover_format': 'PNG',
+        'video_loop_size': '9:16 (720x1280)'
+    }
+    
+    if os.path.exists(config_file):
+        try:
+            with open(config_file, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+                for key in default_config:
+                    if key not in config:
+                        config[key] = default_config[key]
+                return config
+        except Exception as e:
+            print(f'Error loading song config: {e}')
+            return default_config
+    return default_config
+
+
+def save_song_config(song_path: str, config: dict):
+    """Save song config.json to song folder."""
+    config_file = os.path.join(song_path, 'config.json')
+    try:
+        os.makedirs(song_path, exist_ok=True)
+        with open(config_file, 'w', encoding='utf-8') as f:
+            json.dump(config, f, indent=4)
+        return True
+    except Exception as e:
+        print(f'Error saving song config: {e}')
+        return False
+
+
+def get_mp3_filename(full_song_name: str) -> str:
+    """Generate safe MP3 filename from full song name.
+    
+    Example: 'Sister Smoke – AI's Shadow (electric blues groove)' 
+    -> 'Sister Smoke – AI's Shadow (electric blues groove).mp3'
+    
+    Args:
+        full_song_name: The full song name in format [Persona] – [Song] ([Style])
+    
+    Returns:
+        Safe filename with .mp3 extension
+    """
+    if not full_song_name:
+        return 'song.mp3'
+    
+    # Replace invalid filename characters but keep the format intact
+    safe_name = full_song_name.replace(':', '_').replace('/', '_').replace('\\', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace("'", "'").replace('<', '_').replace('>', '_').replace('|', '_')
+    
+    # Ensure it ends with .mp3
+    if not safe_name.lower().endswith('.mp3'):
+        safe_name += '.mp3'
+    
+    return safe_name
+
+
+class SunoPersona(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title('Suno Persona Manager')
+        self.geometry('1400x900')
+        # Set maximum height (width can be flexible, height limited)
+        self.maxsize(width=9999, height=1200)
+        
+        self.ai_config = load_config()
+        self.personas_path = get_personas_path(self.ai_config)
+        self.current_persona = None
+        self.current_persona_path = None
+        self.current_song = None
+        self.current_song_path = None
+        
+        self.create_widgets()
+        self.refresh_personas_list()
+    
+    def create_widgets(self):
+        menubar = tk.Menu(self)
+        self.config(menu=menubar)
+        
+        settings_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label='Settings', menu=settings_menu)
+        settings_menu.add_command(label='Settings...', command=self.open_settings)
+        
+        help_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label='Help', menu=help_menu)
+        help_menu.add_command(label='About', command=self.show_about)
+        
+        top_frame = ttk.Frame(self)
+        top_frame.pack(fill=tk.X, padx=10, pady=8)
+        
+        ttk.Button(top_frame, text='New Persona', command=self.new_persona).pack(side=tk.LEFT, padx=4)
+        ttk.Button(top_frame, text='Delete Persona', command=self.delete_persona).pack(side=tk.LEFT, padx=4)
+        ttk.Button(top_frame, text='Refresh', command=self.refresh_personas_list).pack(side=tk.RIGHT, padx=4)
+        
+        content_frame = ttk.Frame(self)
+        content_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=4)
+        
+        left_panel = ttk.Frame(content_frame)
+        left_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=False)
+        left_panel.config(width=300)
+        
+        ttk.Label(left_panel, text='Personas:', font=('TkDefaultFont', 9, 'bold')).pack(anchor=tk.W, pady=(0, 5))
+        
+        self.personas_tree = ttk.Treeview(left_panel, columns=('name',), show='headings', selectmode='browse')
+        self.personas_tree.heading('name', text='Name')
+        self.personas_tree.column('name', width=280, anchor=tk.W)
+        
+        tree_scrollbar = ttk.Scrollbar(left_panel, orient=tk.VERTICAL, command=self.personas_tree.yview)
+        self.personas_tree.configure(yscrollcommand=tree_scrollbar.set)
+        
+        self.personas_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        tree_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.personas_tree.bind('<<TreeviewSelect>>', self.on_persona_select)
+        
+        right_panel = ttk.Frame(content_frame)
+        right_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(10, 0))
+        
+        self.notebook = ttk.Notebook(right_panel)
+        self.notebook.pack(fill=tk.BOTH, expand=True)
+        
+        persona_tab = ttk.Frame(self.notebook)
+        self.notebook.add(persona_tab, text='Persona Info')
+        self.create_persona_tab(persona_tab)
+        
+        images_tab = ttk.Frame(self.notebook)
+        self.notebook.add(images_tab, text='Persona Images')
+        self.create_images_tab(images_tab)
+        
+        songs_tab = ttk.Frame(self.notebook)
+        self.notebook.add(songs_tab, text='AI Songs')
+        self.create_songs_tab(songs_tab)
+        
+        status_frame = ttk.Frame(self)
+        status_frame.pack(fill=tk.X, padx=10, pady=(0, 8))
+        self.status_var = tk.StringVar(value=f'Personas directory: {self.personas_path}')
+        ttk.Label(status_frame, textvariable=self.status_var).pack(side=tk.LEFT)
+        
+        self.debug_frame = ttk.LabelFrame(self, text='Debug Output', padding=5)
+        self.debug_frame.pack(fill=tk.BOTH, expand=False, padx=10, pady=(0, 8))
+        
+        self.debug_text = scrolledtext.ScrolledText(self.debug_frame, height=6, wrap=tk.WORD, font=('Consolas', 9))
+        self.debug_text.pack(fill=tk.BOTH, expand=True)
+        self.debug_text.config(state=tk.DISABLED)
+        
+        self.log_debug('INFO', 'Application initialized')
+    
+    def log_debug(self, level: str, message: str):
+        """Log a debug/info message."""
+        import datetime
+        timestamp = datetime.datetime.now().strftime('%H:%M:%S')
+        formatted_message = f'[{timestamp}] [{level}] {message}\n'
+        
+        self.debug_text.config(state=tk.NORMAL)
+        self.debug_text.insert(tk.END, formatted_message)
+        self.debug_text.see(tk.END)
+        self.debug_text.config(state=tk.DISABLED)
+    
+    def refresh_personas_list(self):
+        """Refresh the personas list from the personas directory."""
+        for item in self.personas_tree.get_children():
+            self.personas_tree.delete(item)
+        
+        if not os.path.exists(self.personas_path):
+            self.log_debug('WARNING', f'Personas directory does not exist: {self.personas_path}')
+            return
+        
+        personas = []
+        for item in os.listdir(self.personas_path):
+            item_path = os.path.join(self.personas_path, item)
+            
+            # Skip if not a directory
+            if not os.path.isdir(item_path):
+                continue
+            
+            # Skip directories starting with underscore (hidden/temporary)
+            if item.startswith('_'):
+                continue
+            
+            # Skip directories without config.json (invalid personas)
+            config_file = os.path.join(item_path, 'config.json')
+            if not os.path.exists(config_file):
+                continue
+            
+            # Try to load config to verify it's valid
+            try:
+                config = load_persona_config(item_path)
+                # Only include if config loaded successfully
+                personas.append((item, config.get('name', item)))
+            except Exception:
+                # Skip directories with invalid/corrupted config
+                continue
+        
+        personas.sort(key=lambda x: x[1].lower())
+        
+        for folder_name, display_name in personas:
+            self.personas_tree.insert('', tk.END, iid=folder_name, values=(display_name,), tags=(folder_name,))
+        
+        self.status_var.set(f'Found {len(personas)} personas in {self.personas_path}')
+        self.log_debug('INFO', f'Refreshed personas list: {len(personas)} personas')
+    
+    def on_persona_select(self, event):
+        """Handle persona selection."""
+        sel = self.personas_tree.selection()
+        if not sel:
+            return
+        
+        folder_name = sel[0]
+        self.current_persona_path = os.path.join(self.personas_path, folder_name)
+        self.current_persona = load_persona_config(self.current_persona_path)
+        
+        self.load_persona_info()
+        self.refresh_songs_list()
+        self.refresh_persona_images()
+        
+        self.log_debug('INFO', f'Selected persona: {self.current_persona.get("name", folder_name)}')
+    
+    def new_persona(self):
+        """Create a new persona."""
+        dialog = tk.Toplevel(self)
+        dialog.title('New Persona')
+        dialog.geometry('400x150')
+        dialog.transient(self)
+        dialog.grab_set()
+        
+        ttk.Label(dialog, text='Persona Name:', font=('TkDefaultFont', 9, 'bold')).pack(pady=10)
+        name_var = tk.StringVar()
+        name_entry = ttk.Entry(dialog, textvariable=name_var, width=40)
+        name_entry.pack(pady=5, padx=20)
+        name_entry.focus_set()
+        
+        result = [None]
+        
+        def ok_clicked():
+            name = name_var.get().strip()
+            if name:
+                result[0] = name
+                dialog.destroy()
+        
+        def cancel_clicked():
+            dialog.destroy()
+        
+        btn_frame = ttk.Frame(dialog)
+        btn_frame.pack(pady=10)
+        ttk.Button(btn_frame, text='OK', command=ok_clicked).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text='Cancel', command=cancel_clicked).pack(side=tk.LEFT, padx=5)
+        
+        dialog.bind('<Return>', lambda e: ok_clicked())
+        dialog.bind('<Escape>', lambda e: cancel_clicked())
+        
+        self.wait_window(dialog)
+        
+        if result[0]:
+            safe_name = result[0].replace(':', '_').replace('/', '_').replace('\\', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace("'", '_').replace('<', '_').replace('>', '_').replace('|', '_')
+            new_persona_path = os.path.join(self.personas_path, safe_name)
+            
+            if os.path.exists(new_persona_path):
+                messagebox.showerror('Error', f'Persona "{safe_name}" already exists!')
+                return
+            
+            os.makedirs(new_persona_path, exist_ok=True)
+            os.makedirs(os.path.join(new_persona_path, 'AI-Songs'), exist_ok=True)
+            
+            config = {
+                'name': result[0],
+                'age': '',
+                'tagline': '',
+                'vibe': '',
+                'visual_aesthetic': '',
+                'base_image_prompt': '',
+                'bio': '',
+                'genre_tags': [],
+                'voice_style': '',
+                'lyrics_style': ''
+            }
+            
+            save_persona_config(new_persona_path, config)
+            self.refresh_personas_list()
+            self.log_debug('INFO', f'Created new persona: {result[0]}')
+    
+    def delete_persona(self):
+        """Delete the selected persona."""
+        if not self.current_persona_path:
+            messagebox.showwarning('Warning', 'Please select a persona to delete.')
+            return
+        
+        persona_name = self.current_persona.get('name', os.path.basename(self.current_persona_path))
+        response = messagebox.askyesno('Delete Persona', f'Are you sure you want to delete "{persona_name}"?\n\nThis will delete the entire persona folder and all its contents!')
+        
+        if response:
+            try:
+                shutil.rmtree(self.current_persona_path)
+                self.current_persona = None
+                self.current_persona_path = None
+                self.current_song = None
+                self.current_song_path = None
+                self.refresh_personas_list()
+                self.clear_persona_info()
+                self.clear_songs_list()
+                self.log_debug('INFO', f'Deleted persona: {persona_name}')
+            except Exception as e:
+                messagebox.showerror('Error', f'Failed to delete persona: {e}')
+                self.log_debug('ERROR', f'Failed to delete persona: {e}')
+    
+    def create_persona_tab(self, parent):
+        """Create the persona info editing tab."""
+        canvas = tk.Canvas(parent)
+        scrollbar = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+        
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        # Enable mouse wheel scrolling for persona tab canvas (Windows and Linux)
+        def on_mousewheel_persona(event):
+            if event.num == 4 or (hasattr(event, 'delta') and event.delta > 0):
+                canvas.yview_scroll(-1, "units")
+            elif event.num == 5 or (hasattr(event, 'delta') and event.delta < 0):
+                canvas.yview_scroll(1, "units")
+        canvas.bind("<MouseWheel>", on_mousewheel_persona)
+        canvas.bind("<Button-4>", on_mousewheel_persona)
+        canvas.bind("<Button-5>", on_mousewheel_persona)
+        scrollable_frame.bind("<MouseWheel>", on_mousewheel_persona)
+        scrollable_frame.bind("<Button-4>", on_mousewheel_persona)
+        scrollable_frame.bind("<Button-5>", on_mousewheel_persona)
+        
+        self.persona_fields = {}
+        self.persona_widgets = {}
+        
+        fields = [
+            ('name', 'Name', False),
+            ('age', 'Age', False),
+            ('tagline', 'Tagline', True),
+            ('vibe', 'Vibe', True),
+            ('visual_aesthetic', 'Visual Aesthetic', True),
+            ('base_image_prompt', 'Base Image Prompt', True),
+            ('bio', 'Bio (Backstory)', True),
+            ('voice_style', 'Voice Style (From Suno)', True),
+            ('lyrics_style', 'Lyrics Style (For Auto Generation)', True)
+        ]
+        
+        row = 0
+        for key, label, is_multiline in fields:
+            ttk.Label(scrollable_frame, text=f'{label}:', font=('TkDefaultFont', 9, 'bold')).grid(
+                row=row, column=0, sticky=tk.W, padx=5, pady=5
+            )
+            
+            if is_multiline:
+                text_frame = ttk.Frame(scrollable_frame)
+                text_frame.grid(row=row, column=1, sticky=tk.W+tk.E, padx=5, pady=5)
+                
+                text_widget = scrolledtext.ScrolledText(text_frame, height=3, wrap=tk.WORD, width=60)
+                text_widget.pack(fill=tk.BOTH, expand=True)
+                
+                btn_frame = ttk.Frame(scrollable_frame)
+                btn_frame.grid(row=row, column=2, padx=5, pady=5)
+                ttk.Button(btn_frame, text='AI Enhance', command=lambda k=key: self.ai_enhance_persona_field(k)).pack()
+                
+                self.persona_widgets[key] = text_widget
+            else:
+                var = tk.StringVar()
+                entry = ttk.Entry(scrollable_frame, textvariable=var, width=60)
+                entry.grid(row=row, column=1, sticky=tk.W+tk.E, padx=5, pady=5)
+                
+                btn_frame = ttk.Frame(scrollable_frame)
+                btn_frame.grid(row=row, column=2, padx=5, pady=5)
+                ttk.Button(btn_frame, text='AI Enhance', command=lambda k=key: self.ai_enhance_persona_field(k)).pack()
+                
+                self.persona_fields[key] = var
+                self.persona_widgets[key] = entry
+            
+            row += 1
+        
+        genre_frame = ttk.LabelFrame(scrollable_frame, text='Genre Tags', padding=5)
+        genre_frame.grid(row=row, column=0, columnspan=3, sticky=tk.W+tk.E, padx=5, pady=5)
+        
+        self.genre_tags_text = scrolledtext.ScrolledText(genre_frame, height=3, wrap=tk.WORD, width=60)
+        self.genre_tags_text.pack(fill=tk.BOTH, expand=True)
+        ttk.Button(genre_frame, text='AI Enhance', command=lambda: self.ai_enhance_persona_field('genre_tags')).pack(pady=(5, 0))
+        
+        row += 1
+        
+        btn_frame = ttk.Frame(scrollable_frame)
+        btn_frame.grid(row=row, column=0, columnspan=3, pady=10)
+        
+        ttk.Button(btn_frame, text='Save Persona', command=self.save_persona).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text='Reset Persona', command=self.reset_persona).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text='Generate Reference Images', command=self.generate_reference_images).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text='Generate From Reference Images', command=self.generate_from_reference_images).pack(side=tk.LEFT, padx=5)
+        
+        scrollable_frame.columnconfigure(1, weight=1)
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+    
+    def create_images_tab(self, parent):
+        """Create the persona images preview tab."""
+        main_frame = ttk.Frame(parent, padding=10)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        ttk.Label(main_frame, text='Reference Images Preview', font=('TkDefaultFont', 10, 'bold')).pack(pady=(0, 10))
+        
+        # Container for images
+        images_container = ttk.Frame(main_frame)
+        images_container.pack(fill=tk.BOTH, expand=True)
+        
+        # Create frames for each view
+        self.image_frames = {}
+        self.image_labels = {}
+        self.image_photos = {}
+        self.image_pil_cache = {}  # Cache original PIL images for resize events
+        self.image_canvas_items = {}
+        
+        views = ['Front', 'Side', 'Back']
+        for idx, view in enumerate(views):
+            frame = ttk.LabelFrame(images_container, text=f'{view} View', padding=5)  # Reduced padding
+            frame.grid(row=0, column=idx, padx=5, pady=5, sticky=tk.N+tk.S+tk.E+tk.W)
+            
+            # Use Canvas for better image scaling - let it expand to fill frame
+            canvas = tk.Canvas(frame, bg='white')
+            canvas.pack(fill=tk.BOTH, expand=True)
+            
+            self.image_frames[view] = frame
+            self.image_labels[view] = canvas  # Store canvas instead of label
+            self.image_photos[view] = None
+            self.image_canvas_items = {}  # Store canvas image items
+        
+        images_container.columnconfigure(0, weight=1)
+        images_container.columnconfigure(1, weight=1)
+        images_container.columnconfigure(2, weight=1)
+        images_container.rowconfigure(0, weight=1)
+        
+        # Refresh button
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(fill=tk.X, pady=(10, 0))
+        ttk.Button(btn_frame, text='Refresh Images', command=self.refresh_persona_images).pack(side=tk.LEFT, padx=5)
+    
+    def refresh_persona_images(self):
+        """Refresh the persona images preview."""
+        # Check if images tab has been created
+        if not hasattr(self, 'image_labels') or not self.image_labels:
+            return
+        
+        if not self.current_persona_path:
+            # Clear all images
+            for view in ['Front', 'Side', 'Back']:
+                if view in self.image_labels:
+                    canvas = self.image_labels[view]
+                    canvas.delete('all')
+                    canvas.create_text(canvas.winfo_width()//2, canvas.winfo_height()//2, 
+                                     text='No persona selected', font=('TkDefaultFont', 9))
+                    self.image_photos[view] = None
+                    if view in self.image_pil_cache:
+                        del self.image_pil_cache[view]
+            return
+        
+        views = ['Front', 'Side', 'Back']
+        safe_name = self.current_persona.get('name', 'persona').replace(' ', '-').replace(':', '_').replace('/', '_').replace('\\', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace("'", '_').replace('<', '_').replace('>', '_').replace('|', '_')
+        
+        for view in views:
+            image_path = os.path.join(self.current_persona_path, f'{safe_name}-{view}.png')
+            canvas = self.image_labels[view]
+            
+            if os.path.exists(image_path):
+                try:
+                    # Ensure canvas has a size before trying to draw
+                    canvas.update_idletasks()
+                    canvas_width = max(400, canvas.winfo_width())
+                    canvas_height = max(600, canvas.winfo_height())
+                    
+                    # Load image using PIL for proper resizing
+                    pil_image = Image.open(image_path)
+                    original_width, original_height = pil_image.size
+                    
+                    # Calculate scaling to fill canvas while maintaining aspect ratio
+                    # Use full canvas dimensions (minus small padding for borders)
+                    target_width = canvas_width - 4  # Small padding
+                    target_height = canvas_height - 4  # Small padding
+                    
+                    scale_w = target_width / original_width
+                    scale_h = target_height / original_height
+                    scale = min(scale_w, scale_h)  # Maintain aspect ratio, fill as much as possible
+                    
+                    # Calculate new dimensions
+                    new_width = int(original_width * scale)
+                    new_height = int(original_height * scale)
+                    
+                    # Resize image using PIL (high-quality resampling)
+                    if scale != 1.0:
+                        resized_pil = pil_image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                    else:
+                        resized_pil = pil_image
+                    
+                    # Convert to PhotoImage for Tkinter
+                    photo = ImageTk.PhotoImage(resized_pil)
+                    
+                    # Center image in canvas
+                    x = canvas_width // 2
+                    y = canvas_height // 2
+                    
+                    # Clear canvas and add image
+                    canvas.delete('all')
+                    canvas.create_image(x, y, image=photo, anchor=tk.CENTER)
+                    
+                    # Keep references to prevent garbage collection
+                    self.image_photos[view] = photo
+                    self.image_pil_cache[view] = pil_image  # Keep original PIL image for resize events
+                    
+                    # Bind resize event to update image when window resizes
+                    def on_canvas_resize(event, v=view):
+                        c = event.widget
+                        cw = max(400, c.winfo_width())
+                        ch = max(600, c.winfo_height())
+                        
+                        # Get original PIL image from cache
+                        if v not in self.image_pil_cache:
+                            return
+                        orig_pil = self.image_pil_cache[v]
+                        ow, oh = orig_pil.size
+                        
+                        # Calculate new scale
+                        target_w = cw - 4
+                        target_h = ch - 4
+                        scale_w = target_w / ow
+                        scale_h = target_h / oh
+                        scale = min(scale_w, scale_h)
+                        
+                        nw = int(ow * scale)
+                        nh = int(oh * scale)
+                        
+                        # Resize using PIL
+                        resized_pil = orig_pil.resize((nw, nh), Image.Resampling.LANCZOS)
+                        resized_photo = ImageTk.PhotoImage(resized_pil)
+                        
+                        c.delete('all')
+                        c.create_image(cw//2, ch//2, image=resized_photo, anchor=tk.CENTER)
+                        self.image_photos[v] = resized_photo  # Keep reference
+                    
+                    canvas.bind('<Configure>', on_canvas_resize)
+                    
+                except Exception as e:
+                    canvas.delete('all')
+                    canvas.create_text(canvas.winfo_width()//2, canvas.winfo_height()//2,
+                                     text=f'Error loading image:\n{str(e)}', font=('TkDefaultFont', 9))
+                    self.image_photos[view] = None
+                    if view in self.image_pil_cache:
+                        del self.image_pil_cache[view]
+                    self.log_debug('ERROR', f'Failed to load {view} image: {e}')
+            else:
+                canvas.delete('all')
+                canvas.create_text(canvas.winfo_width()//2, canvas.winfo_height()//2,
+                                 text=f'No {view.lower()} image\n(Generate to create)', font=('TkDefaultFont', 9))
+                self.image_photos[view] = None
+                if view in self.image_pil_cache:
+                    del self.image_pil_cache[view]
+    
+    def load_persona_info(self):
+        """Load persona info into the form."""
+        if not self.current_persona:
+            return
+        
+        for key, widget in self.persona_widgets.items():
+            if key == 'genre_tags':
+                continue
+            value = self.current_persona.get(key, '')
+            if isinstance(widget, scrolledtext.ScrolledText):
+                widget.delete('1.0', tk.END)
+                widget.insert('1.0', value)
+            elif isinstance(widget, ttk.Entry):
+                if key in self.persona_fields:
+                    self.persona_fields[key].set(value)
+        
+        genre_tags = self.current_persona.get('genre_tags', [])
+        self.genre_tags_text.delete('1.0', tk.END)
+        self.genre_tags_text.insert('1.0', ', '.join(genre_tags) if isinstance(genre_tags, list) else str(genre_tags))
+    
+    def clear_persona_info(self):
+        """Clear persona info form."""
+        for key, widget in self.persona_widgets.items():
+            if key == 'genre_tags':
+                self.genre_tags_text.delete('1.0', tk.END)
+            elif isinstance(widget, scrolledtext.ScrolledText):
+                widget.delete('1.0', tk.END)
+            elif isinstance(widget, ttk.Entry):
+                if key in self.persona_fields:
+                    self.persona_fields[key].set('')
+    
+    def save_persona(self):
+        """Save persona info to config.json."""
+        if not self.current_persona_path:
+            messagebox.showwarning('Warning', 'Please select a persona to save.')
+            return
+        
+        config = {}
+        for key, widget in self.persona_widgets.items():
+            if key == 'genre_tags':
+                tags_text = self.genre_tags_text.get('1.0', tk.END).strip()
+                tags = [t.strip() for t in tags_text.split(',') if t.strip()]
+                config[key] = tags
+            elif isinstance(widget, scrolledtext.ScrolledText):
+                config[key] = widget.get('1.0', tk.END).strip()
+            elif isinstance(widget, ttk.Entry):
+                if key in self.persona_fields:
+                    config[key] = self.persona_fields[key].get().strip()
+        
+        if save_persona_config(self.current_persona_path, config):
+            self.current_persona = config
+            self.log_debug('INFO', 'Persona saved successfully')
+            messagebox.showinfo('Success', 'Persona saved successfully!')
+        else:
+            messagebox.showerror('Error', 'Failed to save persona.')
+            self.log_debug('ERROR', 'Failed to save persona')
+    
+    def reset_persona(self):
+        """Reset persona info to saved values from config.json."""
+        if not self.current_persona_path:
+            messagebox.showwarning('Warning', 'Please select a persona first.')
+            return
+        
+        response = messagebox.askyesno('Reset Persona', 'Are you sure you want to reset all fields to saved values? Unsaved changes will be lost.')
+        if response:
+            self.current_persona = load_persona_config(self.current_persona_path)
+            self.load_persona_info()
+            self.log_debug('INFO', 'Persona reset to saved values')
+            messagebox.showinfo('Success', 'Persona reset to saved values!')
+    
+    def generate_from_reference_images(self):
+        """Generate persona fields from reference images using vision model."""
+        if not self.current_persona:
+            messagebox.showwarning('Warning', 'Please select a persona first.')
+            return
+        
+        # Let user select multiple images
+        image_paths = filedialog.askopenfilenames(
+            title='Select Reference Images',
+            filetypes=[
+                ('Image Files', '*.png *.jpg *.jpeg *.gif *.webp'),
+                ('PNG Files', '*.png'),
+                ('JPEG Files', '*.jpg *.jpeg'),
+                ('All Files', '*.*')
+            ]
+        )
+        
+        if not image_paths:
+            return
+        
+        self.log_debug('INFO', f'Processing {len(image_paths)} reference images...')
+        self.config(cursor='wait')
+        self.update()
+        
+        try:
+            # Build prompt for vision model
+            persona_name = self.current_persona.get('name', '')
+            current_tagline = self.current_persona.get('tagline', '')
+            current_vibe = self.current_persona.get('vibe', '')
+            current_visual = self.current_persona.get('visual_aesthetic', '')
+            current_base_prompt = self.current_persona.get('base_image_prompt', '')
+            
+            prompt = f"Analyze these reference images for the AI persona '{persona_name}' and generate improved values for the following fields:\n\n"
+            prompt += f"1. Tagline: {current_tagline if current_tagline else '(empty)'}\n"
+            prompt += f"2. Vibe: {current_vibe if current_vibe else '(empty)'}\n"
+            prompt += f"3. Visual Aesthetic: {current_visual if current_visual else '(empty)'}\n"
+            prompt += f"4. Base Image Prompt: {current_base_prompt if current_base_prompt else '(empty)'}\n\n"
+            prompt += "Based on the visual elements, style, mood, and aesthetic of these images, provide improved values for each field.\n\n"
+            prompt += "IMPORTANT: The Base Image Prompt must be EXTREMELY DETAILED and COMPREHENSIVE. It should include:\n"
+            prompt += "- Complete physical appearance (face, body type, height, build)\n"
+            prompt += "- Detailed clothing description (garments, colors, textures, patterns, accessories)\n"
+            prompt += "- Hair style, color, and details\n"
+            prompt += "- Facial features and expressions\n"
+            prompt += "- Pose and body language\n"
+            prompt += "- Any accessories, jewelry, or props\n"
+            prompt += "- Color palette and visual style\n"
+            prompt += "- Lighting and atmosphere\n"
+            prompt += "- All distinctive visual characteristics visible in the images\n\n"
+            prompt += "The Base Image Prompt should be detailed enough to recreate the exact same character consistently in different poses and angles.\n\n"
+            prompt += "Output ONLY the values in this exact format:\n\n"
+            prompt += "TAGLINE: [improved tagline]\n"
+            prompt += "VIBE: [improved vibe]\n"
+            prompt += "VISUAL_AESTHETIC: [improved visual aesthetic]\n"
+            prompt += "BASE_IMAGE_PROMPT: [extremely detailed and comprehensive base image prompt with all visual characteristics]\n\n"
+            prompt += "Do not include any explanations, just the four field values in the format above."
+            
+            system_message = "You are a visual analysis assistant specializing in creating detailed image generation prompts. Analyze images with extreme attention to detail and extract ALL visual elements, characteristics, colors, textures, styling, and aesthetic details. For the Base Image Prompt, create a comprehensive, highly detailed description that captures every visual aspect of the character. Output ONLY the field values in the requested format, with no additional text."
+            
+            result = call_azure_vision(self.ai_config, list(image_paths), prompt, system_message=system_message, profile='text')
+            
+            if result['success']:
+                content = result['content'].strip()
+                self.log_debug('INFO', f'AI Response received (length: {len(content)} chars)')
+                self.log_debug('DEBUG', f'Raw AI Response:\n{content[:500]}...')  # Log first 500 chars
+                
+                # Parse the response to extract field values
+                tagline = ''
+                vibe = ''
+                visual_aesthetic = ''
+                base_image_prompt = ''
+                
+                # Try to parse structured format first
+                lines = content.split('\n')
+                current_field = None
+                current_value = []
+                
+                for line in lines:
+                    line = line.strip()
+                    if not line:
+                        if current_field and current_value:
+                            value = ' '.join(current_value).strip()
+                            if current_field == 'tagline':
+                                tagline = value
+                            elif current_field == 'vibe':
+                                vibe = value
+                            elif current_field == 'visual_aesthetic':
+                                visual_aesthetic = value
+                            elif current_field == 'base_image_prompt':
+                                base_image_prompt = value
+                            current_value = []
+                        current_field = None
+                        continue
+                    
+                    # Check for field markers (case-insensitive)
+                    line_lower = line.lower()
+                    if 'tagline' in line_lower and ':' in line:
+                        if current_field and current_value:
+                            value = ' '.join(current_value).strip()
+                            if current_field == 'tagline':
+                                tagline = value
+                        current_field = 'tagline'
+                        current_value = [line.split(':', 1)[1].strip()] if ':' in line else []
+                    elif 'vibe' in line_lower and ':' in line and 'visual' not in line_lower:
+                        if current_field and current_value:
+                            value = ' '.join(current_value).strip()
+                            if current_field == 'vibe':
+                                vibe = value
+                        current_field = 'vibe'
+                        current_value = [line.split(':', 1)[1].strip()] if ':' in line else []
+                    elif 'visual' in line_lower and 'aesthetic' in line_lower and ':' in line:
+                        if current_field and current_value:
+                            value = ' '.join(current_value).strip()
+                            if current_field == 'visual_aesthetic':
+                                visual_aesthetic = value
+                        current_field = 'visual_aesthetic'
+                        current_value = [line.split(':', 1)[1].strip()] if ':' in line else []
+                    elif 'base' in line_lower and 'image' in line_lower and 'prompt' in line_lower and ':' in line:
+                        if current_field and current_value:
+                            value = ' '.join(current_value).strip()
+                            if current_field == 'base_image_prompt':
+                                base_image_prompt = value
+                        current_field = 'base_image_prompt'
+                        current_value = [line.split(':', 1)[1].strip()] if ':' in line else []
+                    elif current_field:
+                        current_value.append(line)
+                
+                # Handle last field
+                if current_field and current_value:
+                    value = ' '.join(current_value).strip()
+                    if current_field == 'tagline':
+                        tagline = value
+                    elif current_field == 'vibe':
+                        vibe = value
+                    elif current_field == 'visual_aesthetic':
+                        visual_aesthetic = value
+                    elif current_field == 'base_image_prompt':
+                        base_image_prompt = value
+                
+                # Log parsed values
+                self.log_debug('INFO', f'Parsed values - Tagline: {len(tagline)} chars, Vibe: {len(vibe)} chars, Visual Aesthetic: {len(visual_aesthetic)} chars, Base Image Prompt: {len(base_image_prompt)} chars')
+                if visual_aesthetic:
+                    self.log_debug('DEBUG', f'Visual Aesthetic value: {visual_aesthetic[:200]}...')
+                
+                # Update the fields if values were found
+                if tagline and 'tagline' in self.persona_widgets:
+                    widget = self.persona_widgets['tagline']
+                    if isinstance(widget, scrolledtext.ScrolledText):
+                        widget.delete('1.0', tk.END)
+                        widget.insert('1.0', tagline)
+                
+                if vibe and 'vibe' in self.persona_widgets:
+                    widget = self.persona_widgets['vibe']
+                    if isinstance(widget, scrolledtext.ScrolledText):
+                        widget.delete('1.0', tk.END)
+                        widget.insert('1.0', vibe)
+                
+                if visual_aesthetic and 'visual_aesthetic' in self.persona_widgets:
+                    widget = self.persona_widgets['visual_aesthetic']
+                    if isinstance(widget, scrolledtext.ScrolledText):
+                        widget.delete('1.0', tk.END)
+                        widget.insert('1.0', visual_aesthetic)
+                        self.log_debug('INFO', 'Visual Aesthetic field updated successfully')
+                    else:
+                        self.log_debug('WARNING', f'Visual Aesthetic widget is not ScrolledText, it is {type(widget)}')
+                else:
+                    if not visual_aesthetic:
+                        self.log_debug('WARNING', 'Visual Aesthetic value is empty, not updating')
+                    if 'visual_aesthetic' not in self.persona_widgets:
+                        self.log_debug('WARNING', 'Visual Aesthetic widget not found in persona_widgets')
+                
+                if base_image_prompt and 'base_image_prompt' in self.persona_widgets:
+                    widget = self.persona_widgets['base_image_prompt']
+                    if isinstance(widget, scrolledtext.ScrolledText):
+                        widget.delete('1.0', tk.END)
+                        widget.insert('1.0', base_image_prompt)
+                        self.log_debug('INFO', 'Base Image Prompt field updated successfully')
+                    else:
+                        self.log_debug('WARNING', f'Base Image Prompt widget is not ScrolledText, it is {type(widget)}')
+                else:
+                    if not base_image_prompt:
+                        self.log_debug('WARNING', 'Base Image Prompt value is empty, not updating')
+                    if 'base_image_prompt' not in self.persona_widgets:
+                        self.log_debug('WARNING', 'Base Image Prompt widget not found in persona_widgets')
+                
+                # Log summary of what was updated
+                updated_fields = []
+                if tagline: updated_fields.append('Tagline')
+                if vibe: updated_fields.append('Vibe')
+                if visual_aesthetic: updated_fields.append('Visual Aesthetic')
+                if base_image_prompt: updated_fields.append('Base Image Prompt')
+                
+                self.log_debug('INFO', f'Fields updated from reference images: {", ".join(updated_fields) if updated_fields else "None"}')
+                messagebox.showinfo('Success', f'Persona fields updated from reference images!\n\nUpdated: {", ".join(updated_fields) if updated_fields else "None"}')
+            else:
+                messagebox.showerror('Error', f'Failed to analyze images: {result["error"]}')
+                self.log_debug('ERROR', f'Failed to analyze images: {result["error"]}')
+        except Exception as e:
+            messagebox.showerror('Error', f'Error processing images: {e}')
+            self.log_debug('ERROR', f'Error processing images: {e}')
+        finally:
+            self.config(cursor='')
+    
+    def ai_enhance_persona_field(self, field_key: str):
+        """Enhance a persona field using AI."""
+        if not self.current_persona:
+            messagebox.showwarning('Warning', 'Please select a persona first.')
+            return
+        
+        current_value = ''
+        if field_key == 'genre_tags':
+            current_value = self.genre_tags_text.get('1.0', tk.END).strip()
+        elif field_key in self.persona_widgets:
+            widget = self.persona_widgets[field_key]
+            if isinstance(widget, scrolledtext.ScrolledText):
+                current_value = widget.get('1.0', tk.END).strip()
+            elif isinstance(widget, ttk.Entry):
+                if field_key in self.persona_fields:
+                    current_value = self.persona_fields[field_key].get().strip()
+        
+        field_labels = {
+            'name': 'Name',
+            'age': 'Age',
+            'tagline': 'Tagline',
+            'vibe': 'Vibe',
+            'visual_aesthetic': 'Visual Aesthetic',
+            'base_image_prompt': 'Base Image Prompt',
+            'bio': 'Bio (Backstory)',
+            'voice_style': 'Voice Style',
+            'lyrics_style': 'Lyrics Style',
+            'genre_tags': 'Genre Tags'
+        }
+        
+        dialog = AIPromptDialog(self, field_labels.get(field_key, field_key), current_value)
+        self.wait_window(dialog)
+        
+        if dialog.result is None:
+            return
+        
+        extra_instructions = dialog.result
+        
+        persona_context = f"Persona Name: {self.current_persona.get('name', '')}\n"
+        persona_context += f"Age: {self.current_persona.get('age', '')}\n"
+        persona_context += f"Tagline: {self.current_persona.get('tagline', '')}\n"
+        persona_context += f"Vibe: {self.current_persona.get('vibe', '')}\n"
+        persona_context += f"Bio: {self.current_persona.get('bio', '')}\n"
+        
+        prompt = f"Given this persona information:\n\n{persona_context}\n\n"
+        prompt += f"Current {field_labels.get(field_key, field_key)} value: {current_value}\n\n"
+        prompt += f"Please improve or generate a better {field_labels.get(field_key, field_key)} for this persona."
+        
+        if extra_instructions:
+            prompt += f"\n\nAdditional instructions: {extra_instructions}"
+        
+        # Create system message to ensure output-only behavior
+        system_message = f"You are a field value generator. Output ONLY the {field_labels.get(field_key, field_key)} value itself, with no explanations, no labels, no additional text, and no markdown formatting. Just the raw value that should go directly into the field."
+        
+        if field_key == 'genre_tags':
+            prompt += "\n\nOutput as a comma-separated list of genre tags."
+            system_message += " Output as a comma-separated list only."
+        elif field_key in ['bio', 'visual_aesthetic', 'base_image_prompt']:
+            prompt += "\n\nProvide a detailed, comprehensive response."
+            system_message += " Provide a detailed, comprehensive response."
+        else:
+            # For simple fields like tagline, name, age, etc., emphasize brevity
+            system_message += " Keep it concise and direct."
+        
+        self.log_debug('INFO', f'Enhancing {field_key} with AI...')
+        self.config(cursor='wait')
+        self.update()
+        
+        try:
+            result = call_azure_ai(self.ai_config, prompt, system_message=system_message, profile='text')
+            
+            if result['success']:
+                enhanced_value = result['content'].strip()
+                
+                # Clean up the response to extract only the value
+                # Remove common prefixes and explanations
+                lines = enhanced_value.split('\n')
+                # If there are multiple lines, try to find the actual value
+                # Often AI puts explanations first, then the value
+                if len(lines) > 1:
+                    # Look for lines that don't contain explanatory phrases
+                    value_lines = []
+                    skip_phrases = ['here are', 'here is', 'suggestions', 'options', 'alternatives', 
+                                   'improved', 'better', 'consider', 'you can', 'pick one', 'try']
+                    for line in lines:
+                        line_lower = line.lower().strip()
+                        # Skip empty lines and lines with explanatory phrases
+                        if line_lower and not any(phrase in line_lower for phrase in skip_phrases):
+                            # Remove markdown formatting
+                            clean_line = line.replace('**', '').replace('*', '').replace('_', '').strip()
+                            if clean_line:
+                                value_lines.append(clean_line)
+                    
+                    # If we found clean value lines, use the first one (or join if multiple short ones)
+                    if value_lines:
+                        if field_key == 'genre_tags':
+                            # For genre tags, join all clean lines
+                            enhanced_value = ', '.join(value_lines)
+                        else:
+                            # For other fields, use first substantial line
+                            enhanced_value = value_lines[0] if len(value_lines[0]) > 10 else ' '.join(value_lines[:2])
+                
+                # Remove markdown formatting that might remain
+                enhanced_value = enhanced_value.replace('**', '').replace('*', '').replace('_', '').strip()
+                
+                if field_key == 'genre_tags':
+                    self.genre_tags_text.delete('1.0', tk.END)
+                    self.genre_tags_text.insert('1.0', enhanced_value)
+                elif field_key in self.persona_widgets:
+                    widget = self.persona_widgets[field_key]
+                    if isinstance(widget, scrolledtext.ScrolledText):
+                        widget.delete('1.0', tk.END)
+                        widget.insert('1.0', enhanced_value)
+                    elif isinstance(widget, ttk.Entry):
+                        if field_key in self.persona_fields:
+                            self.persona_fields[field_key].set(enhanced_value)
+                
+                self.log_debug('INFO', f'{field_key} enhanced successfully')
+            else:
+                messagebox.showerror('Error', f'Failed to enhance {field_key}: {result["error"]}')
+                self.log_debug('ERROR', f'Failed to enhance {field_key}: {result["error"]}')
+        except Exception as e:
+            messagebox.showerror('Error', f'Error enhancing {field_key}: {e}')
+            self.log_debug('ERROR', f'Error enhancing {field_key}: {e}')
+        finally:
+            self.config(cursor='')
+    
+    def generate_reference_images(self):
+        """Generate reference images (Front, Side, Back) for the persona."""
+        if not self.current_persona:
+            messagebox.showwarning('Warning', 'Please select a persona first.')
+            return
+        
+        base_prompt = self.current_persona.get('base_image_prompt', '')
+        if not base_prompt:
+            messagebox.showwarning('Warning', 'Please set a Base Image Prompt first.')
+            return
+        
+        safe_name = self.current_persona.get('name', 'persona').replace(' ', '-').replace(':', '_').replace('/', '_').replace('\\', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace("'", '_').replace('<', '_').replace('>', '_').replace('|', '_')
+        front_image_path = None
+        
+        # Step 1: Generate Front image first
+        self.log_debug('INFO', 'Generating Front reference image...')
+        self.config(cursor='wait')
+        self.update()
+        
+        try:
+            view_specific = "full-body portrait, facing camera, standing upright"
+            prompt = f"{base_prompt}, {view_specific}, pure white background, "
+            prompt += "FULL BODY VISIBLE from head to toe, complete character visible, entire figure in frame, "
+            prompt += "full-length portrait, no cropping, no cut-off body parts, complete person visible, "
+            prompt += "professional reference photo, studio photography, clean minimalist composition, "
+            prompt += "even studio lighting with subtle dramatic shadows, high quality professional photography, "
+            prompt += "no background elements, no props except those described in the base prompt, "
+            prompt += "sharp focus, professional portrait photography style, reference sheet style, full-body shot"
+            
+            result = call_azure_image(self.ai_config, prompt, size='1024x1024', profile='image_gen')
+            
+            if result['success']:
+                img_bytes = result.get('image_bytes', b'')
+                if img_bytes:
+                    front_filename = os.path.join(self.current_persona_path, f'{safe_name}-Front.png')
+                    with open(front_filename, 'wb') as f:
+                        f.write(img_bytes)
+                    front_image_path = front_filename
+                    self.log_debug('INFO', f'Front reference image saved: {front_filename}')
+                    self.refresh_persona_images()
+                else:
+                    self.log_debug('ERROR', 'No image bytes received for Front view')
+                    messagebox.showerror('Error', 'Failed to generate Front image. Cannot generate Side and Back without Front reference.')
+                    return
+            else:
+                self.log_debug('ERROR', f'Failed to generate Front image: {result["error"]}')
+                messagebox.showerror('Error', f'Failed to generate Front image: {result["error"]}')
+                return
+        except Exception as e:
+            self.log_debug('ERROR', f'Error generating Front image: {e}')
+            messagebox.showerror('Error', f'Error generating Front image: {e}')
+            return
+        finally:
+            self.config(cursor='')
+        
+        if not front_image_path or not os.path.exists(front_image_path):
+            messagebox.showerror('Error', 'Front image was not saved correctly. Cannot proceed with Side and Back generation.')
+            return
+        
+        # Step 2: Analyze Front image to get detailed character description
+        self.log_debug('INFO', 'Analyzing Front image to extract character details for matching Side and Back views...')
+        self.config(cursor='wait')
+        self.update()
+        
+        character_description = ""
+        try:
+            analyze_prompt = "Analyze this Front reference image and provide a detailed description of the character's appearance, including: "
+            analyze_prompt += "exact clothing details, colors, textures, styling, hair, accessories, pose, lighting style, and all visual characteristics. "
+            analyze_prompt += "Output ONLY a detailed character description that can be used to generate matching Side and Back views with the same appearance."
+            
+            analyze_result = call_azure_vision(self.ai_config, [front_image_path], analyze_prompt, profile='text')
+            
+            if analyze_result['success']:
+                character_description = analyze_result['content'].strip()
+                self.log_debug('INFO', 'Front image analyzed successfully, extracted character description')
+            else:
+                self.log_debug('WARNING', f'Failed to analyze Front image: {analyze_result["error"]}, will use base prompt')
+        except Exception as e:
+            self.log_debug('WARNING', f'Error analyzing Front image: {e}, will use base prompt')
+        finally:
+            self.config(cursor='')
+        
+        # Step 3: Generate Side and Back using Front image analysis
+        views = ['Side', 'Back']
+        
+        for view in views:
+            self.log_debug('INFO', f'Generating {view} reference image matching Front image...')
+            self.config(cursor='wait')
+            self.update()
+            
+            try:
+                # Build view-specific description
+                if view.lower() == 'side':
+                    view_specific = "full-body side profile, facing right, standing upright"
+                elif view.lower() == 'back':
+                    view_specific = "full-body view from behind, standing upright"
+                
+                # Create prompt that uses the character description from Front image
+                if character_description:
+                    # Use the analyzed character description to ensure visual consistency
+                    image_prompt = f"{character_description}, {view_specific}, pure white background, "
+                else:
+                    # Fallback to base prompt if analysis failed
+                    image_prompt = f"{base_prompt}, {view_specific}, pure white background, "
+                
+                image_prompt += "FULL BODY VISIBLE from head to toe, complete character visible, entire figure in frame, "
+                image_prompt += "full-length portrait, no cropping, no cut-off body parts, complete person visible, "
+                image_prompt += "Match the exact same character appearance, clothing, styling, and visual details from the Front reference image, "
+                image_prompt += "professional reference photo, studio photography, clean minimalist composition, "
+                image_prompt += "even studio lighting with subtle dramatic shadows, high quality professional photography, "
+                image_prompt += "no background elements, sharp focus, professional portrait photography style, reference sheet style, full-body shot"
+                
+                result_img = call_azure_image(self.ai_config, image_prompt, size='1024x1024', profile='image_gen')
+                
+                if result_img['success']:
+                    img_bytes = result_img.get('image_bytes', b'')
+                    if img_bytes:
+                        filename = os.path.join(self.current_persona_path, f'{safe_name}-{view}.png')
+                        with open(filename, 'wb') as f:
+                            f.write(img_bytes)
+                        self.log_debug('INFO', f'{view} reference image saved: {filename}')
+                        self.refresh_persona_images()
+                    else:
+                        self.log_debug('ERROR', f'No image bytes received for {view} view')
+                else:
+                    self.log_debug('ERROR', f'Failed to generate {view} image: {result_img["error"]}')
+            except Exception as e:
+                self.log_debug('ERROR', f'Error generating {view} image: {e}')
+            finally:
+                self.config(cursor='')
+        
+        # Final refresh to ensure all images are displayed
+        self.refresh_persona_images()
+        messagebox.showinfo('Success', 'Reference images generation completed. Front generated first, then Side and Back matched to Front.')
+    
+    def create_songs_tab(self, parent):
+        """Create the AI Songs management tab."""
+        main_frame = ttk.Frame(parent, padding=10)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        top_frame = ttk.Frame(main_frame)
+        top_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        ttk.Button(top_frame, text='New Song', command=self.new_song).pack(side=tk.LEFT, padx=5)
+        ttk.Button(top_frame, text='Delete Song', command=self.delete_song).pack(side=tk.LEFT, padx=5)
+        
+        songs_list_frame = ttk.LabelFrame(main_frame, text='Songs', padding=5)
+        songs_list_frame.pack(fill=tk.X, pady=(0, 10))  # Fixed height, don't expand
+        
+        self.songs_tree = ttk.Treeview(songs_list_frame, columns=('song_name',), show='headings', selectmode='browse')
+        self.songs_tree.heading('song_name', text='Song Name')
+        self.songs_tree.column('song_name', width=300, anchor=tk.W)
+        
+        songs_scrollbar = ttk.Scrollbar(songs_list_frame, orient=tk.VERTICAL, command=self.songs_tree.yview)
+        self.songs_tree.configure(yscrollcommand=songs_scrollbar.set)
+        
+        self.songs_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        songs_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.songs_tree.bind('<<TreeviewSelect>>', self.on_song_select)
+        
+        # Configure songs list height (show about 5-6 items)
+        self.songs_tree.config(height=6)
+        
+        # Enable mouse wheel scrolling for songs tree (Windows and Linux)
+        def on_mousewheel_songs(event):
+            if event.num == 4 or event.delta > 0:
+                self.songs_tree.yview_scroll(-1, "units")
+            elif event.num == 5 or event.delta < 0:
+                self.songs_tree.yview_scroll(1, "units")
+        self.songs_tree.bind("<MouseWheel>", on_mousewheel_songs)
+        self.songs_tree.bind("<Button-4>", on_mousewheel_songs)
+        self.songs_tree.bind("<Button-5>", on_mousewheel_songs)
+        
+        song_details_frame = ttk.LabelFrame(main_frame, text='Song Details', padding=10)
+        song_details_frame.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
+        
+        self.create_song_details_form(song_details_frame)
+    
+    def create_song_details_form(self, parent):
+        """Create the song details editing form."""
+        canvas = tk.Canvas(parent)
+        scrollbar = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+        
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        # Enable mouse wheel scrolling for song details canvas (Windows and Linux)
+        def on_mousewheel_song_details(event):
+            if event.num == 4 or (hasattr(event, 'delta') and event.delta > 0):
+                canvas.yview_scroll(-1, "units")
+            elif event.num == 5 or (hasattr(event, 'delta') and event.delta < 0):
+                canvas.yview_scroll(1, "units")
+        canvas.bind("<MouseWheel>", on_mousewheel_song_details)
+        canvas.bind("<Button-4>", on_mousewheel_song_details)
+        canvas.bind("<Button-5>", on_mousewheel_song_details)
+        scrollable_frame.bind("<MouseWheel>", on_mousewheel_song_details)
+        scrollable_frame.bind("<Button-4>", on_mousewheel_song_details)
+        scrollable_frame.bind("<Button-5>", on_mousewheel_song_details)
+        
+        self.song_fields = {}
+        self.song_widgets = {}
+        
+        ttk.Label(scrollable_frame, text='Song Name:', font=('TkDefaultFont', 9, 'bold')).grid(row=0, column=0, sticky=tk.W, pady=5)
+        self.song_name_var = tk.StringVar()
+        ttk.Entry(scrollable_frame, textvariable=self.song_name_var, width=60).grid(row=0, column=1, columnspan=2, sticky=tk.W+tk.E, pady=5, padx=5)
+        
+        ttk.Label(scrollable_frame, text='Full Song Name:', font=('TkDefaultFont', 9, 'bold')).grid(row=1, column=0, sticky=tk.W, pady=5)
+        self.full_song_name_var = tk.StringVar()
+        ttk.Entry(scrollable_frame, textvariable=self.full_song_name_var, width=60).grid(row=1, column=1, columnspan=2, sticky=tk.W+tk.E, pady=5, padx=5)
+        ttk.Button(scrollable_frame, text='Generate', command=self.generate_full_song_name).grid(row=1, column=3, padx=5)
+        
+        # Play button for MP3 file (will be shown/hidden based on file existence)
+        self.play_mp3_button = ttk.Button(scrollable_frame, text='▶ Play MP3', command=self.play_mp3, state=tk.DISABLED)
+        self.play_mp3_button.grid(row=1, column=4, padx=5)
+        
+        ttk.Label(scrollable_frame, text='Lyric Ideas:', font=('TkDefaultFont', 9, 'bold')).grid(row=2, column=0, sticky=tk.NW, pady=5)
+        self.lyric_ideas_text = scrolledtext.ScrolledText(scrollable_frame, height=3, wrap=tk.WORD, width=60)
+        self.lyric_ideas_text.grid(row=2, column=1, columnspan=2, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
+        
+        ttk.Label(scrollable_frame, text='Lyrics:', font=('TkDefaultFont', 9, 'bold')).grid(row=3, column=0, sticky=tk.NW, pady=5)
+        self.lyrics_text = scrolledtext.ScrolledText(scrollable_frame, height=6, wrap=tk.WORD, width=60)
+        self.lyrics_text.grid(row=3, column=1, columnspan=2, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
+        ttk.Button(scrollable_frame, text='Generate', command=self.generate_lyrics).grid(row=3, column=3, padx=5, pady=5, sticky=tk.N)
+        
+        ttk.Label(scrollable_frame, text='Song Style:', font=('TkDefaultFont', 9, 'bold')).grid(row=4, column=0, sticky=tk.NW, pady=5)
+        self.song_style_text = scrolledtext.ScrolledText(scrollable_frame, height=3, wrap=tk.WORD, width=60)
+        self.song_style_text.grid(row=4, column=1, columnspan=2, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
+        
+        ttk.Label(scrollable_frame, text='Merged Style:', font=('TkDefaultFont', 9, 'bold')).grid(row=5, column=0, sticky=tk.NW, pady=5)
+        self.merged_style_text = scrolledtext.ScrolledText(scrollable_frame, height=3, wrap=tk.WORD, width=60)
+        self.merged_style_text.grid(row=5, column=1, columnspan=2, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
+        ttk.Button(scrollable_frame, text='Merge', command=self.merge_song_style).grid(row=5, column=3, padx=5, pady=5, sticky=tk.N)
+        
+        ai_results_notebook = ttk.Notebook(scrollable_frame)
+        ai_results_notebook.grid(row=6, column=0, columnspan=4, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
+        
+        album_cover_frame = ttk.Frame(ai_results_notebook)
+        ai_results_notebook.add(album_cover_frame, text='Album Cover')
+        
+        album_cover_toolbar = ttk.Frame(album_cover_frame)
+        album_cover_toolbar.pack(fill=tk.X, padx=2, pady=2)
+        ttk.Button(album_cover_toolbar, text='Generate Prompt', command=self.generate_album_cover).pack(side=tk.LEFT, padx=2)
+        ttk.Button(album_cover_toolbar, text='Run', command=self.run_image_model).pack(side=tk.LEFT, padx=2)
+        
+        ttk.Label(album_cover_toolbar, text='Size:', font=('TkDefaultFont', 8)).pack(side=tk.LEFT, padx=(10, 2))
+        self.album_cover_size_var = tk.StringVar(value='1:1 (1024x1024)')
+        album_cover_size_combo = ttk.Combobox(album_cover_toolbar, textvariable=self.album_cover_size_var, 
+                                              values=['1:1 (1024x1024)', '3:2 (1536x1024)', '16:9 (1792x1024)', 
+                                                      '4:3 (1365x1024)', '9:16 (1024x1792)', '21:9 (2048x1024)'],
+                                              state='readonly', width=18)
+        album_cover_size_combo.pack(side=tk.LEFT, padx=2)
+        
+        ttk.Label(album_cover_toolbar, text='Format:', font=('TkDefaultFont', 8)).pack(side=tk.LEFT, padx=(10, 2))
+        self.album_cover_format_var = tk.StringVar(value='PNG')
+        album_cover_format_combo = ttk.Combobox(album_cover_toolbar, textvariable=self.album_cover_format_var, 
+                                               values=['PNG', 'JPEG'], state='readonly', width=8)
+        album_cover_format_combo.pack(side=tk.LEFT, padx=2)
+        
+        self.album_cover_text = scrolledtext.ScrolledText(album_cover_frame, height=6, wrap=tk.WORD, width=60)
+        self.album_cover_text.pack(fill=tk.BOTH, expand=True)
+        
+        video_loop_frame = ttk.Frame(ai_results_notebook)
+        ai_results_notebook.add(video_loop_frame, text='Video Loop')
+        
+        video_loop_toolbar = ttk.Frame(video_loop_frame)
+        video_loop_toolbar.pack(fill=tk.X, padx=2, pady=2)
+        ttk.Button(video_loop_toolbar, text='Generate Prompt', command=self.generate_video_loop).pack(side=tk.LEFT, padx=2)
+        ttk.Button(video_loop_toolbar, text='Run', command=self.run_video_loop_model).pack(side=tk.LEFT, padx=2)
+        
+        ttk.Label(video_loop_toolbar, text='Size:', font=('TkDefaultFont', 8)).pack(side=tk.LEFT, padx=(10, 2))
+        self.video_loop_size_var = tk.StringVar(value='9:16 (720x1280)')
+        video_loop_size_combo = ttk.Combobox(video_loop_toolbar, textvariable=self.video_loop_size_var, 
+                                             values=['9:16 (720x1280)', '16:9 (1280x720)', '1:1 (1024x1024)', 
+                                                     '21:9 (1920x1080)', '4:3 (1024x768)', '3:4 (768x1024)'],
+                                             state='readonly', width=18)
+        video_loop_size_combo.pack(side=tk.LEFT, padx=2)
+        
+        self.video_loop_text = scrolledtext.ScrolledText(video_loop_frame, height=6, wrap=tk.WORD, width=60)
+        self.video_loop_text.pack(fill=tk.BOTH, expand=True)
+        
+        storyboard_frame = ttk.Frame(ai_results_notebook)
+        ai_results_notebook.add(storyboard_frame, text='Storyboard')
+        self.create_storyboard_tab(storyboard_frame)
+        
+        btn_frame = ttk.Frame(scrollable_frame)
+        btn_frame.grid(row=7, column=0, columnspan=4, pady=10)
+        
+        ttk.Button(btn_frame, text='Save Song', command=self.save_song).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text='Export YouTube Description', command=self.export_youtube_description).pack(side=tk.LEFT, padx=5)
+        
+        scrollable_frame.columnconfigure(1, weight=1)
+        scrollable_frame.rowconfigure(3, weight=1)
+        scrollable_frame.rowconfigure(6, weight=1)
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+    
+    def create_storyboard_tab(self, parent):
+        """Create the Storyboard tab for generating music video scene prompts."""
+        main_frame = ttk.Frame(parent, padding=10)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Top controls
+        controls_frame = ttk.Frame(main_frame)
+        controls_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        ttk.Label(controls_frame, text='Seconds per video:', font=('TkDefaultFont', 9, 'bold')).pack(side=tk.LEFT, padx=5)
+        self.storyboard_seconds_var = tk.StringVar(value='8')
+        seconds_entry = ttk.Entry(controls_frame, textvariable=self.storyboard_seconds_var, width=5)
+        seconds_entry.pack(side=tk.LEFT, padx=5)
+        
+        ttk.Label(controls_frame, text='Image Size:', font=('TkDefaultFont', 9, 'bold')).pack(side=tk.LEFT, padx=(10, 5))
+        self.storyboard_image_size_var = tk.StringVar(value='3:2 (1536x1024)')
+        image_size_combo = ttk.Combobox(controls_frame, textvariable=self.storyboard_image_size_var, 
+                                        values=['3:2 (1536x1024)', '16:9 (1792x1024)', '1:1 (1024x1024)', 
+                                                '4:3 (1365x1024)', '9:16 (1024x1792)', '21:9 (2048x1024)'],
+                                        state='readonly', width=18)
+        image_size_combo.pack(side=tk.LEFT, padx=5)
+        
+        ttk.Button(controls_frame, text='Analyze MP3 & Generate Storyboard', command=self.generate_storyboard).pack(side=tk.LEFT, padx=10)
+        
+        # Storyboard scenes list
+        list_frame = ttk.LabelFrame(main_frame, text='Storyboard Scenes', padding=5)
+        list_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        
+        # Create treeview for scenes
+        columns = ('scene_num', 'duration', 'lyrics', 'prompt')
+        self.storyboard_tree = ttk.Treeview(list_frame, columns=columns, show='headings', selectmode='extended', height=10)
+        self.storyboard_tree.heading('scene_num', text='Scene')
+        self.storyboard_tree.heading('duration', text='Duration')
+        self.storyboard_tree.heading('lyrics', text='Lyrics')
+        self.storyboard_tree.heading('prompt', text='Prompt')
+        self.storyboard_tree.column('scene_num', width=60, anchor=tk.CENTER)
+        self.storyboard_tree.column('duration', width=80, anchor=tk.CENTER)
+        self.storyboard_tree.column('lyrics', width=200, anchor=tk.W)
+        self.storyboard_tree.column('prompt', width=400, anchor=tk.W)
+        
+        storyboard_scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self.storyboard_tree.yview)
+        self.storyboard_tree.configure(yscrollcommand=storyboard_scrollbar.set)
+        
+        self.storyboard_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        storyboard_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Enable mouse wheel scrolling
+        def on_mousewheel_storyboard(event):
+            if event.num == 4 or event.delta > 0:
+                self.storyboard_tree.yview_scroll(-1, "units")
+            elif event.num == 5 or event.delta < 0:
+                self.storyboard_tree.yview_scroll(1, "units")
+        self.storyboard_tree.bind("<MouseWheel>", on_mousewheel_storyboard)
+        self.storyboard_tree.bind("<Button-4>", on_mousewheel_storyboard)
+        self.storyboard_tree.bind("<Button-5>", on_mousewheel_storyboard)
+        
+        # Action buttons
+        action_frame = ttk.Frame(main_frame)
+        action_frame.pack(fill=tk.X)
+        
+        ttk.Button(action_frame, text='Generate Image (Selected)', command=self.generate_storyboard_image_selected).pack(side=tk.LEFT, padx=5)
+        ttk.Button(action_frame, text='Generate All Images', command=self.generate_storyboard_images_all).pack(side=tk.LEFT, padx=5)
+    
+    def refresh_songs_list(self):
+        """Refresh the songs list for the current persona."""
+        for item in self.songs_tree.get_children():
+            self.songs_tree.delete(item)
+        
+        if not self.current_persona_path:
+            return
+        
+        songs_dir = os.path.join(self.current_persona_path, 'AI-Songs')
+        if not os.path.exists(songs_dir):
+            return
+        
+        songs = []
+        for item in os.listdir(songs_dir):
+            item_path = os.path.join(songs_dir, item)
+            if os.path.isdir(item_path):
+                config = load_song_config(item_path)
+                song_name = config.get('song_name', item)
+                songs.append((item, song_name))
+        
+        songs.sort(key=lambda x: x[1].lower())
+        
+        for folder_name, display_name in songs:
+            self.songs_tree.insert('', tk.END, iid=folder_name, values=(display_name,), tags=(folder_name,))
+        
+        self.log_debug('INFO', f'Refreshed songs list: {len(songs)} songs')
+    
+    def clear_songs_list(self):
+        """Clear the songs list."""
+        for item in self.songs_tree.get_children():
+            self.songs_tree.delete(item)
+    
+    def on_song_select(self, event):
+        """Handle song selection."""
+        sel = self.songs_tree.selection()
+        if not sel:
+            return
+        
+        folder_name = sel[0]
+        self.current_song_path = os.path.join(self.current_persona_path, 'AI-Songs', folder_name)
+        self.current_song = load_song_config(self.current_song_path)
+        
+        self.load_song_info()
+        self.log_debug('INFO', f'Selected song: {self.current_song.get("song_name", folder_name)}')
+    
+    def new_song(self):
+        """Create a new song."""
+        if not self.current_persona_path:
+            messagebox.showwarning('Warning', 'Please select a persona first.')
+            return
+        
+        dialog = tk.Toplevel(self)
+        dialog.title('New Song')
+        dialog.geometry('400x150')
+        dialog.transient(self)
+        dialog.grab_set()
+        
+        ttk.Label(dialog, text='Song Name:', font=('TkDefaultFont', 9, 'bold')).pack(pady=10)
+        name_var = tk.StringVar()
+        name_entry = ttk.Entry(dialog, textvariable=name_var, width=40)
+        name_entry.pack(pady=5, padx=20)
+        name_entry.focus_set()
+        
+        result = [None]
+        
+        def ok_clicked():
+            name = name_var.get().strip()
+            if name:
+                result[0] = name
+                dialog.destroy()
+        
+        def cancel_clicked():
+            dialog.destroy()
+        
+        btn_frame = ttk.Frame(dialog)
+        btn_frame.pack(pady=10)
+        ttk.Button(btn_frame, text='OK', command=ok_clicked).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text='Cancel', command=cancel_clicked).pack(side=tk.LEFT, padx=5)
+        
+        dialog.bind('<Return>', lambda e: ok_clicked())
+        dialog.bind('<Escape>', lambda e: cancel_clicked())
+        
+        self.wait_window(dialog)
+        
+        if result[0]:
+            safe_name = result[0].replace(':', '_').replace('/', '_').replace('\\', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace("'", '_').replace('<', '_').replace('>', '_').replace('|', '_')
+            songs_dir = os.path.join(self.current_persona_path, 'AI-Songs')
+            new_song_path = os.path.join(songs_dir, safe_name)
+            
+            if os.path.exists(new_song_path):
+                messagebox.showerror('Error', f'Song "{safe_name}" already exists!')
+                return
+            
+            os.makedirs(new_song_path, exist_ok=True)
+            
+            config = {
+                'song_name': result[0],
+                'full_song_name': '',
+                'lyric_ideas': '',
+                'lyrics': '',
+                'song_style': '',
+                'merged_style': '',
+                'album_cover': '',
+                'video_loop': '',
+                'storyboard': [],
+                'storyboard_seconds_per_video': 8
+            }
+            
+            save_song_config(new_song_path, config)
+            self.refresh_songs_list()
+            self.log_debug('INFO', f'Created new song: {result[0]}')
+    
+    def delete_song(self):
+        """Delete the selected song."""
+        if not self.current_song_path:
+            messagebox.showwarning('Warning', 'Please select a song to delete.')
+            return
+        
+        song_name = self.current_song.get('song_name', os.path.basename(self.current_song_path))
+        response = messagebox.askyesno('Delete Song', f'Are you sure you want to delete "{song_name}"?')
+        
+        if response:
+            try:
+                shutil.rmtree(self.current_song_path)
+                self.current_song = None
+                self.current_song_path = None
+                self.refresh_songs_list()
+                self.clear_song_info()
+                self.log_debug('INFO', f'Deleted song: {song_name}')
+            except Exception as e:
+                messagebox.showerror('Error', f'Failed to delete song: {e}')
+                self.log_debug('ERROR', f'Failed to delete song: {e}')
+    
+    def load_song_info(self):
+        """Load song info into the form."""
+        if not self.current_song:
+            return
+        
+        self.song_name_var.set(self.current_song.get('song_name', ''))
+        self.full_song_name_var.set(self.current_song.get('full_song_name', ''))
+        self.lyric_ideas_text.delete('1.0', tk.END)
+        self.lyric_ideas_text.insert('1.0', self.current_song.get('lyric_ideas', ''))
+        self.lyrics_text.delete('1.0', tk.END)
+        self.lyrics_text.insert('1.0', self.current_song.get('lyrics', ''))
+        self.song_style_text.delete('1.0', tk.END)
+        self.song_style_text.insert('1.0', self.current_song.get('song_style', ''))
+        self.merged_style_text.delete('1.0', tk.END)
+        self.merged_style_text.insert('1.0', self.current_song.get('merged_style', ''))
+        self.album_cover_text.delete('1.0', tk.END)
+        self.album_cover_text.insert('1.0', self.current_song.get('album_cover', ''))
+        self.video_loop_text.delete('1.0', tk.END)
+        self.video_loop_text.insert('1.0', self.current_song.get('video_loop', ''))
+        
+        # Load album cover and video loop settings
+        if hasattr(self, 'album_cover_size_var'):
+            self.album_cover_size_var.set(self.current_song.get('album_cover_size', '1:1 (1024x1024)'))
+        if hasattr(self, 'album_cover_format_var'):
+            self.album_cover_format_var.set(self.current_song.get('album_cover_format', 'PNG'))
+        if hasattr(self, 'video_loop_size_var'):
+            self.video_loop_size_var.set(self.current_song.get('video_loop_size', '9:16 (720x1280)'))
+        
+        # Load storyboard
+        if hasattr(self, 'storyboard_seconds_var'):
+            self.storyboard_seconds_var.set(str(self.current_song.get('storyboard_seconds_per_video', 8)))
+            if hasattr(self, 'storyboard_image_size_var'):
+                self.storyboard_image_size_var.set(self.current_song.get('storyboard_image_size', '3:2 (1536x1024)'))
+            self.load_storyboard()
+        
+        # Check if MP3 file exists and enable/disable play button
+        self.update_play_button()
+    
+    def clear_song_info(self):
+        """Clear song info form."""
+        self.song_name_var.set('')
+        self.full_song_name_var.set('')
+        self.lyric_ideas_text.delete('1.0', tk.END)
+        self.lyrics_text.delete('1.0', tk.END)
+        self.song_style_text.delete('1.0', tk.END)
+        self.merged_style_text.delete('1.0', tk.END)
+        self.album_cover_text.delete('1.0', tk.END)
+        self.video_loop_text.delete('1.0', tk.END)
+    
+    def get_mp3_filepath(self) -> str:
+        """Get the MP3 file path for the current song using Full Song Name.
+        
+        Returns:
+            Full path to MP3 file: [song_folder]/[Full Song Name].mp3
+            Example: .../AI-Songs/[song_folder]/Sister Smoke – AI's Shadow (electric blues groove).mp3
+        """
+        if not self.current_song_path:
+            return ''
+        
+        full_song_name = self.full_song_name_var.get().strip()
+        if not full_song_name:
+            # Fallback to song name if full song name is not set
+            full_song_name = self.song_name_var.get().strip() or 'song'
+        
+        mp3_filename = get_mp3_filename(full_song_name)
+        return os.path.join(self.current_song_path, mp3_filename)
+    
+    def update_play_button(self):
+        """Update play button state based on MP3 file existence."""
+        if hasattr(self, 'play_mp3_button'):
+            mp3_path = self.get_mp3_filepath()
+            if mp3_path and os.path.exists(mp3_path):
+                self.play_mp3_button.config(state=tk.NORMAL)
+            else:
+                self.play_mp3_button.config(state=tk.DISABLED)
+    
+    def play_mp3(self):
+        """Play the MP3 file for the current song."""
+        mp3_path = self.get_mp3_filepath()
+        
+        if not mp3_path:
+            messagebox.showwarning('Warning', 'No song selected.')
+            return
+        
+        if not os.path.exists(mp3_path):
+            messagebox.showwarning('Warning', f'MP3 file not found:\n{mp3_path}')
+            return
+        
+        try:
+            # Use platform-specific method to play the file
+            if sys.platform == 'win32':
+                # Windows
+                os.startfile(mp3_path)
+            elif sys.platform == 'darwin':
+                # macOS
+                os.system(f'open "{mp3_path}"')
+            else:
+                # Linux and other Unix-like systems
+                os.system(f'xdg-open "{mp3_path}"')
+            
+            self.log_debug('INFO', f'Playing MP3: {mp3_path}')
+        except Exception as e:
+            messagebox.showerror('Error', f'Failed to play MP3 file:\n{e}')
+            self.log_debug('ERROR', f'Failed to play MP3: {e}')
+    
+    def save_song(self):
+        """Save song info to config.json."""
+        if not self.current_song_path:
+            messagebox.showwarning('Warning', 'Please select a song to save.')
+            return
+        
+        config = {
+            'song_name': self.song_name_var.get().strip(),
+            'full_song_name': self.full_song_name_var.get().strip(),
+            'lyric_ideas': self.lyric_ideas_text.get('1.0', tk.END).strip(),
+            'lyrics': self.lyrics_text.get('1.0', tk.END).strip(),
+            'song_style': self.song_style_text.get('1.0', tk.END).strip(),
+            'merged_style': self.merged_style_text.get('1.0', tk.END).strip(),
+            'album_cover': self.album_cover_text.get('1.0', tk.END).strip(),
+            'video_loop': self.video_loop_text.get('1.0', tk.END).strip(),
+            'storyboard': self.get_storyboard_data() if hasattr(self, 'storyboard_tree') else [],
+            'storyboard_seconds_per_video': int(self.storyboard_seconds_var.get() or '8') if hasattr(self, 'storyboard_seconds_var') else 8,
+            'storyboard_image_size': self.storyboard_image_size_var.get() if hasattr(self, 'storyboard_image_size_var') else '3:2 (1536x1024)',
+            'album_cover_size': self.album_cover_size_var.get() if hasattr(self, 'album_cover_size_var') else '1:1 (1024x1024)',
+            'album_cover_format': self.album_cover_format_var.get() if hasattr(self, 'album_cover_format_var') else 'PNG',
+            'video_loop_size': self.video_loop_size_var.get() if hasattr(self, 'video_loop_size_var') else '9:16 (720x1280)'
+        }
+        
+        if save_song_config(self.current_song_path, config):
+            self.current_song = config
+            self.log_debug('INFO', 'Song saved successfully')
+            messagebox.showinfo('Success', 'Song saved successfully!')
+            # Update play button state after saving
+            self.update_play_button()
+        else:
+            messagebox.showerror('Error', 'Failed to save song.')
+            self.log_debug('ERROR', 'Failed to save song')
+    
+    def generate_full_song_name(self):
+        """Generate full song name in format: [Persona Name] – [Song Name] ([Style/Genre])."""
+        if not self.current_persona:
+            messagebox.showwarning('Warning', 'Please select a persona first.')
+            return
+        
+        song_name = self.song_name_var.get().strip()
+        persona_name = self.current_persona.get('name', '')
+        song_style = self.song_style_text.get('1.0', tk.END).strip()
+        
+        if not song_name:
+            messagebox.showwarning('Warning', 'Please enter a song name.')
+            return
+        
+        if not persona_name:
+            messagebox.showwarning('Warning', 'Persona name is not set.')
+            return
+        
+        # Extract style/genre from song style
+        style_part = 'Original'
+        if song_style:
+            # Get first meaningful part of style
+            style_part = song_style.split(',')[0].split('\n')[0].strip()
+            # Clean up style part - remove any parentheses or brackets that might already be there
+            style_part = style_part.split('(')[0].split('[')[0].strip()
+            # Limit length
+            if len(style_part) > 40:
+                style_part = style_part[:40].strip()
+            if not style_part:
+                style_part = 'Original'
+        else:
+            style_part = 'Original'
+        
+        # Construct the full song name format: [Persona Name] – [Song Name] ([Style/Genre])
+        # DO NOT change the song name - use it exactly as entered
+        full_song_name = f"{persona_name} – {song_name} ({style_part})"
+        
+        self.full_song_name_var.set(full_song_name)
+        self.log_debug('INFO', f'Full song name generated: {full_song_name}')
+        
+        # Update play button state after generating full song name
+        self.update_play_button()
+    
+    def generate_lyrics(self):
+        """Generate lyrics for the song using AI."""
+        if not self.current_persona:
+            messagebox.showwarning('Warning', 'Please select a persona first.')
+            return
+        
+        song_name = self.song_name_var.get().strip()
+        lyric_ideas = self.lyric_ideas_text.get('1.0', tk.END).strip()
+        lyrics_style = self.current_persona.get('lyrics_style', '')
+        
+        if not song_name:
+            messagebox.showwarning('Warning', 'Please enter a song name.')
+            return
+        
+        prompt = f"Generate lyrics for a song called '{song_name}' by the AI persona '{self.current_persona.get('name', '')}'."
+        prompt += f"\n\nPersona lyrics style: {lyrics_style}"
+        
+        if lyric_ideas:
+            prompt += f"\n\nLyric ideas or themes: {lyric_ideas}"
+        
+        prompt += "\n\nGenerate complete song lyrics with verses and chorus."
+        
+        self.log_debug('INFO', 'Generating lyrics...')
+        self.config(cursor='wait')
+        self.update()
+        
+        try:
+            result = call_azure_ai(self.ai_config, prompt, profile='text')
+            
+            if result['success']:
+                lyrics = result['content'].strip()
+                self.lyrics_text.delete('1.0', tk.END)
+                self.lyrics_text.insert('1.0', lyrics)
+                self.log_debug('INFO', 'Lyrics generated successfully')
+            else:
+                messagebox.showerror('Error', f'Failed to generate lyrics: {result["error"]}')
+                self.log_debug('ERROR', f'Failed to generate lyrics: {result["error"]}')
+        except Exception as e:
+            messagebox.showerror('Error', f'Error generating lyrics: {e}')
+            self.log_debug('ERROR', f'Error generating lyrics: {e}')
+        finally:
+            self.config(cursor='')
+    
+    def merge_song_style(self):
+        """Merge song style with persona voice style."""
+        if not self.current_persona:
+            messagebox.showwarning('Warning', 'Please select a persona first.')
+            return
+        
+        song_style = self.song_style_text.get('1.0', tk.END).strip()
+        voice_style = self.current_persona.get('voice_style', '')
+        
+        if not song_style:
+            messagebox.showwarning('Warning', 'Please enter a song style.')
+            return
+        
+        if not voice_style:
+            messagebox.showwarning('Warning', 'Persona voice style is not set.')
+            return
+        
+        prompt = f"Merge the following song style with the persona's voice style:\n\nSong Style: {song_style}\n\nPersona Voice Style: {voice_style}\n\nCreate a merged style description that combines both."
+        
+        self.log_debug('INFO', 'Merging styles...')
+        self.config(cursor='wait')
+        self.update()
+        
+        try:
+            result = call_azure_ai(self.ai_config, prompt, profile='text')
+            
+            if result['success']:
+                merged = result['content'].strip()
+                self.merged_style_text.delete('1.0', tk.END)
+                self.merged_style_text.insert('1.0', merged)
+                self.log_debug('INFO', 'Styles merged successfully')
+            else:
+                messagebox.showerror('Error', f'Failed to merge styles: {result["error"]}')
+                self.log_debug('ERROR', f'Failed to merge styles: {result["error"]}')
+        except Exception as e:
+            messagebox.showerror('Error', f'Error merging styles: {e}')
+            self.log_debug('ERROR', f'Error merging styles: {e}')
+        finally:
+            self.config(cursor='')
+    
+    def generate_album_cover(self):
+        """Generate album cover prompt."""
+        if not self.current_persona:
+            messagebox.showwarning('Warning', 'Please select a persona first.')
+            return
+        
+        song_name = self.song_name_var.get().strip()
+        full_song_name = self.full_song_name_var.get().strip()
+        merged_style = self.merged_style_text.get('1.0', tk.END).strip()
+        visual_aesthetic = self.current_persona.get('visual_aesthetic', '')
+        
+        if not song_name:
+            messagebox.showwarning('Warning', 'Please enter a song name.')
+            return
+        
+        # Check if persona reference images exist
+        safe_name = self.current_persona.get('name', 'persona').replace(' ', '-').replace(':', '_').replace('/', '_').replace('\\', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace("'", '_').replace('<', '_').replace('>', '_').replace('|', '_')
+        front_image_path = os.path.join(self.current_persona_path, f'{safe_name}-Front.png')
+        side_image_path = os.path.join(self.current_persona_path, f'{safe_name}-Side.png')
+        back_image_path = os.path.join(self.current_persona_path, f'{safe_name}-Back.png')
+        
+        reference_images = []
+        if os.path.exists(front_image_path):
+            reference_images.append(front_image_path)
+        if os.path.exists(side_image_path):
+            reference_images.append(side_image_path)
+        if os.path.exists(back_image_path):
+            reference_images.append(back_image_path)
+        
+        # Get full persona visual description
+        base_image_prompt = self.current_persona.get('base_image_prompt', '')
+        vibe = self.current_persona.get('vibe', '')
+        
+        # Build base prompt
+        prompt = f"Generate an album cover prompt for '{song_name}' by the AI persona '{self.current_persona.get('name', '')}'."
+        prompt += f"\n\nFull Song Name: {full_song_name}"
+        prompt += f"\n\nMerged Style: {merged_style}"
+        
+        # Include full persona visual description
+        if visual_aesthetic:
+            prompt += f"\n\nPersona Visual Aesthetic: {visual_aesthetic}"
+        if base_image_prompt:
+            prompt += f"\n\nPersona Base Image Prompt (Character Visual Description): {base_image_prompt}"
+        if vibe:
+            prompt += f"\n\nPersona Vibe: {vibe}"
+        
+        # If reference images exist, use vision API to analyze them
+        if reference_images:
+            prompt += f"\n\nAnalyze the provided reference images of this persona and create an album cover prompt that matches the character's visual appearance, styling, and aesthetic from these images."
+            prompt += "\n\nIMPORTANT: The album cover must fully incorporate ALL visual characteristics from the persona's Visual Aesthetic and Base Image Prompt descriptions above."
+            prompt += "\n\nCreate a detailed album cover prompt suitable for image generation that incorporates ALL of the persona's visual characteristics, appearance, styling, and aesthetic."
+            
+            self.log_debug('INFO', f'Generating album cover prompt using {len(reference_images)} reference images...')
+            self.config(cursor='wait')
+            self.update()
+            
+            try:
+                system_message = 'You are an image prompt generator. Analyze the reference images and create an album cover prompt that matches the character\'s visual appearance. Output ONLY the image prompt text, nothing else.'
+                result = call_azure_vision(self.ai_config, reference_images, prompt, system_message=system_message, profile='text')
+            except Exception as e:
+                messagebox.showerror('Error', f'Error generating album cover prompt: {e}')
+                self.log_debug('ERROR', f'Error generating album cover prompt: {e}')
+                return
+        else:
+            prompt += "\n\nIMPORTANT: The album cover must fully incorporate ALL visual characteristics from the persona's Visual Aesthetic and Base Image Prompt descriptions above."
+            prompt += "\n\nCreate a detailed album cover prompt suitable for image generation that incorporates ALL of the persona's visual characteristics, appearance, styling, and aesthetic."
+            
+            self.log_debug('INFO', 'Generating album cover prompt (no reference images available)...')
+            self.config(cursor='wait')
+            self.update()
+            
+            try:
+                system_message = 'You are an image prompt generator. Output ONLY the image prompt text, nothing else.'
+                result = call_azure_ai(self.ai_config, prompt, system_message, profile='text')
+            except Exception as e:
+                messagebox.showerror('Error', f'Error generating album cover prompt: {e}')
+                self.log_debug('ERROR', f'Error generating album cover prompt: {e}')
+                return
+        
+        try:
+            if result['success']:
+                cover_prompt = result['content'].strip()
+                self.album_cover_text.delete('1.0', tk.END)
+                self.album_cover_text.insert('1.0', cover_prompt)
+                self.log_debug('INFO', 'Album cover prompt generated successfully')
+            else:
+                messagebox.showerror('Error', f'Failed to generate album cover prompt: {result["error"]}')
+                self.log_debug('ERROR', f'Failed to generate album cover prompt: {result["error"]}')
+        except Exception as e:
+            messagebox.showerror('Error', f'Error processing album cover prompt: {e}')
+            self.log_debug('ERROR', f'Error processing album cover prompt: {e}')
+        finally:
+            self.config(cursor='')
+    
+    def generate_video_loop(self):
+        """Generate video loop prompt."""
+        if not self.current_persona:
+            messagebox.showwarning('Warning', 'Please select a persona first.')
+            return
+        
+        album_cover = self.album_cover_text.get('1.0', tk.END).strip()
+        merged_style = self.merged_style_text.get('1.0', tk.END).strip()
+        
+        if not album_cover:
+            messagebox.showwarning('Warning', 'Please generate an album cover prompt first.')
+            return
+        
+        # Check if persona reference images exist
+        safe_name = self.current_persona.get('name', 'persona').replace(' ', '-').replace(':', '_').replace('/', '_').replace('\\', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace("'", '_').replace('<', '_').replace('>', '_').replace('|', '_')
+        front_image_path = os.path.join(self.current_persona_path, f'{safe_name}-Front.png')
+        side_image_path = os.path.join(self.current_persona_path, f'{safe_name}-Side.png')
+        back_image_path = os.path.join(self.current_persona_path, f'{safe_name}-Back.png')
+        
+        reference_images = []
+        if os.path.exists(front_image_path):
+            reference_images.append(front_image_path)
+        if os.path.exists(side_image_path):
+            reference_images.append(side_image_path)
+        if os.path.exists(back_image_path):
+            reference_images.append(back_image_path)
+        
+        # Get full persona visual description
+        visual_aesthetic = self.current_persona.get('visual_aesthetic', '')
+        base_image_prompt = self.current_persona.get('base_image_prompt', '')
+        vibe = self.current_persona.get('vibe', '')
+        
+        # Build base prompt
+        prompt = f"Generate a video loop prompt based on this album cover description:\n\n{album_cover}\n\nMerged Style: {merged_style}"
+        
+        # Include full persona visual description
+        if visual_aesthetic:
+            prompt += f"\n\nPersona Visual Aesthetic: {visual_aesthetic}"
+        if base_image_prompt:
+            prompt += f"\n\nPersona Base Image Prompt (Character Visual Description): {base_image_prompt}"
+        if vibe:
+            prompt += f"\n\nPersona Vibe: {vibe}"
+        
+        # If reference images exist, use vision API to analyze them
+        if reference_images:
+            prompt += f"\n\nAnalyze the provided reference images of this persona and create a video loop prompt that matches the character's visual appearance, styling, and aesthetic from these images."
+            prompt += "\n\nIMPORTANT: The video loop must fully incorporate ALL visual characteristics from the persona's Visual Aesthetic and Base Image Prompt descriptions above."
+            prompt += "\n\nCreate a seamless looping video prompt suitable for music visualization that incorporates ALL of the persona's visual characteristics, appearance, styling, and aesthetic."
+            
+            self.log_debug('INFO', f'Generating video loop prompt using {len(reference_images)} reference images...')
+            self.config(cursor='wait')
+            self.update()
+            
+            try:
+                system_message = 'You are a professional video prompt generator for music visualizers. Analyze the reference images and create a video loop prompt that matches the character\'s visual appearance. Generate clean, artistic, SFW video prompts suitable for music content. Output ONLY the final video prompt text with no explanations.'
+                result = call_azure_vision(self.ai_config, reference_images, prompt, system_message=system_message, profile='text')
+            except Exception as e:
+                messagebox.showerror('Error', f'Error generating video loop prompt: {e}')
+                self.log_debug('ERROR', f'Error generating video loop prompt: {e}')
+                return
+        else:
+            prompt += "\n\nIMPORTANT: The video loop must fully incorporate ALL visual characteristics from the persona's Visual Aesthetic and Base Image Prompt descriptions above."
+            prompt += "\n\nCreate a seamless looping video prompt suitable for music visualization that incorporates ALL of the persona's visual characteristics, appearance, styling, and aesthetic."
+            
+            self.log_debug('INFO', 'Generating video loop prompt (no reference images available)...')
+            self.config(cursor='wait')
+            self.update()
+            
+            try:
+                system_message = 'You are a professional video prompt generator for music visualizers. Generate clean, artistic, SFW video prompts suitable for music content. Output ONLY the final video prompt text with no explanations.'
+                result = call_azure_ai(self.ai_config, prompt, system_message, profile='text')
+            except Exception as e:
+                messagebox.showerror('Error', f'Error generating video loop prompt: {e}')
+                self.log_debug('ERROR', f'Error generating video loop prompt: {e}')
+                return
+        
+        try:
+            
+            if result['success']:
+                video_prompt = result['content'].strip()
+                self.video_loop_text.delete('1.0', tk.END)
+                self.video_loop_text.insert('1.0', video_prompt)
+                self.log_debug('INFO', 'Video loop prompt generated successfully')
+            else:
+                messagebox.showerror('Error', f'Failed to generate video loop prompt: {result["error"]}')
+                self.log_debug('ERROR', f'Failed to generate video loop prompt: {result["error"]}')
+        except Exception as e:
+            messagebox.showerror('Error', f'Error generating video loop prompt: {e}')
+            self.log_debug('ERROR', f'Error generating video loop prompt: {e}')
+        finally:
+            self.config(cursor='')
+    
+    def load_storyboard(self):
+        """Load storyboard scenes into the treeview."""
+        if not hasattr(self, 'storyboard_tree'):
+            return
+        
+        # Clear existing items
+        for item in self.storyboard_tree.get_children():
+            self.storyboard_tree.delete(item)
+        
+        storyboard = self.current_song.get('storyboard', [])
+        if isinstance(storyboard, list):
+            for scene in storyboard:
+                scene_num = scene.get('scene', len(self.storyboard_tree.get_children()) + 1)
+                duration = scene.get('duration', '')
+                lyrics = scene.get('lyrics', '')
+                prompt = scene.get('prompt', '')
+                self.storyboard_tree.insert('', tk.END, values=(scene_num, duration, lyrics, prompt))
+    
+    def get_storyboard_data(self):
+        """Get storyboard data from treeview."""
+        if not hasattr(self, 'storyboard_tree'):
+            return []
+        
+        storyboard = []
+        for item in self.storyboard_tree.get_children():
+            values = self.storyboard_tree.item(item, 'values')
+            if len(values) >= 3:
+                storyboard.append({
+                    'scene': int(values[0]) if values[0].isdigit() else len(storyboard) + 1,
+                    'duration': values[1],
+                    'lyrics': values[2] if len(values) > 2 else '',
+                    'prompt': values[3] if len(values) > 3 else values[2] if len(values) > 2 else ''
+                })
+        return storyboard
+    
+    def get_mp3_duration(self, mp3_path: str) -> float:
+        """Get MP3 duration in seconds."""
+        if not os.path.exists(mp3_path):
+            return 0.0
+        
+        if MUTAGEN_AVAILABLE:
+            try:
+                audio = MP3(mp3_path)
+                return audio.info.length
+            except Exception as e:
+                self.log_debug('WARNING', f'Failed to get MP3 duration with mutagen: {e}')
+        
+        # Fallback: estimate based on file size (rough estimate: ~1MB per minute)
+        try:
+            file_size_mb = os.path.getsize(mp3_path) / (1024 * 1024)
+            estimated_duration = file_size_mb * 60  # Rough estimate
+            return estimated_duration
+        except Exception:
+            return 0.0
+    
+    def parse_lyrics_with_timing(self, lyrics: str, song_duration: float) -> list:
+        """Parse lyrics and extract timing information.
+        
+        Returns list of tuples: (start_time, end_time, lyric_line)
+        """
+        if not lyrics or not song_duration:
+            return []
+        
+        lines = lyrics.strip().split('\n')
+        lyric_segments = []
+        
+        # Try to parse timestamps in format [00:12] or [0:12] or (00:12)
+        timestamp_pattern = re.compile(r'[\[\(](\d+):(\d+)[\]\)]')
+        
+        lines_with_timestamps = []
+        lines_without_timestamps = []
+        
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            
+            # Check for timestamp
+            timestamp_match = timestamp_pattern.search(line)
+            if timestamp_match:
+                minutes = int(timestamp_match.group(1))
+                seconds = int(timestamp_match.group(2))
+                timestamp_seconds = minutes * 60 + seconds
+                # Remove timestamp from line
+                lyric_text = timestamp_pattern.sub('', line).strip()
+                if lyric_text:
+                    lines_with_timestamps.append((timestamp_seconds, lyric_text))
+            else:
+                # Keep non-empty lines without timestamps
+                if line:
+                    lines_without_timestamps.append(line)
+        
+        # If we have timestamps, use them
+        if lines_with_timestamps:
+            lines_with_timestamps.sort(key=lambda x: x[0])  # Sort by timestamp
+            
+            # Create segments with timing
+            for i, (start_time, lyric_text) in enumerate(lines_with_timestamps):
+                # End time is start of next line, or end of song
+                if i + 1 < len(lines_with_timestamps):
+                    end_time = lines_with_timestamps[i + 1][0]
+                else:
+                    end_time = song_duration
+                
+                lyric_segments.append((start_time, end_time, lyric_text))
+        else:
+            # No timestamps: distribute lyrics evenly across song duration
+            if lines_without_timestamps:
+                time_per_line = song_duration / len(lines_without_timestamps)
+                for i, lyric_text in enumerate(lines_without_timestamps):
+                    start_time = i * time_per_line
+                    end_time = (i + 1) * time_per_line
+                    lyric_segments.append((start_time, end_time, lyric_text))
+        
+        return lyric_segments
+    
+    def get_lyrics_for_scene(self, scene_start_time: float, scene_end_time: float, lyric_segments: list) -> str:
+        """Get lyrics that match a scene's time range."""
+        matching_lyrics = []
+        
+        for lyric_start, lyric_end, lyric_text in lyric_segments:
+            # Check if lyric overlaps with scene time range
+            if lyric_start < scene_end_time and lyric_end > scene_start_time:
+                matching_lyrics.append(lyric_text)
+        
+        if matching_lyrics:
+            return ' | '.join(matching_lyrics)
+        return ''
+    
+    def generate_storyboard(self):
+        """Analyze MP3 and generate storyboard prompts."""
+        if not self.current_persona:
+            messagebox.showwarning('Warning', 'Please select a persona first.')
+            return
+        
+        if not self.current_song_path:
+            messagebox.showwarning('Warning', 'Please select a song first.')
+            return
+        
+        # Check if MP3 file exists
+        mp3_path = self.get_mp3_filepath()
+        if not mp3_path or not os.path.exists(mp3_path):
+            messagebox.showwarning('Warning', 'MP3 file not found. Please ensure the MP3 file exists before generating storyboard.')
+            return
+        
+        try:
+            seconds_per_video = int(self.storyboard_seconds_var.get() or '8')
+            if seconds_per_video < 1 or seconds_per_video > 20:
+                messagebox.showwarning('Warning', 'Seconds per video must be between 1 and 20.')
+                return
+        except ValueError:
+            messagebox.showwarning('Warning', 'Invalid seconds per video value.')
+            return
+        
+        # Check if song is too long for single response (warn if > 30 scenes)
+        song_duration = self.get_mp3_duration(mp3_path)
+        if song_duration > 0:
+            num_scenes = int(song_duration / seconds_per_video) + (1 if song_duration % seconds_per_video > 0 else 0)
+            if num_scenes > 30:
+                suggested_seconds = max(seconds_per_video + 2, int(song_duration / 25))  # Aim for ~25 scenes max
+                response = messagebox.askyesno(
+                    'Warning - Many Scenes',
+                    f'This will generate {num_scenes} scenes ({song_duration:.0f}s song / {seconds_per_video}s per scene).\n\n'
+                    f'The AI may not be able to generate all scenes in one response.\n\n'
+                    f'Recommended: Increase "Seconds per video" to {suggested_seconds} or higher '
+                    f'to create approximately {int(song_duration / suggested_seconds)} scenes.\n\n'
+                    f'Continue anyway?'
+                )
+                if not response:
+                    return
+        
+        song_name = self.song_name_var.get().strip()
+        full_song_name = self.full_song_name_var.get().strip()
+        lyrics = self.lyrics_text.get('1.0', tk.END).strip()
+        merged_style = self.merged_style_text.get('1.0', tk.END).strip()
+        persona_name = self.current_persona.get('name', '')
+        visual_aesthetic = self.current_persona.get('visual_aesthetic', '')
+        base_image_prompt = self.current_persona.get('base_image_prompt', '')
+        vibe = self.current_persona.get('vibe', '')
+        
+        self.log_debug('INFO', f'Generating storyboard for MP3: {mp3_path}')
+        self.config(cursor='wait')
+        self.update()
+        
+        try:
+            # Build prompt for storyboard generation
+            prompt = f"Create music video prompts to create enough 1-{seconds_per_video} second video split scenes for this song.\n\n"
+            prompt += f"Song: {full_song_name if full_song_name else song_name}\n"
+            prompt += f"Artist/Persona: {persona_name}\n"
+            if lyrics:
+                prompt += f"Lyrics:\n{lyrics}\n\n"
+            if merged_style:
+                prompt += f"Style: {merged_style}\n\n"
+            
+            # Include full persona visual description
+            if visual_aesthetic:
+                prompt += f"Persona Visual Aesthetic: {visual_aesthetic}\n\n"
+            if base_image_prompt:
+                prompt += f"Persona Base Image Prompt (Character Visual Description): {base_image_prompt}\n\n"
+            if vibe:
+                prompt += f"Persona Vibe: {vibe}\n\n"
+            
+            # Get MP3 duration and parse lyrics with timing
+            song_duration = self.get_mp3_duration(mp3_path)
+            lyric_segments = []
+            if lyrics and song_duration > 0:
+                lyric_segments = self.parse_lyrics_with_timing(lyrics, song_duration)
+                if lyric_segments:
+                    self.log_debug('INFO', f'Parsed {len(lyric_segments)} lyric segments from song duration {song_duration:.1f}s')
+            
+            # Build scene-by-scene lyrics information if available
+            scene_lyrics_info = ""
+            if lyric_segments and song_duration > 0:
+                # Calculate how many scenes we'll need
+                num_scenes = int(song_duration / seconds_per_video) + (1 if song_duration % seconds_per_video > 0 else 0)
+                scene_lyrics_info = "\n\nLYRICS TIMING FOR EACH SCENE:\n"
+                current_time = 0.0
+                for scene_idx in range(1, num_scenes + 1):
+                    scene_start_time = current_time
+                    scene_end_time = min(current_time + seconds_per_video, song_duration)
+                    scene_lyrics = self.get_lyrics_for_scene(scene_start_time, scene_end_time, lyric_segments)
+                    if scene_lyrics:
+                        scene_lyrics_info += f"Scene {scene_idx} ({scene_start_time:.1f}s - {scene_end_time:.1f}s): {scene_lyrics}\n"
+                    current_time = scene_end_time
+                    if current_time >= song_duration:
+                        break
+                scene_lyrics_info += "\n"
+            
+            prompt += f"Generate detailed image prompts for each scene (each scene is {seconds_per_video} seconds). "
+            prompt += "Each prompt should be suitable for generating base images that will be used to create small videos later. "
+            prompt += f"\n\nSTORYBOARD THEME: The overall theme for this music video storyboard is '{full_song_name if full_song_name else song_name}'. "
+            prompt += "Use this song title as inspiration for creating a cohesive visual narrative throughout all scenes.\n"
+            prompt += "\nCRITICAL REQUIREMENTS:\n"
+            prompt += f"1. NOT all scenes must feature the persona/artist ({persona_name}). Create a diverse mix of scenes:\n"
+            prompt += f"   - Only about 30-40% of scenes should feature the persona/artist ({persona_name})\n"
+            prompt += "   - Most scenes (60-70%) should be thematic/abstract visuals, environmental scenes, symbolic imagery, or mood-setting visuals related to the song title and lyrics\n"
+            prompt += "   - Do NOT put the persona in consecutive scenes - alternate between scenes with and without the persona\n"
+            prompt += "   - Vary the scenes to create visual interest and tell a story\n"
+            prompt += f"2. When a scene DOES feature the persona/artist ({persona_name}), you MUST explicitly mention '{persona_name}' or 'the artist' or 'the singer' or 'the character' in the scene prompt.\n"
+            prompt += "3. CRITICAL - VARY PERSONA APPEARANCE: When the persona appears, she must look DIFFERENT in each scene:\n"
+            prompt += "   - Vary poses: standing, sitting, walking, playing instrument, looking at camera, looking away, etc.\n"
+            prompt += "   - Vary expressions: smiling, serious, contemplative, energetic, focused, etc.\n"
+            prompt += "   - Vary camera distance: extreme close-up, close-up, medium shot, full body, wide shot\n"
+            prompt += "   - Vary angles: front view, side view, three-quarter view, back view, overhead, low angle\n"
+            prompt += "   - Vary lighting: dramatic shadows, soft lighting, backlit, side-lit, etc.\n"
+            prompt += "   - Vary settings: different locations, backgrounds, environments\n"
+            prompt += "   - The persona should NEVER look identical or very similar in consecutive scenes\n"
+            prompt += "4. When the persona appears, the scene prompt MUST incorporate the persona's visual characteristics, BUT vary how she appears (different pose, angle, expression, setting).\n"
+            prompt += "5. All scenes should match the mood, style, and theme of the song, creating a cohesive music video narrative.\n"
+            prompt += "6. CRITICAL - SCENE VARIETY: Each scene must be visually distinct and different from the previous scenes. Avoid repeating similar scenes:\n"
+            prompt += "   - Do NOT generate 2-3 similar scenes in a row (e.g., don't have 3 close-up shots, 3 wide shots, or 3 performance scenes consecutively)\n"
+            prompt += "   - Alternate between different shot types: close-ups, wide shots, medium shots, abstract visuals, environmental scenes\n"
+            prompt += "   - Alternate between scenes with and without the persona\n"
+            prompt += "   - Vary camera angles: low angle, high angle, eye level, overhead, etc.\n"
+            prompt += "   - Vary settings: indoor, outdoor, abstract spaces, different locations\n"
+            prompt += "   - Vary moods and visual styles: dramatic, calm, energetic, mysterious, etc.\n"
+            prompt += "   - Each scene should feel fresh and different from the scenes before and after it\n"
+            if scene_lyrics_info:
+                prompt += "6. IMPORTANT: Each scene prompt should visually represent the lyrics that play during that scene's time period (see LYRICS TIMING below). Match the visual mood and content to the specific lyrics.\n"
+            prompt += scene_lyrics_info
+            
+            # Calculate total scenes needed (song_duration already calculated above)
+            num_scenes = int(song_duration / seconds_per_video) + (1 if song_duration % seconds_per_video > 0 else 0)
+            
+            prompt += f"\nTOTAL SCENES NEEDED: {num_scenes} scenes (song duration: {song_duration:.1f} seconds, {seconds_per_video} seconds per scene)\n\n"
+            prompt += "CRITICAL INSTRUCTIONS:\n"
+            prompt += "1. You MUST generate ALL scenes. Do NOT ask questions, offer options, or explain limitations.\n"
+            prompt += "2. If the response would be too long, generate scenes in sequential batches:\n"
+            prompt += "   - Batch 1: SCENE 1 through SCENE 14\n"
+            prompt += "   - Batch 2: SCENE 15 through SCENE 28\n"
+            prompt += "   - Batch 3: SCENE 29 through SCENE 42 (or final scene)\n"
+            prompt += "   - Continue until all scenes are generated\n"
+            prompt += "3. Each batch should start immediately with the scene number (e.g., 'SCENE 1:', 'SCENE 15:', etc.)\n"
+            prompt += "4. Do NOT include any preamble, explanations, or confirmations - just generate the scenes.\n"
+            prompt += "5. If generating in batches, clearly mark each batch (you can use 'BATCH 1:', 'BATCH 2:', etc. before the scenes, or just start with the scene numbers).\n\n"
+            prompt += "Output format (start immediately with SCENE 1, no preamble):\n"
+            prompt += "SCENE 1: [duration] seconds\n[detailed image prompt that visually represents the lyrics and theme for this time period]\n\n"
+            prompt += "SCENE 2: [duration] seconds\n[detailed image prompt that visually represents the lyrics and theme for this time period]\n\n"
+            prompt += "SCENE 3: [duration] seconds\n[detailed image prompt that visually represents the lyrics and theme for this time period]\n\n"
+            prompt += f"(Continue for ALL {num_scenes} scenes needed to cover the entire song - generate every scene, do not stop or ask questions)"
+            
+            # For now, use text model with song info (MP3 audio analysis can be added later)
+            # Note: Azure OpenAI Whisper API could be used for actual MP3 transcription
+            system_message = f"You are a music video storyboard creator. Generate ALL {num_scenes} scenes needed for this {song_duration:.1f} second song. If the response would be too long, generate scenes in sequential batches (e.g., scenes 1-14, then 15-28, then 29-42). Do NOT ask questions or offer options. Output ONLY the scenes in the requested format (SCENE X: [duration] seconds\n[prompt]), with no additional explanations, questions, or commentary. Start immediately with SCENE 1."
+            
+            # Calculate estimated tokens needed (rough estimate: ~100 tokens per scene)
+            # song_duration and num_scenes already calculated above
+            estimated_tokens = num_scenes * 100  # ~100 tokens per scene
+            
+            # Use much higher token limit for storyboard generation
+            # GPT-4/5 models support 8k, 16k, 32k, 64k, or 128k tokens depending on model
+            # For storyboard generation, use up to 64k tokens to handle very long songs
+            # Add generous buffer: estimated + 50% buffer, minimum 8000, maximum 64000
+            max_tokens = min(max(int(estimated_tokens * 1.5), 8000), 64000)
+            self.log_debug('INFO', f'Using max_tokens: {max_tokens} for {num_scenes} scenes (estimated: {estimated_tokens} tokens)')
+            
+            result = call_azure_ai(self.ai_config, prompt, system_message=system_message, profile='text', max_tokens=max_tokens)
+            
+            if result['success']:
+                content = result['content'].strip()
+                self.log_debug('INFO', f'Received storyboard response (length: {len(content)} chars)')
+                
+                # Always log full AI response for debugging
+                self.log_debug('DEBUG', f'Full AI response:\n{"="*80}\n{content}\n{"="*80}')
+                
+                if not content:
+                    self.log_debug('ERROR', 'Storyboard response is empty!')
+                    messagebox.showerror('Error', 'Storyboard generation returned empty content.')
+                    return
+                
+                # Check if AI refused to generate scenes (asked questions instead or hit length limit)
+                refusal_keywords = ['choose one option', 'which option', 'multiple parts', 'exceeds', 'too long', 'would you like', 
+                                   "can't generate", "cannot generate", "response of that length", "too many", "limit", 
+                                   "begin scenes", "confirm", "sequential messages", "multiple sequential"]
+                content_lower = content.lower()
+                has_scenes = 'SCENE 1:' in content.upper() or 'SCENE 1' in content.upper()
+                
+                # Check if AI is asking for batch confirmation
+                asking_for_batch = any(keyword in content_lower for keyword in ['begin scenes', 'confirm', 'sequential messages', 'multiple sequential', 'message 1', 'message 2', 'message 3'])
+                
+                if asking_for_batch and not has_scenes:
+                    self.log_debug('INFO', 'AI requested batch generation - automatically generating in batches')
+                    # Automatically generate in batches
+                    song_duration = self.get_mp3_duration(mp3_path)
+                    num_scenes = int(song_duration / seconds_per_video) + (1 if song_duration % seconds_per_video > 0 else 0)
+                    
+                    # Generate in batches of ~14 scenes each
+                    batch_size = 14
+                    all_scenes_content = []
+                    
+                    for batch_start in range(1, num_scenes + 1, batch_size):
+                        batch_end = min(batch_start + batch_size - 1, num_scenes)
+                        self.log_debug('INFO', f'Generating batch: Scenes {batch_start}-{batch_end} of {num_scenes}')
+                        
+                        # Create batch-specific prompt
+                        batch_prompt = self._create_batch_storyboard_prompt(
+                            song_name, full_song_name, lyrics, merged_style, persona_name,
+                            visual_aesthetic, base_image_prompt, vibe, lyric_segments,
+                            song_duration, seconds_per_video, batch_start, batch_end, num_scenes
+                        )
+                        
+                        batch_result = call_azure_ai(self.ai_config, batch_prompt, system_message=system_message, max_tokens=max_tokens)
+                        
+                        if batch_result['success']:
+                            batch_content = batch_result['content'].strip()
+                            self.log_debug('DEBUG', f'Batch {batch_start}-{batch_end} response (length: {len(batch_content)} chars)')
+                            all_scenes_content.append(batch_content)
+                        else:
+                            self.log_debug('ERROR', f'Batch {batch_start}-{batch_end} failed: {batch_result["error"]}')
+                            messagebox.showerror('Error', f'Failed to generate batch {batch_start}-{batch_end}: {batch_result["error"]}')
+                            return
+                    
+                    # Combine all batches
+                    combined_content = '\n\n'.join(all_scenes_content)
+                    self.log_debug('INFO', f'Combined all batches (total length: {len(combined_content)} chars)')
+                    self.parse_storyboard_response(combined_content, seconds_per_video)
+                    self.log_debug('INFO', 'Storyboard generated successfully in batches')
+                    return
+                
+                if any(keyword in content_lower for keyword in refusal_keywords) and not has_scenes and not asking_for_batch:
+                    self.log_debug('ERROR', 'AI refused to generate scenes due to length limit')
+                    
+                    # Calculate how many scenes would be needed
+                    song_duration = self.get_mp3_duration(mp3_path)
+                    num_scenes = int(song_duration / seconds_per_video) + (1 if song_duration % seconds_per_video > 0 else 0)
+                    
+                    # Suggest increasing seconds per video to reduce scene count
+                    suggested_seconds = max(seconds_per_video + 2, int(song_duration / 30))  # Aim for ~30 scenes max
+                    
+                    error_msg = f'The AI cannot generate all {num_scenes} scenes in one response (song is {song_duration:.0f} seconds).\n\n'
+                    error_msg += f'Current setting: {seconds_per_video} seconds per scene = {num_scenes} scenes\n\n'
+                    error_msg += f'Solution: Increase "Seconds per video" to {suggested_seconds} or higher '
+                    error_msg += f'to create fewer scenes (approximately {int(song_duration / suggested_seconds)} scenes).\n\n'
+                    error_msg += f'AI Response: {content}'
+                    messagebox.showerror('Error - Too Many Scenes', error_msg)
+                    return
+                
+                self.parse_storyboard_response(content, seconds_per_video)
+                self.log_debug('INFO', 'Storyboard generated successfully')
+            else:
+                messagebox.showerror('Error', f'Failed to generate storyboard: {result["error"]}')
+                self.log_debug('ERROR', f'Failed to generate storyboard: {result["error"]}')
+        except Exception as e:
+            messagebox.showerror('Error', f'Error generating storyboard: {e}')
+            self.log_debug('ERROR', f'Error generating storyboard: {e}')
+        finally:
+            self.config(cursor='')
+    
+    def _create_batch_storyboard_prompt(self, song_name, full_song_name, lyrics, merged_style, persona_name,
+                                        visual_aesthetic, base_image_prompt, vibe, lyric_segments,
+                                        song_duration, seconds_per_video, batch_start, batch_end, total_scenes):
+        """Create a prompt for generating a specific batch of scenes."""
+        prompt = f"Generate ONLY scenes {batch_start} through {batch_end} (out of {total_scenes} total scenes) for this music video storyboard.\n\n"
+        prompt += f"Song: {full_song_name if full_song_name else song_name}\n"
+        prompt += f"Artist/Persona: {persona_name}\n"
+        if lyrics:
+            prompt += f"Lyrics:\n{lyrics}\n\n"
+        if merged_style:
+            prompt += f"Style: {merged_style}\n\n"
+        
+        # Include full persona visual description
+        if visual_aesthetic:
+            prompt += f"Persona Visual Aesthetic: {visual_aesthetic}\n\n"
+        if base_image_prompt:
+            prompt += f"Persona Base Image Prompt (Character Visual Description): {base_image_prompt}\n\n"
+        if vibe:
+            prompt += f"Persona Vibe: {vibe}\n\n"
+        
+        # Add lyrics timing for this batch only
+        if lyric_segments and song_duration > 0:
+            scene_lyrics_info = "\n\nLYRICS TIMING FOR THIS BATCH:\n"
+            current_time = (batch_start - 1) * seconds_per_video
+            for scene_idx in range(batch_start, batch_end + 1):
+                scene_start_time = current_time
+                scene_end_time = min(current_time + seconds_per_video, song_duration)
+                scene_lyrics = self.get_lyrics_for_scene(scene_start_time, scene_end_time, lyric_segments)
+                if scene_lyrics:
+                    scene_lyrics_info += f"Scene {scene_idx} ({scene_start_time:.1f}s - {scene_end_time:.1f}s): {scene_lyrics}\n"
+                current_time = scene_end_time
+                if current_time >= song_duration:
+                    break
+            scene_lyrics_info += "\n"
+            prompt += scene_lyrics_info
+        
+        prompt += f"STORYBOARD THEME: '{full_song_name if full_song_name else song_name}'\n\n"
+        prompt += f"CRITICAL: Generate ONLY scenes {batch_start} through {batch_end}. Start immediately with SCENE {batch_start}:, no preamble, no explanations.\n\n"
+        prompt += "Output format:\n"
+        prompt += f"SCENE {batch_start}: [duration] seconds\n[detailed image prompt]\n\n"
+        if batch_start < batch_end:
+            prompt += f"SCENE {batch_start + 1}: [duration] seconds\n[detailed image prompt]\n\n"
+        prompt += f"(Continue through SCENE {batch_end})\n"
+        
+        return prompt
+    
+    def parse_storyboard_response(self, content: str, default_duration: int):
+        """Parse the AI response and populate storyboard treeview.
+        
+        Args:
+            content: AI response with scene descriptions
+            default_duration: Default duration in seconds for each scene
+        """
+        if not hasattr(self, 'storyboard_tree'):
+            self.log_debug('ERROR', 'Storyboard treeview not found')
+            return
+        
+        self.log_debug('INFO', f'Parsing storyboard response (length: {len(content)} chars, default_duration: {default_duration}s)')
+        self.log_debug('DEBUG', f'Response preview (first 500 chars): {content[:500]}')
+        
+        # Clear existing items
+        for item in self.storyboard_tree.get_children():
+            self.storyboard_tree.delete(item)
+        
+        # Get lyrics and song duration for calculating scene lyrics
+        lyrics = self.lyrics_text.get('1.0', tk.END).strip() if hasattr(self, 'lyrics_text') else ''
+        mp3_path = self.get_mp3_filepath() if hasattr(self, 'get_mp3_filepath') else ''
+        song_duration = self.get_mp3_duration(mp3_path) if mp3_path else 0.0
+        lyric_segments = []
+        if lyrics and song_duration > 0:
+            lyric_segments = self.parse_lyrics_with_timing(lyrics, song_duration)
+        
+        # Parse scenes from response
+        lines = content.split('\n')
+        self.log_debug('DEBUG', f'Total lines in response: {len(lines)}')
+        
+        current_scene = None
+        current_prompt = []
+        scene_num = 1
+        scenes_found = 0
+        
+        for line_idx, line in enumerate(lines):
+            original_line = line
+            line = line.strip()
+            if not line:
+                continue
+            
+            # Check for scene marker
+            if line.upper().startswith('SCENE'):
+                self.log_debug('DEBUG', f'Found scene marker at line {line_idx + 1}: {line}')
+                # Save previous scene if exists
+                if current_scene is not None and current_prompt:
+                    prompt_text = '\n'.join(current_prompt).strip()
+                    if prompt_text:
+                        # Calculate lyrics for this scene
+                        scene_lyrics = ''
+                        if lyric_segments and song_duration > 0:
+                            scene_start_time = (current_scene - 1) * default_duration
+                            scene_end_time = min(scene_start_time + default_duration, song_duration)
+                            scene_lyrics = self.get_lyrics_for_scene(scene_start_time, scene_end_time, lyric_segments)
+                        
+                        self.storyboard_tree.insert('', tk.END, values=(current_scene, f'{default_duration}s', scene_lyrics, prompt_text))
+                        scenes_found += 1
+                        self.log_debug('DEBUG', f'Saved scene {current_scene} with prompt length {len(prompt_text)} chars, lyrics: {scene_lyrics[:50] if scene_lyrics else "none"}')
+                    else:
+                        self.log_debug('WARNING', f'Scene {current_scene} has empty prompt, skipping')
+                
+                # Extract scene number and duration
+                parts = line.split(':')
+                if len(parts) >= 2:
+                    scene_part = parts[0].strip()
+                    duration_part = parts[1].strip() if len(parts) > 1 else f'{default_duration}s'
+                    # Extract duration from duration_part (e.g., "8 seconds" -> 8)
+                    duration_match = re.search(r'(\d+)', duration_part)
+                    if duration_match:
+                        scene_duration = int(duration_match.group(1))
+                        self.log_debug('DEBUG', f'Extracted duration: {scene_duration}s from "{duration_part}"')
+                    else:
+                        scene_duration = default_duration
+                        self.log_debug('DEBUG', f'Using default duration: {default_duration}s')
+                    # Extract scene number
+                    scene_num_match = [s for s in scene_part.split() if s.isdigit()]
+                    if scene_num_match:
+                        current_scene = int(scene_num_match[0])
+                        self.log_debug('DEBUG', f'Extracted scene number: {current_scene} from "{scene_part}"')
+                    else:
+                        current_scene = scene_num
+                        scene_num += 1
+                        self.log_debug('DEBUG', f'Using auto-increment scene number: {current_scene}')
+                    current_prompt = []
+                else:
+                    self.log_debug('WARNING', f'Scene marker format unexpected: {line}')
+            elif current_scene is not None:
+                # Add to current prompt
+                current_prompt.append(line)
+            elif line_idx < 10:  # Log first few non-scene lines for debugging
+                self.log_debug('DEBUG', f'Line {line_idx + 1} (before scene): {line[:100]}')
+        
+        # Save last scene
+        if current_scene is not None and current_prompt:
+            prompt_text = '\n'.join(current_prompt).strip()
+            if prompt_text:
+                # Calculate lyrics for last scene
+                scene_lyrics = ''
+                if lyric_segments and song_duration > 0:
+                    scene_start_time = (current_scene - 1) * default_duration
+                    scene_end_time = min(scene_start_time + default_duration, song_duration)
+                    scene_lyrics = self.get_lyrics_for_scene(scene_start_time, scene_end_time, lyric_segments)
+                
+                self.storyboard_tree.insert('', tk.END, values=(current_scene, f'{default_duration}s', scene_lyrics, prompt_text))
+                scenes_found += 1
+                self.log_debug('DEBUG', f'Saved final scene {current_scene} with prompt length {len(prompt_text)} chars, lyrics: {scene_lyrics[:50] if scene_lyrics else "none"}')
+            else:
+                self.log_debug('WARNING', f'Final scene {current_scene} has empty prompt, skipping')
+        
+        self.log_debug('INFO', f'Parsing complete: Found {scenes_found} scenes')
+        if scenes_found == 0:
+            self.log_debug('ERROR', 'No scenes were parsed from the response!')
+            self.log_debug('DEBUG', f'Full response content:\n{content}')
+    
+    def generate_storyboard_image_selected(self):
+        """Generate images for the selected storyboard scenes (supports multiple selection)."""
+        if not hasattr(self, 'storyboard_tree'):
+            return
+        
+        selection = self.storyboard_tree.selection()
+        if not selection:
+            messagebox.showwarning('Warning', 'Please select one or more scenes to generate images for.')
+            return
+        
+        # Get all selected scenes
+        scenes_to_generate = []
+        for item in selection:
+            values = self.storyboard_tree.item(item, 'values')
+            if len(values) >= 4:
+                scene_num = values[0]
+                prompt = values[3]  # Prompt is now 4th column (after lyrics)
+                if prompt:
+                    scenes_to_generate.append((scene_num, prompt))
+            elif len(values) >= 3:
+                # Fallback for old format (no lyrics column)
+                scene_num = values[0]
+                prompt = values[2]
+                if prompt:
+                    scenes_to_generate.append((scene_num, prompt))
+        
+        if not scenes_to_generate:
+            messagebox.showwarning('Warning', 'No valid scenes found in selection.')
+            return
+        
+        # Ask for confirmation if multiple scenes
+        if len(scenes_to_generate) > 1:
+            response = messagebox.askyesno('Generate Multiple Images', f'Generate images for {len(scenes_to_generate)} selected scenes? This may take a while.')
+            if not response:
+                return
+        
+        # Create progress dialog for multiple images
+        progress_dialog = None
+        if len(scenes_to_generate) > 1:
+            progress_dialog = ProgressDialog(self, len(scenes_to_generate), 'Generating Storyboard Images')
+            progress_dialog.update()
+        
+        # Generate images for all selected scenes
+        successful = 0
+        failed = 0
+        for idx, (scene_num, prompt) in enumerate(scenes_to_generate, 1):
+            if progress_dialog:
+                if progress_dialog.is_cancelled():
+                    self.log_debug('INFO', 'Image generation cancelled by user')
+                    break
+                progress_dialog.update_progress(idx, f'Generating scene {scene_num} ({idx}/{len(scenes_to_generate)})...')
+            
+            if self.generate_storyboard_image(scene_num, prompt, show_success_message=False):
+                successful += 1
+            else:
+                failed += 1
+        
+        # Close progress dialog
+        if progress_dialog:
+            progress_dialog.destroy()
+        
+        # Show summary if multiple images
+        if len(scenes_to_generate) > 1:
+            messagebox.showinfo('Generation Complete', f'Generated {successful} image(s) successfully.\n{failed} failed.' if failed > 0 else f'Generated {successful} image(s) successfully.')
+    
+    def generate_storyboard_images_all(self):
+        """Generate images for all storyboard scenes."""
+        if not hasattr(self, 'storyboard_tree'):
+            return
+        
+        items = self.storyboard_tree.get_children()
+        if not items:
+            messagebox.showwarning('Warning', 'No scenes found. Please generate storyboard first.')
+            return
+        
+        response = messagebox.askyesno('Generate All Images', f'Generate images for all {len(items)} scenes? This may take a while.')
+        if not response:
+            return
+        
+        # Get all scenes to generate
+        scenes_to_generate = []
+        for item in items:
+            values = self.storyboard_tree.item(item, 'values')
+            if len(values) >= 4:
+                scene_num = values[0]
+                prompt = values[3]  # Prompt is now 4th column (after lyrics)
+                if prompt:
+                    scenes_to_generate.append((scene_num, prompt))
+            elif len(values) >= 3:
+                # Fallback for old format (no lyrics column)
+                scene_num = values[0]
+                prompt = values[2]
+                if prompt:
+                    scenes_to_generate.append((scene_num, prompt))
+        
+        if not scenes_to_generate:
+            messagebox.showwarning('Warning', 'No valid scenes found.')
+            return
+        
+        # Create progress dialog
+        progress_dialog = ProgressDialog(self, len(scenes_to_generate), 'Generating Storyboard Images')
+        progress_dialog.update()
+        
+        # Generate images for all scenes
+        successful = 0
+        failed = 0
+        for idx, (scene_num, prompt) in enumerate(scenes_to_generate, 1):
+            if progress_dialog.is_cancelled():
+                self.log_debug('INFO', 'Image generation cancelled by user')
+                break
+            progress_dialog.update_progress(idx, f'Generating scene {scene_num} ({idx}/{len(scenes_to_generate)})...')
+            
+            if self.generate_storyboard_image(scene_num, prompt, show_success_message=False):
+                successful += 1
+            else:
+                failed += 1
+        
+        # Close progress dialog
+        progress_dialog.destroy()
+        
+        # Show summary
+        messagebox.showinfo('Generation Complete', f'Generated {successful} image(s) successfully.\n{failed} failed.' if failed > 0 else f'Generated {successful} image(s) successfully.')
+    
+    def get_storyboard_image_size(self) -> str:
+        """Get the image size string for storyboard images.
+        
+        Returns:
+            Size string like '1536x1024' extracted from dropdown value
+        """
+        if hasattr(self, 'storyboard_image_size_var'):
+            size_value = self.storyboard_image_size_var.get()
+            # Extract size from format like "3:2 (1536x1024)" -> "1536x1024"
+            match = re.search(r'\((\d+x\d+)\)', size_value)
+            if match:
+                return match.group(1)
+        # Default to 3:2 aspect ratio
+        return '1536x1024'
+    
+    def get_album_cover_image_size(self) -> str:
+        """Get the image size string for album cover images.
+        
+        Returns:
+            Size string like '1024x1024' extracted from dropdown value
+        """
+        if hasattr(self, 'album_cover_size_var'):
+            size_value = self.album_cover_size_var.get()
+            # Extract size from format like "1:1 (1024x1024)" -> "1024x1024"
+            match = re.search(r'\((\d+x\d+)\)', size_value)
+            if match:
+                return match.group(1)
+        # Default to 1:1 aspect ratio
+        return '1024x1024'
+    
+    def get_album_cover_format(self) -> str:
+        """Get the image format for album cover (PNG or JPEG).
+        
+        Returns:
+            Format string: 'png' or 'jpeg'
+        """
+        if hasattr(self, 'album_cover_format_var'):
+            format_value = self.album_cover_format_var.get().upper()
+            if format_value == 'JPEG':
+                return 'jpeg'
+            return 'png'
+        return 'png'
+    
+    def get_video_loop_size(self) -> str:
+        """Get the video size string for video loop.
+        
+        Returns:
+            Size string like '720x1280' extracted from dropdown value
+        """
+        if hasattr(self, 'video_loop_size_var'):
+            size_value = self.video_loop_size_var.get()
+            # Extract size from format like "9:16 (720x1280)" -> "720x1280"
+            match = re.search(r'\((\d+x\d+)\)', size_value)
+            if match:
+                return match.group(1)
+        # Default to 9:16 aspect ratio
+        return '720x1280'
+    
+    def generate_storyboard_image(self, scene_num: str, prompt: str, show_success_message: bool = True):
+        """Generate image for a storyboard scene.
+        
+        Args:
+            scene_num: Scene number
+            prompt: Image generation prompt
+            show_success_message: If True, show success messagebox (default True for single image generation)
+        
+        Returns:
+            True if image was generated successfully or already exists, False otherwise
+        """
+        if not self.current_song_path:
+            return False
+        
+        # Check if image already exists
+        safe_scene = str(scene_num).replace(':', '_').replace('/', '_').replace('\\', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace("'", '_').replace('<', '_').replace('>', '_').replace('|', '_')
+        image_filename = os.path.join(self.current_song_path, f'storyboard_scene_{safe_scene}.png')
+        if os.path.exists(image_filename):
+            self.log_debug('INFO', f'Scene {scene_num} image already exists, skipping: {image_filename}')
+            return True
+        
+        # Check if persona is part of the scene by analyzing the prompt
+        persona_in_scene = False
+        if self.current_persona:
+            persona_name = self.current_persona.get('name', '').lower()
+            prompt_lower = prompt.lower()
+            visual_aesthetic = self.current_persona.get('visual_aesthetic', '').lower()
+            base_image_prompt = self.current_persona.get('base_image_prompt', '').lower()
+            
+            # First check: explicit persona name or character-related keywords
+            if persona_name and persona_name in prompt_lower:
+                persona_in_scene = True
+                self.log_debug('INFO', f'Persona detected in scene {scene_num} by name match')
+            elif any(keyword in prompt_lower for keyword in ['character', 'persona', 'singer', 'artist', 'performer', 'person', 'figure', 'protagonist', 'main character', 'vocalist', 'musician']):
+                persona_in_scene = True
+                self.log_debug('INFO', f'Persona detected in scene {scene_num} by keyword match')
+            # Second check: if no explicit keywords, use AI to analyze if persona should be in scene
+            elif visual_aesthetic or base_image_prompt:
+                try:
+                    self.log_debug('INFO', f'Analyzing scene {scene_num} prompt to determine if persona should be featured...')
+                    analysis_prompt = f"Analyze this music video scene prompt and determine if it should feature the main artist/performer character.\n\n"
+                    analysis_prompt += f"Scene Prompt: {prompt}\n\n"
+                    analysis_prompt += f"Artist/Persona Name: {self.current_persona.get('name', '')}\n"
+                    if visual_aesthetic:
+                        analysis_prompt += f"Persona Visual Aesthetic: {self.current_persona.get('visual_aesthetic', '')}\n"
+                    if base_image_prompt:
+                        analysis_prompt += f"Persona Base Image Description: {self.current_persona.get('base_image_prompt', '')}\n"
+                    analysis_prompt += "\nDetermine if this scene should feature the main artist/performer character. "
+                    analysis_prompt += "Consider: Does the scene describe a person/character? Does it match the persona's visual style? "
+                    analysis_prompt += "Is it a performance scene, close-up, or character-focused scene? "
+                    analysis_prompt += "Respond with ONLY 'YES' if the persona should be featured, or 'NO' if not."
+                    
+                    analysis_result = call_azure_ai(self.ai_config, analysis_prompt, system_message="You are a music video analysis assistant. Analyze scene prompts to determine if they should feature the main artist character.", profile='text')
+                    
+                    if analysis_result['success']:
+                        analysis_response = analysis_result['content'].strip().upper()
+                        if 'YES' in analysis_response or 'SHOULD' in analysis_response or 'FEATURE' in analysis_response:
+                            persona_in_scene = True
+                            self.log_debug('INFO', f'Persona detected in scene {scene_num} by AI analysis')
+                        else:
+                            self.log_debug('INFO', f'Persona NOT detected in scene {scene_num} by AI analysis')
+                    else:
+                        # Fallback: if analysis fails, check if prompt contains visual elements that match persona
+                        # This is a conservative approach - if scene has visual descriptions, assume persona might be there
+                        visual_keywords = ['close-up', 'closeup', 'portrait', 'face', 'expression', 'pose', 'standing', 'sitting', 'performing', 'singing', 'dancing', 'looking', 'gazing']
+                        if any(keyword in prompt_lower for keyword in visual_keywords):
+                            # Check if visual elements match persona aesthetic keywords
+                            persona_keywords = []
+                            if visual_aesthetic:
+                                # Extract key visual words from aesthetic (simple approach)
+                                persona_keywords = [word for word in visual_aesthetic.split() if len(word) > 4]
+                            if base_image_prompt:
+                                persona_keywords.extend([word for word in base_image_prompt.split() if len(word) > 4])
+                            
+                            # If scene mentions visual elements and some match persona keywords, likely persona scene
+                            matching_keywords = [kw for kw in persona_keywords if kw in prompt_lower]
+                            if matching_keywords:
+                                persona_in_scene = True
+                                self.log_debug('INFO', f'Persona detected in scene {scene_num} by visual keyword matching: {matching_keywords[:3]}')
+                except Exception as e:
+                    self.log_debug('WARNING', f'Failed to analyze scene {scene_num} for persona detection: {e}')
+                    # Conservative fallback: if we can't determine, don't assume persona is there
+        
+        # If persona is part of scene, analyze Front Persona Image and include description
+        if persona_in_scene and self.current_persona and self.current_persona_path:
+            safe_name = self.current_persona.get('name', 'persona').replace(' ', '-').replace(':', '_').replace('/', '_').replace('\\', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace("'", '_').replace('<', '_').replace('>', '_').replace('|', '_')
+            front_image_path = os.path.join(self.current_persona_path, f'{safe_name}-Front.png')
+            
+            if os.path.exists(front_image_path):
+                try:
+                    # Downscale Front image by 50% for analysis
+                    from PIL import Image
+                    original_img = Image.open(front_image_path)
+                    new_width = original_img.width // 2
+                    new_height = original_img.height // 2
+                    downscaled_img = original_img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                    
+                    # Save to temporary file
+                    temp_dir = os.path.join(self.current_song_path, 'temp')
+                    os.makedirs(temp_dir, exist_ok=True)
+                    reference_image_path = os.path.join(temp_dir, f'{safe_name}-Front-downscaled.png')
+                    downscaled_img.save(reference_image_path, 'PNG')
+                    
+                    # Analyze the reference image using vision API to get detailed description
+                    self.log_debug('INFO', f'Analyzing Front Persona Image for scene {scene_num} reference...')
+                    vision_prompt = "Analyze this persona reference image in extreme detail. Provide a comprehensive description of the character's appearance, including: physical features, clothing, styling, colors, accessories, pose, and all visual characteristics. This description will be used to ensure the scene image features the exact same character."
+                    vision_system = "You are an image analysis assistant. Provide a highly detailed, objective description of the character's visual appearance from the reference image. Focus on all visual characteristics that should be preserved in the scene image."
+                    
+                    vision_result = call_azure_vision(self.ai_config, [reference_image_path], vision_prompt, system_message=vision_system, profile='text')
+                    
+                    if vision_result['success']:
+                        character_description = vision_result['content'].strip()
+                        # Insert character description at the beginning of the prompt for better emphasis
+                        prompt = f"REFERENCE CHARACTER DESCRIPTION (from Front Persona Image - MUST MATCH EXACTLY):\n{character_description}\n\n" + prompt
+                        prompt += "\n\nCRITICAL REQUIREMENT: The character in this scene MUST be visually identical to the reference character description above. Match all physical features, clothing, styling, colors, accessories, and visual characteristics exactly. The character appearance must be consistent with the reference image."
+                        self.log_debug('INFO', f'Added character description from Front Persona Image to scene {scene_num} prompt')
+                    else:
+                        # Fallback: just reference the image exists
+                        prompt += f"\n\nIMPORTANT: Use the Front Persona Image as reference. The scene must feature this exact character with matching appearance, styling, and visual characteristics."
+                        self.log_debug('WARNING', f'Failed to analyze reference image for scene {scene_num}: {vision_result.get("error", "Unknown error")}')
+                    
+                    self.log_debug('INFO', f'Using Front Persona Image as reference for scene {scene_num}')
+                except Exception as e:
+                    self.log_debug('WARNING', f'Failed to prepare reference image for scene {scene_num}: {e}')
+        
+        self.log_debug('INFO', f'Generating image for scene {scene_num}...')
+        self.config(cursor='wait')
+        self.update()
+        
+        # Get image size from configuration
+        image_size = self.get_storyboard_image_size()
+        
+        try:
+            result = call_azure_image(self.ai_config, prompt, size=image_size, profile='image_gen')
+            
+            if result['success']:
+                img_bytes = result.get('image_bytes', b'')
+                if img_bytes:
+                    # Save image (image_filename already defined above)
+                    with open(image_filename, 'wb') as f:
+                        f.write(img_bytes)
+                    self.log_debug('INFO', f'Scene {scene_num} image saved: {image_filename}')
+                    if show_success_message:
+                        messagebox.showinfo('Success', f'Scene {scene_num} image generated successfully!')
+                    return True
+                else:
+                    self.log_debug('ERROR', f'No image bytes received for scene {scene_num}')
+                    if show_success_message:
+                        messagebox.showerror('Error', f'No image bytes received for scene {scene_num}')
+                    return False
+            else:
+                self.log_debug('ERROR', f'Failed to generate image for scene {scene_num}: {result["error"]}')
+                if show_success_message:
+                    messagebox.showerror('Error', f'Failed to generate image for scene {scene_num}: {result["error"]}')
+                return False
+        except Exception as e:
+            self.log_debug('ERROR', f'Error generating image for scene {scene_num}: {e}')
+            if show_success_message:
+                messagebox.showerror('Error', f'Error generating image for scene {scene_num}: {e}')
+            return False
+        finally:
+            self.config(cursor='')
+    
+    def run_image_model(self):
+        """Run the image generation model."""
+        prompt = self.album_cover_text.get('1.0', tk.END).strip()
+        if not prompt or prompt.startswith('Error:'):
+            messagebox.showwarning('Warning', 'Please generate an album cover prompt first.')
+            return
+        
+        dialog = ExtraCommandsDialog(self, prompt)
+        self.wait_window(dialog)
+        
+        if dialog.result is None:
+            return
+        
+        if dialog.result:
+            prompt = f"{prompt} {dialog.result}"
+        
+        # Check if Front Persona Image exists and analyze it for reference
+        if self.current_persona and self.current_persona_path:
+            safe_name = self.current_persona.get('name', 'persona').replace(' ', '-').replace(':', '_').replace('/', '_').replace('\\', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace("'", '_').replace('<', '_').replace('>', '_').replace('|', '_')
+            front_image_path = os.path.join(self.current_persona_path, f'{safe_name}-Front.png')
+            
+            if os.path.exists(front_image_path):
+                try:
+                    # Downscale Front image by 50% for analysis
+                    from PIL import Image
+                    original_img = Image.open(front_image_path)
+                    new_width = original_img.width // 2
+                    new_height = original_img.height // 2
+                    downscaled_img = original_img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                    
+                    # Save to temporary file
+                    temp_dir = os.path.join(self.current_song_path if self.current_song_path else os.path.dirname(front_image_path), 'temp')
+                    os.makedirs(temp_dir, exist_ok=True)
+                    reference_image_path = os.path.join(temp_dir, f'{safe_name}-Front-downscaled.png')
+                    downscaled_img.save(reference_image_path, 'PNG')
+                    
+                    # Analyze the reference image using vision API to get detailed description
+                    self.log_debug('INFO', f'Analyzing Front Persona Image for album cover reference...')
+                    vision_prompt = "Analyze this persona reference image in extreme detail. Provide a comprehensive description of the character's appearance, including: physical features, clothing, styling, colors, accessories, pose, and all visual characteristics. This description will be used to ensure the album cover features the exact same character."
+                    vision_system = "You are an image analysis assistant. Provide a highly detailed, objective description of the character's visual appearance from the reference image. Focus on all visual characteristics that should be preserved in the album cover."
+                    
+                    vision_result = call_azure_vision(self.ai_config, [reference_image_path], vision_prompt, system_message=vision_system, profile='text')
+                    
+                    if vision_result['success']:
+                        character_description = vision_result['content'].strip()
+                        prompt += f"\n\nREFERENCE CHARACTER DESCRIPTION (from Front Persona Image):\n{character_description}\n\n"
+                        prompt += "IMPORTANT: The album cover MUST feature this exact character with matching appearance, styling, and visual characteristics as described above. The character in the album cover must be visually consistent with the reference image."
+                        self.log_debug('INFO', f'Added character description from Front Persona Image to prompt')
+                    else:
+                        # Fallback: just reference the image exists
+                        prompt += f"\n\nIMPORTANT: Use the Front Persona Image as reference. The album cover must feature this exact character with matching appearance, styling, and visual characteristics."
+                        self.log_debug('WARNING', f'Failed to analyze reference image: {vision_result.get("error", "Unknown error")}')
+                    
+                    self.log_debug('INFO', f'Using Front Persona Image as reference: {front_image_path}')
+                except Exception as e:
+                    self.log_debug('WARNING', f'Failed to prepare reference image: {e}')
+        
+        full_song_name = self.full_song_name_var.get().strip() or 'album_cover'
+        safe_basename = full_song_name.replace(':', '_').replace('/', '_').replace('\\', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace("'", '_').replace('<', '_').replace('>', '_').replace('|', '_')
+        
+        self.log_debug('INFO', 'Calling Azure Image model...')
+        self.config(cursor='wait')
+        self.update()
+        
+        # Get image size and format from configuration
+        image_size = self.get_album_cover_image_size()
+        image_format = self.get_album_cover_format()
+        
+        try:
+            result = call_azure_image(self.ai_config, prompt, size=image_size, profile='image_gen', output_format=image_format)
+        finally:
+            self.config(cursor='')
+        
+        if not result['success']:
+            messagebox.showerror('Error', f"Image generation failed: {result['error']}")
+            self.log_debug('ERROR', f"Image generation failed: {result['error']}")
+            return
+        
+        img_bytes = result.get('image_bytes', b'')
+        if not img_bytes:
+            messagebox.showerror('Error', 'No image bytes received')
+            return
+        
+        # Save to song folder with Full Song Name
+        if not self.current_song_path:
+            messagebox.showwarning('Warning', 'No song selected. Cannot save album cover.')
+            return
+        
+        full_song_name = self.full_song_name_var.get().strip()
+        if not full_song_name:
+            full_song_name = self.song_name_var.get().strip() or 'album_cover'
+        
+        # Generate safe filename from Full Song Name with correct extension
+        safe_basename = full_song_name.replace(':', '_').replace('/', '_').replace('\\', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace("'", "'").replace('<', '_').replace('>', '_').replace('|', '_')
+        file_extension = '.jpg' if image_format == 'jpeg' else '.png'
+        filename = os.path.join(self.current_song_path, f'{safe_basename}-Cover{file_extension}')
+        
+        # Check if file exists and ask for confirmation
+        if os.path.exists(filename):
+            response = messagebox.askyesno('File Exists', f'Album cover file already exists:\n{filename}\n\nOverwrite?')
+            if not response:
+                self.log_debug('INFO', 'Album cover save cancelled by user')
+                return
+        
+        try:
+            with open(filename, 'wb') as f:
+                f.write(img_bytes)
+            self.log_debug('INFO', f'Album cover saved to {filename}')
+            messagebox.showinfo('Success', f'Album cover saved to:\n{filename}')
+        except Exception as e:
+            messagebox.showerror('Error', f'Failed to save album cover: {e}')
+            self.log_debug('ERROR', f'Failed to save album cover: {e}')
+    
+    def run_video_loop_model(self):
+        """Run the video generation model."""
+        prompt = self.video_loop_text.get('1.0', tk.END).strip()
+        if not prompt or prompt.startswith('Error:'):
+            messagebox.showwarning('Warning', 'Please generate a video loop prompt first.')
+            return
+        
+        dialog = ExtraCommandsDialog(self, prompt)
+        self.wait_window(dialog)
+        
+        if dialog.result is None:
+            return
+        
+        if dialog.result:
+            prompt = f"{prompt} {dialog.result}"
+        
+        full_song_name = self.full_song_name_var.get().strip() or 'video'
+        safe_basename = full_song_name.replace(':', '_').replace('/', '_').replace('\\', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace("'", '_').replace('<', '_').replace('>', '_').replace('|', '_')
+        
+        self.log_debug('INFO', 'Calling Azure Video model...')
+        self.config(cursor='wait')
+        self.update()
+        
+        # Get video size from configuration
+        video_size = self.get_video_loop_size()
+        
+        try:
+            result = call_azure_video(self.ai_config, prompt, size=video_size, seconds='4', profile='video_gen')
+        finally:
+            self.config(cursor='')
+        
+        if not result['success']:
+            messagebox.showerror('Error', f"Video generation failed: {result['error']}")
+            self.log_debug('ERROR', f"Video generation failed: {result['error']}")
+            return
+        
+        video_bytes = result.get('video_bytes', b'')
+        if not video_bytes:
+            url = result.get('url', '')
+            if url:
+                messagebox.showinfo('Info', f'Video generated. URL: {url}')
+            else:
+                messagebox.showerror('Error', 'No video content returned')
+            return
+        
+        filename = filedialog.asksaveasfilename(
+            title='Save Generated Video',
+            defaultextension='.mp4',
+            filetypes=[('MP4 Video', '*.mp4'), ('All Files', '*.*')],
+            initialfile=f"{safe_basename}.mp4"
+        )
+        
+        if filename:
+            try:
+                with open(filename, 'wb') as f:
+                    f.write(video_bytes)
+                self.log_debug('INFO', f'Video saved to {filename}')
+                messagebox.showinfo('Success', f'Video saved to {filename}')
+            except Exception as e:
+                messagebox.showerror('Error', f'Failed to save video: {e}')
+                self.log_debug('ERROR', f'Failed to save video: {e}')
+    
+    def export_youtube_description(self):
+        """Export YouTube description for the song."""
+        if not self.current_persona:
+            messagebox.showwarning('Warning', 'Please select a persona first.')
+            return
+        
+        song_name = self.song_name_var.get().strip()
+        persona_name = self.current_persona.get('name', '')
+        
+        if not song_name:
+            messagebox.showwarning('Warning', 'Please enter a song name.')
+            return
+        
+        full_song_name = self.full_song_name_var.get().strip()
+        lyrics = self.lyrics_text.get('1.0', tk.END).strip()
+        song_style = self.song_style_text.get('1.0', tk.END).strip()
+        merged_style = self.merged_style_text.get('1.0', tk.END).strip()
+        album_cover = self.album_cover_text.get('1.0', tk.END).strip()
+        video_loop = self.video_loop_text.get('1.0', tk.END).strip()
+        
+        title = f"{merged_style} - {persona_name} _{song_name}_"
+        
+        desc = f"TITLE: {title}\n\n"
+        desc += f"🎵 AI Song | {persona_name}\n"
+        desc += f"Listen to \"{song_name}\" by the AI persona {persona_name}.\n\n"
+        desc += f"This AI-generated song features {merged_style.lower()} elements.\n\n"
+        desc += "🎧 SUBSCRIBE for more AI music!\n"
+        desc += "🔔 Turn on notifications!\n"
+        desc += "👍 Like this video!\n\n"
+        desc += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        desc += "📋 CREDITS & INFORMATION\n"
+        desc += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        desc += f"Song: \"{song_name}\"\n"
+        desc += f"AI Persona: {persona_name}\n"
+        desc += f"Style: {merged_style}\n"
+        desc += f"Video Type: AI-Generated Music\n\n"
+        desc += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        desc += "⚠️ DISCLAIMER\n"
+        desc += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        desc += "This is an AI-generated song created by an AI persona. "
+        desc += "All content is original and created using AI technology.\n"
+        
+        content = "=" * 70 + "\n"
+        content += "YOUTUBE TITLE\n"
+        content += "=" * 70 + "\n\n"
+        content += f"{title}\n\n"
+        content += "=" * 70 + "\n"
+        content += "SONG DETAILS\n"
+        content += "=" * 70 + "\n\n"
+        content += f"Full Song Name: {full_song_name}\n"
+        content += f"Song Name: {song_name}\n"
+        content += f"AI Persona: {persona_name}\n"
+        content += f"Song Style: {song_style}\n"
+        content += f"Merged Style: {merged_style}\n"
+        content += f"Lyrics: {lyrics}\n"
+        content += f"Album Cover Prompt: {album_cover}\n"
+        content += f"Video Loop Prompt: {video_loop}\n"
+        content += "\n" + "=" * 70 + "\n"
+        content += "YOUTUBE DESCRIPTION\n"
+        content += "=" * 70 + "\n\n"
+        content += desc
+        
+        safe_basename = full_song_name.replace(':', '_').replace('/', '_') if full_song_name else song_name.replace(' ', '_')
+        
+        filename = filedialog.asksaveasfilename(
+            title='Save YouTube Description',
+            defaultextension='.txt',
+            filetypes=[('Text Files', '*.txt'), ('All Files', '*.*')],
+            initialfile=f"{safe_basename}.txt"
+        )
+        
+        if filename:
+            try:
+                with open(filename, 'w', encoding='utf-8') as f:
+                    f.write(content)
+                self.log_debug('INFO', f'YouTube description exported to {filename}')
+                messagebox.showinfo('Success', f'YouTube description exported to {filename}')
+            except Exception as e:
+                messagebox.showerror('Error', f'Failed to export: {e}')
+                self.log_debug('ERROR', f'Failed to export: {e}')
+    
+    def open_settings(self):
+        """Open settings dialog."""
+        dialog = SettingsDialog(self, self.ai_config)
+        self.wait_window(dialog)
+        if dialog.result:
+            self.ai_config = dialog.result
+            if save_config(self.ai_config):
+                self.personas_path = get_personas_path(self.ai_config)
+                self.refresh_personas_list()
+                self.log_debug('INFO', 'Settings saved successfully.')
+            else:
+                self.log_debug('ERROR', 'Failed to save settings.')
+    
+    def show_about(self):
+        """Show about dialog."""
+        about_text = """Suno Persona Manager
+
+A tool for managing AI Personas and their AI-generated songs.
+
+Features:
+- Create and manage AI Personas
+- Edit persona information with AI enhancement
+- Generate reference images (Front, Side, Back)
+- Manage AI Songs for each persona
+- Generate lyrics, styles, and prompts
+- Export YouTube descriptions
+
+Version: 1.0"""
+        self.log_debug('INFO', about_text)
+
+
+def main():
+    app = SunoPersona()
+    app.mainloop()
+
+
+if __name__ == '__main__':
+    main()
+
+
