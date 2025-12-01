@@ -170,7 +170,7 @@ class YouTubeDownloaderGUI(BaseAudioGUI):
         # Auto-download with quality fallback buttons
         auto_frame = ttk.Frame(bottom_frame)
         auto_frame.pack(fill='x', pady=5)
-        ttk.Label(auto_frame, text="Auto Download (Medium -> High -> Low):", font=('TkDefaultFont', 9, 'bold')).pack(side='left', padx=5)
+        ttk.Label(auto_frame, text="Auto Download (High -> Medium -> Low):", font=('TkDefaultFont', 9, 'bold')).pack(side='left', padx=5)
         ttk.Button(auto_frame, text="Selected Videos", command=self.auto_download_lowest_resolution_selected).pack(side='left', padx=5)
         ttk.Button(auto_frame, text="All Videos", command=self.auto_download_lowest_resolution_all).pack(side='left', padx=5)
         
@@ -261,7 +261,7 @@ class YouTubeDownloaderGUI(BaseAudioGUI):
         self.filename_var = tk.StringVar(value="{Rank}_{Song Title}_{Artist}")
         ttk.Entry(frame, textvariable=self.filename_var, width=50).grid(row=2, column=1, padx=5, columnspan=2)
         
-        self.available_fields_label = ttk.Label(frame, text="Available fields: {Rank}, {Song Title}, {Artist}, {Year}, {Views (Billions)}")
+        self.available_fields_label = ttk.Label(frame, text="Available fields: {Rank}, {Song Title}, {Artist}, {Year}, {Views (Billions)}, {YouTube Title}")
         self.available_fields_label.grid(row=3, column=0, columnspan=3, sticky='w', pady=5)
         
         ttk.Label(frame, text="Stealth Mode:").grid(row=4, column=0, sticky='w', pady=5)
@@ -380,6 +380,9 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
         """Update the available fields label based on loaded CSV columns"""
         if self.csv_data and len(self.csv_data) > 0:
             columns = list(self.csv_data[0].keys())
+            # Add YouTube Title if not already in columns
+            if 'YouTube Title' not in columns:
+                columns.append('YouTube Title')
             fields_str = ", ".join([f"{{{col}}}" for col in columns])
             self.available_fields_label.config(
                 text=f"Available fields: {fields_str}",
@@ -387,7 +390,7 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
             )
         else:
             self.available_fields_label.config(
-                text="Available fields: (load CSV to see available columns)",
+                text="Available fields: (load CSV to see available columns). {YouTube Title} will be fetched from YouTube.",
                 foreground='gray'
             )
     
@@ -571,8 +574,11 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
                 break
         
         for i, row in enumerate(self.csv_data):
-            # Get title
-            if title_column:
+            # Get title - prefer YouTube Title if available, otherwise use CSV title
+            youtube_title = row.get('YouTube Title', '')
+            if youtube_title:
+                title = youtube_title
+            elif title_column:
                 title = row.get(title_column, 'Unknown')
             else:
                 title = 'Unknown'
@@ -795,6 +801,12 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
             data = json.loads(result.stdout)
             formats = data.get('formats', [])
             
+            # Store YouTube title in current video info for filename pattern
+            if self.current_video_info:
+                youtube_title = data.get('title', '')
+                if youtube_title:
+                    self.current_video_info['YouTube Title'] = youtube_title
+            
             self.available_streams = formats
             self.root.after(0, lambda: self.display_streams(formats))
             self.root.after(0, lambda: self.set_busy(False))
@@ -942,7 +954,24 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
                 return
             
             if process.returncode == 0:
-                self.root.after(0, lambda: self.log("[SUCCESS] Download completed successfully!"))
+                # Find the actual downloaded file
+                download_dir = self.get_download_path()
+                actual_file = None
+                if os.path.exists(download_dir):
+                    # Find most recently modified file matching the pattern
+                    files = [f for f in os.listdir(download_dir) if f.startswith(filename)]
+                    if files:
+                        files_with_path = [os.path.join(download_dir, f) for f in files]
+                        actual_file = max(files_with_path, key=os.path.getmtime)
+                
+                if actual_file:
+                    actual_filename = os.path.basename(actual_file)
+                    self.root.after(0, lambda f=actual_filename, p=actual_file: self.log(f"[SUCCESS] Download completed successfully!"))
+                    self.root.after(0, lambda f=actual_filename, p=actual_file: self.log(f"[DEBUG] Exported filename: {f}"))
+                    self.root.after(0, lambda f=actual_filename, p=actual_file: self.log(f"[DEBUG] Full path: {p}"))
+                else:
+                    self.root.after(0, lambda: self.log("[SUCCESS] Download completed successfully!"))
+                    self.root.after(0, lambda: self.log(f"[DEBUG] Expected filename pattern: {filename}"))
                 self.root.after(0, lambda: messagebox.showinfo("Success", "Download completed!"))
                 self.root.after(0, lambda: self.set_busy(False))
             else:
@@ -1086,21 +1115,58 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
                 
                 if process.returncode == 0:
                     success_count += 1
-                    self.root.after(
-                        0,
-                        lambda out=filename: self.log(f"[SUCCESS] Downloaded: {out}")
-                    )
+                    
+                    # Find the actual downloaded file
+                    download_dir = self.get_download_path()
+                    actual_file = None
+                    if os.path.exists(download_dir):
+                        files = [f for f in os.listdir(download_dir) if f.startswith(filename)]
+                        if files:
+                            files_with_path = [os.path.join(download_dir, f) for f in files]
+                            actual_file = max(files_with_path, key=os.path.getmtime)
+                    
+                    if actual_file:
+                        actual_filename = os.path.basename(actual_file)
+                        self.root.after(
+                            0,
+                            lambda out=filename, af=actual_filename, fp=actual_file: self.log(f"[SUCCESS] Downloaded: {out}")
+                        )
+                        self.root.after(
+                            0,
+                            lambda af=actual_filename: self.log(f"[DEBUG] Exported filename: {af}")
+                        )
+                        self.root.after(
+                            0,
+                            lambda fp=actual_file: self.log(f"[DEBUG] Full path: {fp}")
+                        )
+                    else:
+                        self.root.after(
+                            0,
+                            lambda out=filename: self.log(f"[SUCCESS] Downloaded: {out}")
+                        )
+                        self.root.after(
+                            0,
+                            lambda out=filename: self.log(f"[DEBUG] Expected filename pattern: {out}")
+                        )
                 else:
                     error_count += 1
                     error_msg = stderr if stderr else "Unknown error"
                     
-                    # If 403 error, try with different client
+                    # If 403 error, try with different clients
                     if '403' in error_msg or 'Forbidden' in error_msg:
-                        self.root.after(0, lambda: self.log(f"[WARNING] 403 detected, trying alternative client..."))
-                        # Try with iOS client as fallback
+                        self.root.after(0, lambda: self.log(f"[WARNING] 403 detected, trying alternative clients..."))
                         original_client = self.client_type_var.get() if hasattr(self, 'client_type_var') else 'web'
-                        if original_client != 'ios':
-                            self.client_type_var.set('ios') if hasattr(self, 'client_type_var') else None
+                        
+                        # Try iOS, Android, TV clients in order
+                        fallback_clients = ['ios', 'android', 'tv']
+                        fallback_success = False
+                        
+                        for fallback_client in fallback_clients:
+                            if fallback_client == original_client:
+                                continue
+                            
+                            if hasattr(self, 'client_type_var'):
+                                self.client_type_var.set(fallback_client)
                             cmd_fallback = self.build_ytdlp_command([
                                 '-f', format_id,
                                 '-o', output_path + '.%(ext)s',
@@ -1113,16 +1179,38 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
                                 text=True,
                                 creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
                             )
+                            
                             if process_fallback.returncode == 0:
+                                fallback_success = True
                                 success_count += 1
                                 error_count -= 1
-                                self.root.after(0, lambda fname=filename: self.log(f"[SUCCESS] Downloaded with fallback client: {fname}"))
-                            else:
-                                self.root.after(0, lambda err=error_msg: self.log(f"[ERROR] Download failed: {err[:200]}"))
-                            if hasattr(self, 'client_type_var'):
-                                self.client_type_var.set(original_client)
-                        else:
+                                
+                                # Find the actual downloaded file
+                                download_dir = self.get_download_path()
+                                actual_file = None
+                                if os.path.exists(download_dir):
+                                    files = [f for f in os.listdir(download_dir) if f.startswith(filename)]
+                                    if files:
+                                        files_with_path = [os.path.join(download_dir, f) for f in files]
+                                        actual_file = max(files_with_path, key=os.path.getmtime)
+                                
+                                if actual_file:
+                                    actual_filename = os.path.basename(actual_file)
+                                    self.root.after(0, lambda fname=filename, cl=fallback_client, af=actual_filename, fp=actual_file: self.log(f"[SUCCESS] Downloaded with {cl} client: {fname}"))
+                                    self.root.after(0, lambda af=actual_filename: self.log(f"[DEBUG] Exported filename: {af}"))
+                                    self.root.after(0, lambda fp=actual_file: self.log(f"[DEBUG] Full path: {fp}"))
+                                else:
+                                    self.root.after(0, lambda fname=filename, cl=fallback_client: self.log(f"[SUCCESS] Downloaded with {cl} client: {fname}"))
+                                    self.root.after(0, lambda fname=filename: self.log(f"[DEBUG] Expected filename pattern: {fname}"))
+                                break
+                        
+                        if hasattr(self, 'client_type_var'):
+                            self.client_type_var.set(original_client)
+                        
+                        if not fallback_success:
                             self.root.after(0, lambda err=error_msg: self.log(f"[ERROR] Download failed: {err[:200]}"))
+                    elif 'Sign in to confirm your age' in error_msg or 'inappropriate for some users' in error_msg:
+                        self.root.after(0, lambda: self.log(f"[ERROR] Age-restricted video. Configure cookies in Settings tab to download."))
                     else:
                         self.root.after(0, lambda err=error_msg: self.log(f"[ERROR] Download failed: {err[:200]}"))
                 
@@ -1184,9 +1272,9 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
         self.current_process = None
         
         selected_indices = list(selection)
-        self.log(f"[INFO] Starting auto-download for {len(selected_indices)} videos (quality: medium -> high -> low)")
+        self.log(f"[INFO] Starting auto-download for {len(selected_indices)} videos (quality: high -> medium -> low)")
         
-        self.set_busy(True, f"Auto-downloading {len(selected_indices)} videos (medium -> high -> low)...")
+        self.set_busy(True, f"Auto-downloading {len(selected_indices)} videos (high -> medium -> low)...")
         
         thread = threading.Thread(target=self._auto_download_lowest_resolution_thread, args=(selected_indices,))
         thread.daemon = True
@@ -1206,9 +1294,9 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
         self.current_process = None
         
         all_indices = list(range(len(self.csv_data)))
-        self.log(f"[INFO] Starting auto-download for all {len(all_indices)} videos (quality: medium -> high -> low)")
+        self.log(f"[INFO] Starting auto-download for all {len(all_indices)} videos (quality: high -> medium -> low)")
         
-        self.set_busy(True, f"Auto-downloading all {len(all_indices)} videos (medium -> high -> low)...")
+        self.set_busy(True, f"Auto-downloading all {len(all_indices)} videos (high -> medium -> low)...")
         
         thread = threading.Thread(target=self._auto_download_lowest_resolution_thread, args=(all_indices,))
         thread.daemon = True
@@ -1233,13 +1321,13 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
             return 'high'
     
     def _find_quality_sorted_streams(self, formats):
-        """Find video streams sorted by quality priority: medium -> high -> low
+        """Find video streams sorted by quality priority: high -> medium -> low
         
         Args:
             formats: List of format dictionaries from yt-dlp
             
         Returns:
-            List of format_ids sorted by quality priority (medium first, then high, then low), or empty list if none found
+            List of format_ids sorted by quality priority (high first, then medium, then low), or empty list if none found
         """
         if not formats:
             return []
@@ -1276,10 +1364,10 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
         if not video_streams:
             return []
         
-        # Define quality priority: medium=0, high=1, low=2 (lower number = higher priority)
-        quality_priority = {'medium': 0, 'high': 1, 'low': 2}
+        # Define quality priority: high=0, medium=1, low=2 (lower number = higher priority)
+        quality_priority = {'high': 0, 'medium': 1, 'low': 2}
         
-        # Sort by quality priority (medium first), then by height within same category, prefer combined streams
+        # Sort by quality priority (high first), then by height within same category, prefer combined streams
         video_streams.sort(key=lambda x: (
             quality_priority.get(x['quality_category'], 2),  # Quality priority
             x['height'] or 0,  # Within same category, sort by height
@@ -1337,7 +1425,7 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
         return [stream['format_id'] for stream in video_streams]
     
     def _auto_download_lowest_resolution_thread(self, video_indices):
-        """Thread that handles auto-download with quality fallback: tries medium quality first, then high, then low"""
+        """Thread that handles auto-download with quality fallback: tries high quality first, then medium, then low"""
         success_count = 0
         error_count = 0
         skipped_count = 0
@@ -1357,17 +1445,19 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
                     continue
                 
                 filename_pattern = self.filename_var.get()
+                # Create initial filename (will be updated after fetching YouTube title)
                 filename = self.create_filename_from_pattern(filename_pattern, row)
+                self.root.after(0, lambda fp=filename_pattern, fn=filename: self.log(f"[DEBUG] Filename pattern: {fp} -> initial: {fn}"))
                 
                 self.root.after(
                     0,
-                    lambda idx=i+1, total=len(video_indices), name=row.get('Song Title', 'Unknown'):
+                    lambda idx=i+1, total=len(video_indices), name=row.get('Song Title', row.get('Movie Title', 'Unknown')):
                     self.set_busy(True, f"Auto-downloading {idx}/{total}: {name} (fetching streams...)")
                 )
                 
                 self.root.after(
                     0,
-                    lambda msg=f"\n[INFO] Processing ({i+1}/{len(video_indices)}): {row.get('Song Title', 'Unknown')} - {row.get('Artist', 'Unknown')}":
+                    lambda msg=f"\n[INFO] Processing ({i+1}/{len(video_indices)}): {row.get('Song Title', row.get('Movie Title', 'Unknown'))} - {row.get('Artist', 'Unknown')}":
                     self.log(msg)
                 )
                 
@@ -1380,14 +1470,20 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
                     creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
                 )
                 
-                # Try alternative client if 403 error
+                # Try alternative clients if 403 error
                 if (result.returncode != 0 and 
                     ('403' in result.stderr or 'Forbidden' in result.stderr)):
-                    self.root.after(0, lambda: self.log(f"[WARNING] 403 detected, trying alternative client..."))
+                    self.root.after(0, lambda: self.log(f"[WARNING] 403 detected, trying alternative clients..."))
                     original_client = self.client_type_var.get() if hasattr(self, 'client_type_var') else 'web'
-                    if original_client != 'ios':
+                    
+                    # Try iOS, Android, TV clients in order
+                    fallback_clients = ['ios', 'android', 'tv']
+                    for fallback_client in fallback_clients:
+                        if fallback_client == original_client:
+                            continue
+                        
                         if hasattr(self, 'client_type_var'):
-                            self.client_type_var.set('ios')
+                            self.client_type_var.set(fallback_client)
                         cmd = self.build_ytdlp_command(['-J', url])
                         result = subprocess.run(
                             cmd,
@@ -1395,25 +1491,56 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
                             text=True,
                             creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
                         )
-                        if hasattr(self, 'client_type_var'):
-                            self.client_type_var.set(original_client)
+                        if result.returncode == 0:
+                            break  # Success, stop trying
+                    
+                    if hasattr(self, 'client_type_var'):
+                        self.client_type_var.set(original_client)
                 
                 if result.returncode != 0:
                     error_count += 1
                     error_msg = result.stderr[:200] if result.stderr else "Unknown error"
-                    self.root.after(0, lambda err=error_msg, idx=index+1: self.log(f"[ERROR] Video {idx}: Failed to fetch streams - {err}"))
+                    
+                    # Better error messages for common issues
+                    if 'Sign in to confirm your age' in error_msg or 'inappropriate for some users' in error_msg:
+                        error_msg_full = f"Age-restricted video. Use --cookies-from-browser or --cookies for authentication. See https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp"
+                        self.root.after(0, lambda err=error_msg_full, idx=index+1: self.log(f"[ERROR] Video {idx}: {err}"))
+                    elif 'Video unavailable' in error_msg:
+                        self.root.after(0, lambda err=error_msg, idx=index+1: self.log(f"[ERROR] Video {idx}: Video unavailable (may be deleted or private)"))
+                    else:
+                        self.root.after(0, lambda err=error_msg, idx=index+1: self.log(f"[ERROR] Video {idx}: Failed to fetch streams - {err}"))
                     continue
                 
                 # Parse stream data
                 try:
                     data = json.loads(result.stdout)
                     formats = data.get('formats', [])
+                    # Store YouTube title in row data for filename pattern
+                    youtube_title = data.get('title', '')
+                    if youtube_title:
+                        row['YouTube Title'] = youtube_title
+                        # Always recreate filename after getting YouTube title
+                        filename = self.create_filename_from_pattern(filename_pattern, row)
+                        self.root.after(0, lambda yt=youtube_title, fn=filename: self.log(f"[DEBUG] YouTube title fetched: {yt[:50]}"))
+                        self.root.after(0, lambda fn=filename: self.log(f"[DEBUG] Filename pattern result: {fn}"))
+                        
+                        # Fallback: If filename is just a number or very short, use YouTube title
+                        filename_clean = filename.strip().strip('_')
+                        if filename_clean.isdigit() or len(filename_clean) < 3:
+                            # Use YouTube title as filename (sanitized)
+                            safe_title = self.file_manager.create_safe_filename(youtube_title)
+                            if filename_clean.isdigit():
+                                # Keep the number as prefix if it was just a number
+                                filename = f"{filename_clean}_{safe_title}"
+                            else:
+                                filename = safe_title
+                            self.root.after(0, lambda fn=filename: self.log(f"[DEBUG] Using YouTube title as filename: {fn}"))
                 except json.JSONDecodeError:
                     error_count += 1
                     self.root.after(0, lambda idx=index+1: self.log(f"[ERROR] Video {idx}: Failed to parse stream data"))
                     continue
                 
-                # Find all video streams sorted by quality priority: medium -> high -> low
+                # Find all video streams sorted by quality priority: high -> medium -> low
                 format_ids = self._find_quality_sorted_streams(formats)
                 if not format_ids:
                     skipped_count += 1
@@ -1425,7 +1552,7 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
                     self.user_agent = self.generate_user_agent()
                     self.root.after(0, lambda: self.log(f"[DEBUG] Rotated user agent for stealth"))
                 
-                # Try each resolution in quality priority order: medium -> high -> low
+                # Try each resolution in quality priority order: high -> medium -> low
                 output_path = os.path.join(self.get_download_path(), filename)
                 download_success = False
                 
@@ -1475,21 +1602,59 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
                         # Success! Stop trying other resolutions
                         download_success = True
                         success_count += 1
-                        self.root.after(
-                            0,
-                            lambda out=filename, res=resolution: self.log(f"[SUCCESS] Downloaded: {out} (resolution: {res})")
-                        )
+                        
+                        # Find the actual downloaded file
+                        download_dir = self.get_download_path()
+                        actual_file = None
+                        if os.path.exists(download_dir):
+                            files = [f for f in os.listdir(download_dir) if f.startswith(filename)]
+                            if files:
+                                files_with_path = [os.path.join(download_dir, f) for f in files]
+                                actual_file = max(files_with_path, key=os.path.getmtime)
+                        
+                        if actual_file:
+                            actual_filename = os.path.basename(actual_file)
+                            self.root.after(
+                                0,
+                                lambda out=filename, res=resolution, af=actual_filename, fp=actual_file: self.log(f"[SUCCESS] Downloaded: {out} (resolution: {res})")
+                            )
+                            self.root.after(
+                                0,
+                                lambda af=actual_filename, fp=actual_file: self.log(f"[DEBUG] Exported filename: {af}")
+                            )
+                            self.root.after(
+                                0,
+                                lambda fp=actual_file: self.log(f"[DEBUG] Full path: {fp}")
+                            )
+                        else:
+                            self.root.after(
+                                0,
+                                lambda out=filename, res=resolution: self.log(f"[SUCCESS] Downloaded: {out} (resolution: {res})")
+                            )
+                            self.root.after(
+                                0,
+                                lambda out=filename: self.log(f"[DEBUG] Expected filename pattern: {out}")
+                            )
                         break
                     else:
                         error_msg = stderr[:200] if stderr else "Unknown error"
                         
-                        # Try with iOS client as fallback if 403
+                        # Try with alternative clients as fallback if 403
                         if '403' in error_msg or 'Forbidden' in error_msg:
                             self.root.after(0, lambda: self.log(f"[WARNING] 403 detected, trying iOS client fallback..."))
                             original_client = self.client_type_var.get() if hasattr(self, 'client_type_var') else 'web'
-                            if original_client != 'ios':
+                            
+                            # Try iOS, Android, TV clients in order
+                            fallback_clients = ['ios', 'android', 'tv']
+                            fallback_success = False
+                            
+                            for fallback_client in fallback_clients:
+                                if fallback_client == original_client:
+                                    continue
+                                
                                 if hasattr(self, 'client_type_var'):
-                                    self.client_type_var.set('ios')
+                                    self.client_type_var.set(fallback_client)
+                                
                                 cmd_fallback = self.build_ytdlp_command([
                                     '-f', format_id,
                                     '-o', output_path + '.%(ext)s',
@@ -1502,21 +1667,42 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
                                     text=True,
                                     creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
                                 )
-                                if hasattr(self, 'client_type_var'):
-                                    self.client_type_var.set(original_client)
                                 
                                 if process_fallback.returncode == 0:
                                     # Success with fallback client!
+                                    fallback_success = True
                                     download_success = True
                                     success_count += 1
-                                    self.root.after(0, lambda fname=filename, res=resolution: self.log(f"[SUCCESS] Downloaded with fallback client: {fname} (resolution: {res})"))
+                                    
+                                    # Find the actual downloaded file
+                                    download_dir = self.get_download_path()
+                                    actual_file = None
+                                    if os.path.exists(download_dir):
+                                        files = [f for f in os.listdir(download_dir) if f.startswith(filename)]
+                                        if files:
+                                            files_with_path = [os.path.join(download_dir, f) for f in files]
+                                            actual_file = max(files_with_path, key=os.path.getmtime)
+                                    
+                                    if actual_file:
+                                        actual_filename = os.path.basename(actual_file)
+                                        self.root.after(0, lambda fname=filename, res=resolution, cl=fallback_client, af=actual_filename, fp=actual_file: self.log(f"[SUCCESS] Downloaded with {cl} client: {fname} (resolution: {res})"))
+                                        self.root.after(0, lambda af=actual_filename: self.log(f"[DEBUG] Exported filename: {af}"))
+                                        self.root.after(0, lambda fp=actual_file: self.log(f"[DEBUG] Full path: {fp}"))
+                                    else:
+                                        self.root.after(0, lambda fname=filename, res=resolution, cl=fallback_client: self.log(f"[SUCCESS] Downloaded with {cl} client: {fname} (resolution: {res})"))
+                                        self.root.after(0, lambda fname=filename: self.log(f"[DEBUG] Expected filename pattern: {fname}"))
                                     break
-                                else:
-                                    # Fallback also failed, continue to next resolution
-                                    self.root.after(0, lambda err=error_msg, res=resolution: self.log(f"[WARNING] Resolution {res} failed: {err[:100]}"))
-                            else:
-                                # Already using iOS, continue to next resolution
+                            
+                            # Restore original client
+                            if hasattr(self, 'client_type_var'):
+                                self.client_type_var.set(original_client)
+                            
+                            if not fallback_success:
+                                # All fallback clients failed, continue to next resolution
                                 self.root.after(0, lambda err=error_msg, res=resolution: self.log(f"[WARNING] Resolution {res} failed: {err[:100]}"))
+                        elif 'Sign in to confirm your age' in error_msg or 'inappropriate for some users' in error_msg:
+                            # Age-restricted video - suggest cookies
+                            self.root.after(0, lambda res=resolution: self.log(f"[WARNING] Resolution {res} failed: Age-restricted video. Configure cookies in Settings tab to download."))
                         else:
                             # Non-403 error, continue to next resolution
                             self.root.after(0, lambda err=error_msg, res=resolution: self.log(f"[WARNING] Resolution {res} failed: {err[:100]}"))
@@ -1524,7 +1710,7 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
                 # If all quality options failed, mark as error
                 if not download_success and not self.cancel_download:
                     error_count += 1
-                    self.root.after(0, lambda idx=index+1, total=len(format_ids): self.log(f"[ERROR] Video {idx}: All {total} quality options failed (tried medium -> high -> low), skipping"))
+                    self.root.after(0, lambda idx=index+1, total=len(format_ids): self.log(f"[ERROR] Video {idx}: All {total} quality options failed (tried high -> medium -> low), skipping"))
                 
                 # Add delay between downloads
                 if i < len(video_indices) - 1:
@@ -1788,7 +1974,24 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
                 return
             
             if process.returncode == 0:
-                self.root.after(0, lambda: self.direct_link_log("[SUCCESS] Download completed successfully!"))
+                # Find the actual downloaded file
+                download_dir = self.file_manager.get_folder_path('downloads')
+                actual_file = None
+                if os.path.exists(download_dir):
+                    # Find most recently modified file matching the pattern
+                    files = [f for f in os.listdir(download_dir) if f.startswith(filename)]
+                    if files:
+                        files_with_path = [os.path.join(download_dir, f) for f in files]
+                        actual_file = max(files_with_path, key=os.path.getmtime)
+                
+                if actual_file:
+                    actual_filename = os.path.basename(actual_file)
+                    self.root.after(0, lambda: self.direct_link_log("[SUCCESS] Download completed successfully!"))
+                    self.root.after(0, lambda af=actual_filename: self.direct_link_log(f"[DEBUG] Exported filename: {af}"))
+                    self.root.after(0, lambda fp=actual_file: self.direct_link_log(f"[DEBUG] Full path: {fp}"))
+                else:
+                    self.root.after(0, lambda: self.direct_link_log("[SUCCESS] Download completed successfully!"))
+                    self.root.after(0, lambda fn=filename: self.direct_link_log(f"[DEBUG] Expected filename pattern: {fn}"))
                 self.root.after(0, lambda: messagebox.showinfo("Success", "Download completed!"))
                 self.root.after(0, lambda: self.set_direct_link_busy(False))
             else:
