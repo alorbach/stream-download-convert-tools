@@ -167,10 +167,10 @@ class YouTubeDownloaderGUI(BaseAudioGUI):
         self.cancel_button = ttk.Button(batch_frame, text="Cancel Download", command=self.cancel_download_action, state='disabled')
         self.cancel_button.pack(side='left', padx=5)
         
-        # Auto-download lowest resolution buttons
+        # Auto-download with quality fallback buttons
         auto_frame = ttk.Frame(bottom_frame)
         auto_frame.pack(fill='x', pady=5)
-        ttk.Label(auto_frame, text="Auto Download (Lowest Resolution):", font=('TkDefaultFont', 9, 'bold')).pack(side='left', padx=5)
+        ttk.Label(auto_frame, text="Auto Download (Medium -> High -> Low):", font=('TkDefaultFont', 9, 'bold')).pack(side='left', padx=5)
         ttk.Button(auto_frame, text="Selected Videos", command=self.auto_download_lowest_resolution_selected).pack(side='left', padx=5)
         ttk.Button(auto_frame, text="All Videos", command=self.auto_download_lowest_resolution_all).pack(side='left', padx=5)
         
@@ -261,9 +261,8 @@ class YouTubeDownloaderGUI(BaseAudioGUI):
         self.filename_var = tk.StringVar(value="{Rank}_{Song Title}_{Artist}")
         ttk.Entry(frame, textvariable=self.filename_var, width=50).grid(row=2, column=1, padx=5, columnspan=2)
         
-        ttk.Label(frame, text="Available fields: {Rank}, {Song Title}, {Artist}, {Year}, {Views (Billions)}").grid(
-            row=3, column=0, columnspan=3, sticky='w', pady=5
-        )
+        self.available_fields_label = ttk.Label(frame, text="Available fields: {Rank}, {Song Title}, {Artist}, {Year}, {Views (Billions)}")
+        self.available_fields_label.grid(row=3, column=0, columnspan=3, sticky='w', pady=5)
         
         ttk.Label(frame, text="Stealth Mode:").grid(row=4, column=0, sticky='w', pady=5)
         self.stealth_mode_var = tk.BooleanVar(value=True)
@@ -377,6 +376,21 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
                 foreground='gray'
             )
     
+    def update_available_fields_label(self):
+        """Update the available fields label based on loaded CSV columns"""
+        if self.csv_data and len(self.csv_data) > 0:
+            columns = list(self.csv_data[0].keys())
+            fields_str = ", ".join([f"{{{col}}}" for col in columns])
+            self.available_fields_label.config(
+                text=f"Available fields: {fields_str}",
+                foreground='black'
+            )
+        else:
+            self.available_fields_label.config(
+                text="Available fields: (load CSV to see available columns)",
+                foreground='gray'
+            )
+    
     def on_android_client_changed(self):
         """Callback when Android client checkbox is toggled"""
         self.use_android_client = self.android_client_var.get()
@@ -420,9 +434,36 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
     def load_csv_file(self, file_path):
         self.set_busy(True, "Loading CSV file...")
         try:
+            # Check if file exists
+            if not os.path.exists(file_path):
+                error_msg = f"File not found: {file_path}"
+                messagebox.showerror("Error", error_msg)
+                self.log(f"[ERROR] {error_msg}")
+                self.set_busy(False)
+                return
+            
+            # Try to read the CSV file
             with open(file_path, 'r', encoding='utf-8') as f:
                 reader = csv.DictReader(f)
                 self.csv_data = list(reader)
+            
+            # Validate that we got data
+            if not self.csv_data:
+                error_msg = "CSV file is empty or has no data rows"
+                messagebox.showerror("Error", error_msg)
+                self.log(f"[ERROR] {error_msg}")
+                self.set_busy(False)
+                return
+            
+            # Check for required columns
+            required_columns = ['Video Link']
+            missing_columns = [col for col in required_columns if col not in self.csv_data[0].keys()]
+            if missing_columns:
+                error_msg = f"CSV missing required columns: {', '.join(missing_columns)}. Found columns: {', '.join(self.csv_data[0].keys())}"
+                messagebox.showerror("Error", error_msg)
+                self.log(f"[ERROR] {error_msg}")
+                self.set_busy(False)
+                return
             
             self.csv_file = file_path
             self.csv_basename = os.path.splitext(os.path.basename(file_path))[0]
@@ -431,14 +472,42 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
             self.display_csv_in_grid()
             self.populate_video_list()
             self.update_actual_path_label()
+            self.update_available_fields_label()
             
             self.notebook.select(self.tab_download)
             
             self.log(f"[SUCCESS] Loaded {len(self.csv_data)} videos from CSV: {os.path.basename(file_path)}")
             
+        except UnicodeDecodeError as e:
+            error_msg = f"Encoding error: {str(e)}\nTrying with different encoding..."
+            self.log(f"[WARNING] {error_msg}")
+            # Try with latin-1 encoding as fallback
+            try:
+                with open(file_path, 'r', encoding='latin-1') as f:
+                    reader = csv.DictReader(f)
+                    self.csv_data = list(reader)
+                self.csv_file = file_path
+                self.csv_basename = os.path.splitext(os.path.basename(file_path))[0]
+                self.lbl_csv_status.config(text=f"Loaded: {os.path.basename(file_path)} ({len(self.csv_data)} rows)")
+                self.display_csv_in_grid()
+                self.populate_video_list()
+                self.update_actual_path_label()
+                self.update_available_fields_label()
+                self.notebook.select(self.tab_download)
+                self.log(f"[SUCCESS] Loaded {len(self.csv_data)} videos from CSV (latin-1 encoding): {os.path.basename(file_path)}")
+            except Exception as e2:
+                error_msg = f"Failed to load CSV even with fallback encoding: {str(e2)}"
+                messagebox.showerror("Error", error_msg)
+                self.log(f"[ERROR] {error_msg}")
+        except csv.Error as e:
+            error_msg = f"CSV parsing error: {str(e)}"
+            messagebox.showerror("Error", error_msg)
+            self.log(f"[ERROR] {error_msg}")
         except Exception as e:
+            import traceback
+            error_msg = f"Failed to load CSV: {str(e)}\n{traceback.format_exc()}"
             messagebox.showerror("Error", f"Failed to load CSV: {str(e)}")
-            self.log(f"[ERROR] Failed to load CSV: {str(e)}")
+            self.log(f"[ERROR] {error_msg}")
         finally:
             self.set_busy(False)
     
@@ -476,11 +545,53 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
     
     def populate_video_list(self):
         self.video_listbox.delete(0, tk.END)
+        
+        if not self.csv_data:
+            return
+        
+        # Try to find title column (support multiple formats)
+        title_column = None
+        for col_name in ['Song Title', 'Movie Title', 'Title', 'Name', 'Video Title']:
+            if col_name in self.csv_data[0].keys():
+                title_column = col_name
+                break
+        
+        # Try to find artist/author column (support multiple formats)
+        artist_column = None
+        for col_name in ['Artist', 'Author', 'Uploader', 'Creator', 'Director']:
+            if col_name in self.csv_data[0].keys():
+                artist_column = col_name
+                break
+        
+        # Try to find description column as fallback
+        desc_column = None
+        for col_name in ['Scene Description', 'Description', 'Details', 'Notes']:
+            if col_name in self.csv_data[0].keys():
+                desc_column = col_name
+                break
+        
         for i, row in enumerate(self.csv_data):
-            title = row.get('Song Title', 'Unknown')
-            artist = row.get('Artist', 'Unknown')
+            # Get title
+            if title_column:
+                title = row.get(title_column, 'Unknown')
+            else:
+                title = 'Unknown'
+            
+            # Get artist/author or use description as fallback
+            if artist_column:
+                artist = row.get(artist_column, 'Unknown')
+            elif desc_column:
+                artist = row.get(desc_column, 'Unknown')
+            else:
+                artist = 'Unknown'
+            
             rank = row.get('Rank', i+1)
-            self.video_listbox.insert(tk.END, f"{rank}. {title} - {artist}")
+            
+            # Format the display string
+            if artist and artist != 'Unknown':
+                self.video_listbox.insert(tk.END, f"{rank}. {title} - {artist}")
+            else:
+                self.video_listbox.insert(tk.END, f"{rank}. {title}")
     
     def get_download_path(self):
         """Get download path with CSV basename as subfolder"""
@@ -1073,9 +1184,9 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
         self.current_process = None
         
         selected_indices = list(selection)
-        self.log(f"[INFO] Starting auto-download of lowest resolution for {len(selected_indices)} videos")
+        self.log(f"[INFO] Starting auto-download for {len(selected_indices)} videos (quality: medium -> high -> low)")
         
-        self.set_busy(True, f"Auto-downloading {len(selected_indices)} videos (lowest resolution)...")
+        self.set_busy(True, f"Auto-downloading {len(selected_indices)} videos (medium -> high -> low)...")
         
         thread = threading.Thread(target=self._auto_download_lowest_resolution_thread, args=(selected_indices,))
         thread.daemon = True
@@ -1095,13 +1206,88 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
         self.current_process = None
         
         all_indices = list(range(len(self.csv_data)))
-        self.log(f"[INFO] Starting auto-download of lowest resolution for all {len(all_indices)} videos")
+        self.log(f"[INFO] Starting auto-download for all {len(all_indices)} videos (quality: medium -> high -> low)")
         
-        self.set_busy(True, f"Auto-downloading all {len(all_indices)} videos (lowest resolution)...")
+        self.set_busy(True, f"Auto-downloading all {len(all_indices)} videos (medium -> high -> low)...")
         
         thread = threading.Thread(target=self._auto_download_lowest_resolution_thread, args=(all_indices,))
         thread.daemon = True
         thread.start()
+    
+    def _categorize_quality(self, height):
+        """Categorize video quality based on height
+        
+        Args:
+            height: Video height in pixels
+            
+        Returns:
+            Quality category: 'low' (0-360p), 'medium' (480p-720p), 'high' (1080p+)
+        """
+        if not height:
+            return 'low'
+        if height <= 360:
+            return 'low'
+        elif height <= 720:
+            return 'medium'
+        else:
+            return 'high'
+    
+    def _find_quality_sorted_streams(self, formats):
+        """Find video streams sorted by quality priority: medium -> high -> low
+        
+        Args:
+            formats: List of format dictionaries from yt-dlp
+            
+        Returns:
+            List of format_ids sorted by quality priority (medium first, then high, then low), or empty list if none found
+        """
+        if not formats:
+            return []
+        
+        # Filter for video streams (combined video+audio preferred, then video-only)
+        video_streams = []
+        for fmt in formats:
+            vcodec = fmt.get('vcodec', 'none')
+            if vcodec != 'none':
+                # Prefer combined streams (have both video and audio)
+                is_combined = fmt.get('acodec', 'none') != 'none'
+                resolution = fmt.get('resolution', 'unknown')
+                height = fmt.get('height', 0)
+                width = fmt.get('width', 0)
+                
+                # Extract numeric height if resolution is like "720p" or "480p"
+                if not height and resolution and resolution != 'unknown':
+                    height_match = re.search(r'(\d+)p?', str(resolution))
+                    if height_match:
+                        height = int(height_match.group(1))
+                
+                quality_category = self._categorize_quality(height)
+                
+                video_streams.append({
+                    'format_id': fmt.get('format_id'),
+                    'height': height,
+                    'width': width,
+                    'resolution': resolution,
+                    'is_combined': is_combined,
+                    'quality_category': quality_category,
+                    'format': fmt
+                })
+        
+        if not video_streams:
+            return []
+        
+        # Define quality priority: medium=0, high=1, low=2 (lower number = higher priority)
+        quality_priority = {'medium': 0, 'high': 1, 'low': 2}
+        
+        # Sort by quality priority (medium first), then by height within same category, prefer combined streams
+        video_streams.sort(key=lambda x: (
+            quality_priority.get(x['quality_category'], 2),  # Quality priority
+            x['height'] or 0,  # Within same category, sort by height
+            not x['is_combined']  # Prefer combined streams
+        ))
+        
+        # Return list of format_ids sorted by quality priority
+        return [stream['format_id'] for stream in video_streams]
     
     def _find_lowest_resolution_stream(self, formats):
         """Find video streams sorted from lowest to highest resolution
@@ -1151,7 +1337,7 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
         return [stream['format_id'] for stream in video_streams]
     
     def _auto_download_lowest_resolution_thread(self, video_indices):
-        """Thread that handles auto-download of lowest resolution streams"""
+        """Thread that handles auto-download with quality fallback: tries medium quality first, then high, then low"""
         success_count = 0
         error_count = 0
         skipped_count = 0
@@ -1227,8 +1413,8 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
                     self.root.after(0, lambda idx=index+1: self.log(f"[ERROR] Video {idx}: Failed to parse stream data"))
                     continue
                 
-                # Find all video streams sorted from lowest to highest resolution
-                format_ids = self._find_lowest_resolution_stream(formats)
+                # Find all video streams sorted by quality priority: medium -> high -> low
+                format_ids = self._find_quality_sorted_streams(formats)
                 if not format_ids:
                     skipped_count += 1
                     self.root.after(0, lambda idx=index+1: self.log(f"[WARNING] Video {idx}: No video streams found, skipping"))
@@ -1239,7 +1425,7 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
                     self.user_agent = self.generate_user_agent()
                     self.root.after(0, lambda: self.log(f"[DEBUG] Rotated user agent for stealth"))
                 
-                # Try each resolution from lowest to highest until one works
+                # Try each resolution in quality priority order: medium -> high -> low
                 output_path = os.path.join(self.get_download_path(), filename)
                 download_success = False
                 
@@ -1250,11 +1436,13 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
                     # Get stream info for logging
                     stream_info = next((f for f in formats if f.get('format_id') == format_id), None)
                     resolution = stream_info.get('resolution', 'unknown') if stream_info else 'unknown'
+                    height = stream_info.get('height', 0) if stream_info else 0
+                    quality_category = self._categorize_quality(height)
                     
                     if attempt_idx == 0:
-                        self.root.after(0, lambda res=resolution, fid=format_id: self.log(f"[INFO] Trying lowest resolution: {res} (format {fid})"))
+                        self.root.after(0, lambda res=resolution, fid=format_id, q=quality_category: self.log(f"[INFO] Trying {q} quality first: {res} (format {fid})"))
                     else:
-                        self.root.after(0, lambda res=resolution, fid=format_id, att=attempt_idx+1: self.log(f"[INFO] Previous failed, trying next resolution ({att}/{len(format_ids)}): {res} (format {fid})"))
+                        self.root.after(0, lambda res=resolution, fid=format_id, att=attempt_idx+1, q=quality_category: self.log(f"[INFO] Previous failed, trying next quality ({att}/{len(format_ids)}): {q} - {res} (format {fid})"))
                     
                     # Try download with current format
                     cmd = self.build_ytdlp_command([
@@ -1333,10 +1521,10 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
                             # Non-403 error, continue to next resolution
                             self.root.after(0, lambda err=error_msg, res=resolution: self.log(f"[WARNING] Resolution {res} failed: {err[:100]}"))
                 
-                # If all resolutions failed, mark as error
+                # If all quality options failed, mark as error
                 if not download_success and not self.cancel_download:
                     error_count += 1
-                    self.root.after(0, lambda idx=index+1, total=len(format_ids): self.log(f"[ERROR] Video {idx}: All {total} resolutions failed, skipping"))
+                    self.root.after(0, lambda idx=index+1, total=len(format_ids): self.log(f"[ERROR] Video {idx}: All {total} quality options failed (tried medium -> high -> low), skipping"))
                 
                 # Add delay between downloads
                 if i < len(video_indices) - 1:
