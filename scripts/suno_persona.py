@@ -257,9 +257,6 @@ def call_azure_ai(config: dict, prompt: str, system_message: str = None, profile
             messages.append({'role': 'system', 'content': system_message})
         messages.append({'role': 'user', 'content': prompt})
         
-        # Use max_completion_tokens for newer Azure models (required by newer models)
-        # Fallback to max_tokens for older API versions if needed
-        # GPT-4/5 models support much higher limits (8k-128k depending on model)
         payload = {
             'messages': messages,
             'temperature': 0.7,
@@ -276,15 +273,25 @@ def call_azure_ai(config: dict, prompt: str, system_message: str = None, profile
                 
                 # Handle temperature restriction (some models only support default temperature=1)
                 if 'temperature' in error_msg and ('not support' in error_msg or 'only the default' in error_msg):
-                    # Remove temperature parameter to use default (1)
-                    payload.pop('temperature', None)
+                    # Try forcing temperature=1 first
+                    payload['temperature'] = 1
                     response = requests.post(url, headers=headers, json=payload, timeout=30)
-                    # If still error, continue to other checks
-                    if response.status_code == 200:
-                        pass  # Success, will be handled below
-                    elif response.status_code == 400:
-                        error_data = response.json()
-                        error_msg = str(error_data.get('error', {}).get('message', '')).lower()
+                    if response.status_code == 400:
+                        try:
+                            error_data = response.json()
+                            error_msg = str(error_data.get('error', {}).get('message', '')).lower()
+                        except Exception:
+                            error_msg = ''
+                    # If still failing due to temperature, remove parameter entirely
+                    if response.status_code == 400 and 'temperature' in error_msg:
+                        payload.pop('temperature', None)
+                        response = requests.post(url, headers=headers, json=payload, timeout=30)
+                        if response.status_code == 400:
+                            try:
+                                error_data = response.json()
+                                error_msg = str(error_data.get('error', {}).get('message', '')).lower()
+                            except Exception:
+                                error_msg = ''
                 
                 # Handle max_completion_tokens restriction (fallback to max_tokens for older API versions)
                 if response.status_code == 400 and 'max_completion_tokens' in error_msg and 'not supported' in error_msg:
@@ -1232,7 +1239,19 @@ def call_azure_video(config: dict, prompt: str, size: str = '720x1280', seconds:
 
         use_jobs_api = False
         public_url = jobs_url = ''
-        if 'openai/v1/video' in path_lower:
+        
+        # Check endpoint type:
+        # 1. /openai/v1/videos (plural, ends with 's') = direct API, no jobs, no api-version
+        # 2. /openai/v1/video/generations/jobs = jobs API
+        # 3. Base URL with deployment = try public first, fallback to jobs
+        skip_api_version = False
+        if path_lower.endswith('/videos') or '/v1/videos' in path_lower:
+            # Direct video API (e.g., Azure Cognitive Services Sora endpoint)
+            # Don't append /jobs, don't add api-version - use as-is with direct payload
+            use_jobs_api = False
+            skip_api_version = True
+        elif 'openai/v1/video/' in path_lower or path_lower.endswith('/jobs'):
+            # Jobs-based API
             if not url.endswith('/jobs'):
                 url = f"{url}/jobs"
             use_jobs_api = True
@@ -1245,7 +1264,7 @@ def call_azure_video(config: dict, prompt: str, size: str = '720x1280', seconds:
             url = f"{url}/openai/v1/video/generations/jobs"
             use_jobs_api = True
 
-        if api_version and 'api-version=' not in url:
+        if api_version and 'api-version=' not in url and not skip_api_version:
             sep = '&' if '?' in url else '?'
             url = f"{url}{sep}api-version={api_version}"
 
@@ -1263,9 +1282,11 @@ def call_azure_video(config: dict, prompt: str, size: str = '720x1280', seconds:
         except Exception:
             pass
 
-        using_jobs_api = (
-            ('/openai/v1/video/' in url) or ('/openai/deployments/' in url and '/video/generations/jobs' in url)
-        ) and (url.endswith('/jobs') or '/jobs?' in url)
+        # Determine if using jobs-based API based on URL pattern
+        using_jobs_api = use_jobs_api or (
+            (('/openai/v1/video/' in url) or ('/openai/deployments/' in url and '/video/generations/jobs' in url))
+            and (url.endswith('/jobs') or '/jobs?' in url)
+        )
 
         if using_jobs_api:
             payload = {
@@ -1301,6 +1322,59 @@ def call_azure_video(config: dict, prompt: str, size: str = '720x1280', seconds:
             try:
                 data = resp.json()
                 if isinstance(data, dict):
+                    # Check for async polling format (status: queued/processing with id)
+                    video_id = data.get('id') or data.get('video_id')
+                    status = (data.get('status') or '').lower()
+                    if video_id and status in ['queued', 'processing', 'pending', 'in_progress', 'running']:
+                        # Async API - need to poll for completion
+                        base_url = endpoint.rstrip('/')
+                        poll_url = f"{base_url}/{video_id}"
+                        debug_info['poll_url'] = poll_url
+                        debug_info['video_id'] = video_id
+                        
+                        start_time = time.time()
+                        max_wait = 300  # 5 minutes max
+                        while status not in ['completed', 'succeeded', 'failed', 'error'] and (time.time() - start_time) < max_wait:
+                            time.sleep(5)
+                            poll_resp = requests.get(poll_url, headers=headers, timeout=60)
+                            try:
+                                poll_data = poll_resp.json()
+                                status = (poll_data.get('status') or '').lower()
+                                debug_info['poll_status'] = status
+                            except Exception:
+                                continue
+                        
+                        if status in ['completed', 'succeeded']:
+                            # Try to get video content
+                            # Check for direct video URL in response
+                            video_url = poll_data.get('output', {}).get('url') if isinstance(poll_data.get('output'), dict) else None
+                            video_url = video_url or poll_data.get('video_url') or poll_data.get('url') or poll_data.get('result', {}).get('url') if isinstance(poll_data.get('result'), dict) else None
+                            
+                            if video_url:
+                                vid_resp = requests.get(video_url, headers=headers, timeout=300)
+                                if vid_resp.ok:
+                                    return {'success': True, 'video_bytes': vid_resp.content, 'url': video_url, 'error': '', 'debug': debug_info}
+                            
+                            # Try content endpoint
+                            content_url = f"{poll_url}/content"
+                            vid_resp = requests.get(content_url, headers=headers, timeout=300)
+                            if vid_resp.ok and vid_resp.content:
+                                return {'success': True, 'video_bytes': vid_resp.content, 'url': '', 'error': '', 'debug': {**debug_info, 'content_url': content_url}}
+                            
+                            # Check for base64 in poll response
+                            b64 = poll_data.get('b64_json') or poll_data.get('video_b64') or ''
+                            if not b64 and 'output' in poll_data and isinstance(poll_data['output'], dict):
+                                b64 = poll_data['output'].get('b64_json') or poll_data['output'].get('video_b64') or ''
+                            if b64:
+                                return {'success': True, 'video_bytes': base64.b64decode(b64), 'url': '', 'error': '', 'debug': debug_info}
+                            
+                            debug_info['final_poll_response'] = str(poll_data)[:500]
+                            return {'success': False, 'video_bytes': b'', 'url': '', 'error': f'Video completed but could not retrieve content', 'debug': debug_info}
+                        else:
+                            error_msg = poll_data.get('error', {}).get('message') if isinstance(poll_data.get('error'), dict) else poll_data.get('error') or f'Video generation failed with status: {status}'
+                            return {'success': False, 'video_bytes': b'', 'url': '', 'error': str(error_msg), 'debug': debug_info}
+                    
+                    # Check for immediate video URL response
                     url_value = data.get('url') or data.get('video_url') or ''
                     if url_value:
                         return {'success': True, 'video_bytes': b'', 'url': url_value, 'error': '', 'debug': debug_info}
@@ -2780,9 +2854,14 @@ class SunoPersona(tk.Tk):
         list_frame = ttk.LabelFrame(main_frame, text='Storyboard Scenes', padding=5)
         list_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
         
+        tree_container = ttk.Frame(list_frame)
+        tree_container.pack(fill=tk.BOTH, expand=True)
+        tree_container.rowconfigure(0, weight=1)
+        tree_container.columnconfigure(0, weight=1)
+        
         # Create treeview for scenes
         columns = ('scene_num', 'duration', 'lyrics', 'prompt')
-        self.storyboard_tree = ttk.Treeview(list_frame, columns=columns, show='headings', selectmode='extended', height=10)
+        self.storyboard_tree = ttk.Treeview(tree_container, columns=columns, show='headings', selectmode='extended', height=10)
         self.storyboard_tree.heading('scene_num', text='Scene')
         self.storyboard_tree.heading('duration', text='Duration')
         self.storyboard_tree.heading('lyrics', text='Lyrics')
@@ -2792,11 +2871,13 @@ class SunoPersona(tk.Tk):
         self.storyboard_tree.column('lyrics', width=200, anchor=tk.W)
         self.storyboard_tree.column('prompt', width=400, anchor=tk.W)
         
-        storyboard_scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self.storyboard_tree.yview)
-        self.storyboard_tree.configure(yscrollcommand=storyboard_scrollbar.set)
+        storyboard_scrollbar_y = ttk.Scrollbar(tree_container, orient=tk.VERTICAL, command=self.storyboard_tree.yview)
+        storyboard_scrollbar_x = ttk.Scrollbar(tree_container, orient=tk.HORIZONTAL, command=self.storyboard_tree.xview)
+        self.storyboard_tree.configure(yscrollcommand=storyboard_scrollbar_y.set, xscrollcommand=storyboard_scrollbar_x.set)
         
-        self.storyboard_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        storyboard_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.storyboard_tree.grid(row=0, column=0, sticky='nsew')
+        storyboard_scrollbar_y.grid(row=0, column=1, sticky='ns')
+        storyboard_scrollbar_x.grid(row=1, column=0, sticky='ew')
         
         # Enable mouse wheel scrolling
         def on_mousewheel_storyboard(event):
@@ -4161,25 +4242,6 @@ class SunoPersona(tk.Tk):
                 else:
                     self.log_debug('WARNING', 'No lyrics found in MP3 file and text field is empty')
             
-            # Build prompt for storyboard generation
-            prompt = f"Create music video prompts to create enough 1-{seconds_per_video} second video split scenes for this song.\n\n"
-            prompt += f"Song: {full_song_name if full_song_name else song_name}\n"
-            prompt += f"Artist/Persona: {persona_name}\n"
-            if lyrics:
-                prompt += f"Lyrics:\n{lyrics}\n\n"
-            if merged_style:
-                prompt += f"Style: {merged_style}\n\n"
-            
-            # Include persona visual description only as reference (not for every scene)
-            prompt += "\nPERSONA REFERENCE (only use when persona appears in scenes - see requirements below):\n"
-            if visual_aesthetic:
-                prompt += f"Visual Aesthetic: {visual_aesthetic}\n"
-            if base_image_prompt:
-                prompt += f"Character Description: {base_image_prompt}\n"
-            if vibe:
-                prompt += f"Vibe: {vibe}\n"
-            prompt += "\n"
-            
             # Get MP3 duration and parse lyrics with timing
             song_duration = self.get_mp3_duration(mp3_path)
             lyric_segments = []
@@ -4188,145 +4250,129 @@ class SunoPersona(tk.Tk):
                 if lyric_segments:
                     self.log_debug('INFO', f'Parsed {len(lyric_segments)} lyric segments from song duration {song_duration:.1f}s')
             
+            # Calculate scenes needed
+            num_scenes = int(song_duration / seconds_per_video) + (1 if song_duration % seconds_per_video > 0 else 0)
+            
             # Build scene-by-scene lyrics information if available
             scene_lyrics_info = ""
-            scene_lyrics_dict = {}  # Store lyrics for each scene number
+            scene_lyrics_dict = {}
             if lyric_segments and song_duration > 0:
-                # Calculate how many scenes we'll need
-                num_scenes = int(song_duration / seconds_per_video) + (1 if song_duration % seconds_per_video > 0 else 0)
-                scene_lyrics_info = "\n\nLYRICS TIMING FOR EACH SCENE:\n"
+                scene_lyrics_info = "\n<LYRICS_TIMING>\n"
                 current_time = 0.0
                 for scene_idx in range(1, num_scenes + 1):
                     scene_start_time = current_time
                     scene_end_time = min(current_time + seconds_per_video, song_duration)
                     scene_lyrics = self.get_lyrics_for_scene(scene_start_time, scene_end_time, lyric_segments)
                     if scene_lyrics:
-                        scene_lyrics_info += f"Scene {scene_idx} ({scene_start_time:.1f}s - {scene_end_time:.1f}s): {scene_lyrics}\n"
+                        scene_lyrics_info += f"Scene {scene_idx} ({scene_start_time:.1f}s-{scene_end_time:.1f}s): {scene_lyrics}\n"
                         scene_lyrics_dict[scene_idx] = scene_lyrics
                     current_time = scene_end_time
                     if current_time >= song_duration:
                         break
-                scene_lyrics_info += "\n"
+                scene_lyrics_info += "</LYRICS_TIMING>\n"
             
-            prompt += f"Generate detailed image prompts for each scene (each scene is {seconds_per_video} seconds). "
-            prompt += "Each prompt should be suitable for generating base images that will be used to create small videos later. "
-            prompt += f"\n\nSTORYBOARD THEME: The overall theme for this music video storyboard is '{full_song_name if full_song_name else song_name}'. "
-            prompt += "FOCUS ON THE SONG THEME, LYRICS, AND MOOD - not the persona. Use the song title and lyrics as the primary inspiration for creating a cohesive visual narrative throughout all scenes.\n"
-            prompt += "\nCRITICAL REQUIREMENTS:\n"
-            prompt += "0. CONTENT SAFETY: All scene prompts MUST be safe for content moderation systems. Use creative alternatives to avoid moderation blocks:\n"
-            prompt += "   - Instead of 'black' use 'dark', 'deep', 'shadowy', or 'charcoal'\n"
-            prompt += "   - Instead of 'void' use 'empty space', 'vast emptiness', or 'expansive darkness'\n"
-            prompt += "   - Instead of 'compressing' or 'bending under force' use 'contracting', 'curving', 'warping', or 'distorting'\n"
-            prompt += "   - Instead of 'praying' use 'pleading', 'hoping', or 'seeking'\n"
-            prompt += "   - Avoid violent or forceful language - use descriptive, artistic alternatives\n"
-            prompt += "   - Focus on visual poetry and atmosphere rather than potentially problematic terms\n"
-            prompt += "   - Create safe, artistic prompts that convey the same mood and meaning\n"
-            prompt += f"1. PRIMARY FOCUS: Song theme, lyrics, mood, and visual storytelling. The persona ({persona_name}) is secondary.\n"
-            prompt += f"   - Only about 30-40% of scenes should feature the persona/artist ({persona_name})\n"
-            prompt += "   - Most scenes (60-70%) should be thematic/abstract visuals, environmental scenes, symbolic imagery, or mood-setting visuals that directly relate to the SONG THEME and LYRICS\n"
-            prompt += "   - Focus on what the lyrics describe, the emotions they convey, and the story they tell\n"
-            prompt += "   - Do NOT put the persona in consecutive scenes - alternate between scenes with and without the persona\n"
-            prompt += "   - Each scene should primarily serve the song's narrative and emotional journey\n"
-            prompt += "   - CRITICAL: When a prompt says 'No persona present', 'No characters present', or 'No persona', the generated image MUST NOT include ANY human figures, especially not the persona. These scenes should be purely environmental, abstract, symbolic, or atmospheric visuals.\n"
-            prompt += f"2. When a scene DOES feature the persona/artist ({persona_name}), keep it brief - just mention '{persona_name}' or 'the artist' or 'the singer'. Do NOT repeat full persona descriptions in each scene prompt.\n"
-            prompt += "   - When a scene DOES NOT feature the persona, the prompt MUST explicitly state 'No persona present', 'No characters', or 'No human figures' and focus entirely on abstract/thematic visuals\n"
-            prompt += "3. CRITICAL - VARY PERSONA APPEARANCE: When the persona appears, she must look DIFFERENT in each scene:\n"
-            prompt += "   - Vary poses, expressions, camera distance, angles, lighting, and settings\n"
-            prompt += "   - The persona should NEVER look identical or very similar in consecutive scenes\n"
-            prompt += "   - Keep persona descriptions concise - focus on the scene's visual story, not detailed persona characteristics\n"
-            prompt += "4. All scenes should match the mood, style, and theme of the song, creating a cohesive music video narrative focused on the SONG'S STORY, not the persona.\n"
-            prompt += "6. CRITICAL - STORYTELLING AND NARRATIVE PROGRESSION: The storyboard must tell a visual story that progresses throughout the song:\n"
-            prompt += "   - Each scene should advance the narrative and emotional journey of the song\n"
-            prompt += "   - Scenes should build upon each other, creating a cohesive visual story arc\n"
-            prompt += "   - The visual narrative should reflect the song's emotional progression (intro → build → climax → resolution)\n"
-            prompt += "   - Each scene should feel like a new chapter in the story, not a repetition\n"
-            prompt += "7. CRITICAL - SCENE VARIETY AND VISUAL DIVERSITY: Each scene must be COMPLETELY DIFFERENT from all previous scenes:\n"
-            prompt += "   - NEVER repeat similar compositions, angles, or settings in consecutive scenes\n"
-            prompt += "   - Vary EVERYTHING: shot types (extreme close-up, close-up, medium, wide, extreme wide, macro, aerial), camera angles (low, high, eye-level, overhead, Dutch angle, POV), camera movement (static, tracking, panning, zooming), lighting (dramatic shadows, soft, harsh, colored, backlit, side-lit), color palettes (warm, cool, monochrome, high contrast, muted), settings (indoor, outdoor, abstract, industrial, natural, urban, digital, organic), textures (smooth, rough, metallic, organic, digital), and moods (intense, calm, mysterious, energetic, melancholic, hopeful)\n"
-            prompt += "   - Do NOT use the same visual style, composition, or setting twice\n"
-            prompt += "   - Each scene should surprise and offer a new visual perspective\n"
-            prompt += "   - Create visual rhythm through alternating: abstract vs concrete, close vs wide, dark vs light, static vs dynamic, organic vs geometric\n"
-            prompt += "   - Think of each scene as a unique frame in a film - no two frames should look alike\n"
-            if scene_lyrics_info:
-                prompt += "6. CRITICAL - EMBED LYRICS IN SCENE PROMPTS: Each scene prompt MUST visually represent and incorporate the specific lyrics that play during that scene's time period (see LYRICS TIMING below). The scene prompt should directly reference or visually interpret the lyrics for that time period. Match the visual mood, content, and imagery to the specific lyrics playing during that scene.\n"
-                prompt += "7. CRITICAL - NO PERSONA IN ABSTRACT SCENES: When generating scenes without the persona, you MUST explicitly state 'No persona present', 'No characters', 'No human figures', or 'No artist' in the scene prompt. These scenes should be purely environmental, abstract, symbolic, atmospheric, or thematic visuals that represent the lyrics and song mood WITHOUT any human presence.\n"
-            prompt += scene_lyrics_info
+            # Build improved prompt with clear structure and best practices
+            prompt = f"""Generate {num_scenes} music video scene prompts for a {song_duration:.1f} second song ({seconds_per_video}s per scene).
+
+<SONG_INFO>
+Title: {full_song_name if full_song_name else song_name}
+Artist: {persona_name}
+Style: {merged_style if merged_style else 'Not specified'}
+</SONG_INFO>
+
+<PERSONA_REFERENCE>
+Use ONLY when persona appears (30-40% of scenes). Keep references brief - just "{persona_name}" or "the artist".
+Visual: {visual_aesthetic if visual_aesthetic else 'N/A'}
+Look: {base_image_prompt if base_image_prompt else 'N/A'}
+Vibe: {vibe if vibe else 'N/A'}
+</PERSONA_REFERENCE>
+
+<LYRICS>
+{lyrics if lyrics else 'No lyrics provided'}
+</LYRICS>
+{scene_lyrics_info}
+<RULES priority="high-to-low">
+1. NARRATIVE ARC: Build a visual story following the song's emotional journey (intro-build-climax-resolution). Each scene advances the narrative.
+
+2. SCENE DISTRIBUTION:
+   - 60-70% abstract/environmental scenes (mark with "[NO CHARACTERS]" at start)
+   - 30-40% persona scenes (never consecutive)
+   - Abstract scenes: purely environmental, symbolic, atmospheric - zero human figures
+
+3. VISUAL VARIETY: Every scene must differ significantly:
+   - Rotate shot types: extreme close-up, medium, wide, aerial, macro
+   - Alternate: dark/light, warm/cool, organic/geometric, static/dynamic
+   - Vary: angles, lighting, textures, settings, color palettes
+
+4. PERSONA VARIETY: When persona appears, change everything:
+   - Different pose, expression, camera angle, lighting, setting each time
+   - Brief mention only - focus on scene, not persona details
+
+5. LYRICS INTEGRATION:"""
             
-            # Calculate total scenes needed (song_duration already calculated above)
-            num_scenes = int(song_duration / seconds_per_video) + (1 if song_duration % seconds_per_video > 0 else 0)
-            
-            prompt += f"\nTOTAL SCENES NEEDED: {num_scenes} scenes (song duration: {song_duration:.1f} seconds, {seconds_per_video} seconds per scene)\n\n"
-            prompt += "CRITICAL INSTRUCTIONS:\n"
-            prompt += "1. You MUST generate ALL scenes. Do NOT ask questions, offer options, or explain limitations.\n"
-            prompt += "2. If the response would be too long, generate scenes in sequential batches:\n"
-            prompt += "   - Batch 1: SCENE 1 through SCENE 14\n"
-            prompt += "   - Batch 2: SCENE 15 through SCENE 28\n"
-            prompt += "   - Batch 3: SCENE 29 through SCENE 42 (or final scene)\n"
-            prompt += "   - Continue until all scenes are generated\n"
-            prompt += "3. Each batch should start immediately with the scene number (e.g., 'SCENE 1:', 'SCENE 15:', etc.)\n"
-            prompt += "4. Do NOT include any preamble, explanations, or confirmations - just generate the scenes.\n"
-            prompt += "5. If generating in batches, clearly mark each batch (you can use 'BATCH 1:', 'BATCH 2:', etc. before the scenes, or just start with the scene numbers).\n"
             if scene_lyrics_info:
-                prompt += "6. IMPORTANT: For each scene, you MUST incorporate the lyrics shown in the LYRICS TIMING section for that scene. The scene prompt should visually represent what those lyrics describe or evoke.\n"
-            prompt += "\nOutput format (start immediately with SCENE 1, no preamble):\n"
-            if scene_lyrics_info:
-                # Include actual lyrics in each scene prompt example
-                scene1_lyrics = scene_lyrics_dict.get(1, '')
-                scene2_lyrics = scene_lyrics_dict.get(2, '')
-                scene3_lyrics = scene_lyrics_dict.get(3, '')
-                
-                if scene1_lyrics:
-                    prompt += f"SCENE 1: [duration] seconds\nLYRICS FOR THIS SCENE: \"{scene1_lyrics}\"\n"
-                    prompt += "CRITICAL INSTRUCTIONS FOR THIS SCENE:\n"
-                    prompt += "1. The image must visually represent and incorporate the lyrics above - the prompt must directly reflect the mood, imagery, and content of these specific lyrics. Include visual elements that match what the lyrics describe.\n"
-                    prompt += "2. The lyrics text MUST be embedded and integrated into the scene and background, merging seamlessly with the surroundings. The lyrics should appear as part of the environment - written on surfaces, integrated into textures, blended into the background, appearing on signs/walls/objects in the scene, or woven into the visual design itself. They should NOT appear as a floating text overlay, but rather as an organic part of the scene that merges with the background and surroundings.\n"
-                    prompt += f"3. Format the image prompt to include: [visual description] + \"with the lyrics text '{scene1_lyrics}' embedded INTO THE ENVIRONMENT ONLY (e.g., carved into walls, glowing in neon signs, written on objects, formed by patterns, integrated into textures) - NO text overlays, NO bottom bars, NO subtitles, NO floating text\"\n\n"
-                else:
-                    prompt += "SCENE 1: [duration] seconds\n[detailed image prompt that visually represents and incorporates the lyrics for Scene 1's time period - the prompt should directly reflect the mood, imagery, and content of those specific lyrics. If this scene does not feature the persona, explicitly state 'No persona present' or 'No characters' in the prompt]\n\n"
-                
-                if scene2_lyrics:
-                    prompt += f"SCENE 2: [duration] seconds\nLYRICS FOR THIS SCENE: \"{scene2_lyrics}\"\n"
-                    prompt += "CRITICAL INSTRUCTIONS FOR THIS SCENE:\n"
-                    prompt += "1. MOST SCENES (60-70%) MUST NOT include the persona. If this is a scene WITHOUT the persona, you MUST start the scene prompt with 'No persona present. No characters. No human figures. No artist. No people.' and create a purely abstract, environmental, symbolic, or atmospheric visual.\n"
-                    prompt += "2. The image must visually represent and incorporate the lyrics above - the prompt must directly reflect the mood, imagery, and content of these specific lyrics. Include visual elements that match what the lyrics describe.\n"
-                    prompt += "3. The lyrics text MUST be embedded and integrated into the scene and background, merging seamlessly with the surroundings. The lyrics should appear as part of the environment - written on surfaces, integrated into textures, blended into the background, appearing on signs/walls/objects in the scene, or woven into the visual design itself. They should NOT appear as a floating text overlay, but rather as an organic part of the scene that merges with the background and surroundings.\n"
-                    prompt += f"4. Format the image prompt to include: [visual description] + \"with the lyrics text '{scene2_lyrics}' embedded INTO THE ENVIRONMENT ONLY (e.g., carved into walls, glowing in neon signs, written on objects, formed by patterns, integrated into textures) - NO text overlays, NO bottom bars, NO subtitles, NO floating text\"\n\n"
-                else:
-                    prompt += "SCENE 2: [duration] seconds\n[detailed image prompt that visually represents and incorporates the lyrics for Scene 2's time period - the prompt should directly reflect the mood, imagery, and content of those specific lyrics. If this scene does not feature the persona, explicitly state 'No persona present' or 'No characters' in the prompt]\n\n"
-                
-                if scene3_lyrics:
-                    prompt += f"SCENE 3: [duration] seconds\nLYRICS FOR THIS SCENE: \"{scene3_lyrics}\"\n"
-                    prompt += "CRITICAL INSTRUCTIONS FOR THIS SCENE:\n"
-                    prompt += "1. MOST SCENES (60-70%) MUST NOT include the persona. If this is a scene WITHOUT the persona, you MUST start the scene prompt with 'No persona present. No characters. No human figures. No artist. No people.' and create a purely abstract, environmental, symbolic, or atmospheric visual.\n"
-                    prompt += "2. The image must visually represent and incorporate the lyrics above - the prompt must directly reflect the mood, imagery, and content of these specific lyrics. Include visual elements that match what the lyrics describe.\n"
-                    prompt += "3. The lyrics text MUST be embedded and integrated into the scene and background, merging seamlessly with the surroundings. The lyrics should appear as part of the environment - written on surfaces, integrated into textures, blended into the background, appearing on signs/walls/objects in the scene, or woven into the visual design itself. They should NOT appear as a floating text overlay, but rather as an organic part of the scene that merges with the background and surroundings.\n"
-                    prompt += f"4. Format the image prompt to include: [visual description] + \"with the lyrics text '{scene3_lyrics}' embedded INTO THE ENVIRONMENT ONLY (e.g., carved into walls, glowing in neon signs, written on objects, formed by patterns, integrated into textures) - NO text overlays, NO bottom bars, NO subtitles, NO floating text\"\n\n"
-                else:
-                    prompt += "SCENE 3: [duration] seconds\n[detailed image prompt that visually represents and incorporates the lyrics for Scene 3's time period - the prompt should directly reflect the mood, imagery, and content of those specific lyrics. If this scene does not feature the persona, explicitly state 'No persona present' or 'No characters' in the prompt]\n\n"
-                
-                prompt += f"\nIMPORTANT: For EACH scene (Scene 4 through Scene {num_scenes}), you MUST:\n"
-                prompt += "1. Include the exact lyrics that play during that scene's time period (from LYRICS TIMING section above)\n"
-                prompt += "2. Format: SCENE X: [duration] seconds\nLYRICS FOR THIS SCENE: \"[exact lyrics text]\"\nCRITICAL INSTRUCTIONS FOR THIS SCENE:\n"
-                prompt += "   a. MOST SCENES (60-70%) MUST NOT include the persona. If this is a scene WITHOUT the persona, you MUST start the scene prompt with 'No persona present. No characters. No human figures. No artist. No people.' and create a purely abstract, environmental, symbolic, or atmospheric visual that represents the lyrics WITHOUT any human presence.\n"
-                prompt += "   b. CONTENT SAFETY: Use safe, artistic language. Avoid 'black' (use 'dark', 'shadowy'), 'void' (use 'empty space'), 'compressing/bending under force' (use 'curving', 'warping'), 'praying' (use 'pleading', 'hoping'). Create visually poetic prompts that pass content moderation.\n"
-                prompt += "   c. The image must visually represent and incorporate the lyrics above - include visual elements that match what the lyrics describe\n"
-                prompt += "   d. CRITICAL - LYRICS EMBEDDING: The lyrics text MUST be embedded and integrated INTO THE SCENE ENVIRONMENT ONLY - written on surfaces, integrated into textures, blended into backgrounds, appearing on signs/walls/objects, or woven into the visual design. They MUST merge seamlessly with the surroundings as an organic part of the scene.\n"
-                prompt += "      - DO NOT add lyrics as text overlays, subtitles, captions, or bottom bars\n"
-                prompt += "      - DO NOT add lyrics floating on top of the image\n"
-                prompt += "      - Lyrics should ONLY appear as part of the environment itself (e.g., carved into walls, glowing in neon signs, written on objects, formed by patterns, etc.)\n"
-                prompt += "      - If lyrics cannot be naturally integrated into the environment, focus on visual representation of the lyrics' meaning instead\n"
-                prompt += "   e. Format the image prompt to include: [visual description] + \"with the lyrics text '[exact lyrics]' embedded INTO THE ENVIRONMENT ONLY (e.g., carved into walls, glowing in neon signs, written on objects, formed by patterns, integrated into textures) - NO text overlays, NO bottom bars, NO subtitles, NO floating text\"\n"
-                prompt += "3. The image prompt MUST directly incorporate and visualize what the lyrics describe AND include instructions to embed the lyrics text into the scene design, merging with the background and surroundings\n"
-                prompt += "4. CRITICAL: When a scene prompt starts with 'No persona present', the generated image MUST be completely free of ANY human figures, characters, or people. Only environmental, abstract, symbolic, or atmospheric elements should be present.\n\n"
+                prompt += """
+   - Each scene MUST visualize its corresponding lyrics from LYRICS_TIMING
+   - Embed lyrics INTO the environment (carved in walls, neon signs, formed by patterns)
+   - NEVER use text overlays, subtitles, or floating text"""
             else:
-                prompt += "SCENE 1: [duration] seconds\n[detailed image prompt that visually represents the lyrics and theme for this time period. If this scene does not feature the persona, explicitly state 'No persona present' or 'No characters' in the prompt]\n\n"
-                prompt += "SCENE 2: [duration] seconds\n[detailed image prompt that visually represents the lyrics and theme for this time period. If this scene does not feature the persona, explicitly state 'No persona present' or 'No characters' in the prompt]\n\n"
-                prompt += "SCENE 3: [duration] seconds\n[detailed image prompt that visually represents the lyrics and theme for this time period. If this scene does not feature the persona, explicitly state 'No persona present' or 'No characters' in the prompt]\n\n"
-            prompt += f"(Continue for ALL {num_scenes} scenes needed to cover the entire song - generate every scene, do not stop or ask questions)"
+                prompt += """
+   - Visualize song theme and mood in each scene"""
             
-            # For now, use text model with song info (MP3 audio analysis can be added later)
-            # Note: Azure OpenAI Whisper API could be used for actual MP3 transcription
-            system_message = f"You are a music video storyboard creator. Generate ALL {num_scenes} scenes needed for this {song_duration:.1f} second song. If the response would be too long, generate scenes in sequential batches (e.g., scenes 1-14, then 15-28, then 29-42). Do NOT ask questions or offer options. Output ONLY the scenes in the requested format (SCENE X: [duration] seconds\n[prompt]), with no additional explanations, questions, or commentary. Start immediately with SCENE 1."
+            prompt += """
+
+6. CONTENT SAFETY (use these alternatives):
+   - "black" -> "dark", "shadowy", "charcoal"
+   - "void" -> "vast emptiness", "expansive darkness"  
+   - "praying" -> "pleading", "hoping", "seeking"
+   - Avoid violent/forceful language - use artistic alternatives
+</RULES>
+
+<OUTPUT_FORMAT>
+Start immediately with SCENE 1. No preamble or questions.
+
+SCENE 1: {seconds_per_video} seconds"""
+            
+            # Add one comprehensive example
+            example_lyrics = scene_lyrics_dict.get(1, 'sample lyrics here')
+            if scene_lyrics_info and example_lyrics:
+                prompt += f"""
+LYRICS: "{example_lyrics}"
+[Detailed visual description matching the lyrics mood and imagery. Include shot type, lighting, colors, setting. End with: 'Lyrics "{example_lyrics}" integrated as [specific environment method - e.g., glowing neon on wet pavement, etched into stone, formed by smoke wisps]']
+
+SCENE 2: {seconds_per_video} seconds
+[NO CHARACTERS] [Detailed abstract/environmental scene - atmospheric visuals, symbolic imagery, no human figures. Different shot type and palette from Scene 1.]"""
+            else:
+                prompt += f"""
+[Detailed visual description. Include shot type, lighting, colors, setting, mood.]
+
+SCENE 2: {seconds_per_video} seconds
+[NO CHARACTERS] [Abstract/environmental scene - no human figures. Different composition from Scene 1.]"""
+            
+            prompt += f"""
+
+...continue through SCENE {num_scenes}...
+</OUTPUT_FORMAT>
+
+<EXECUTION>
+- Generate ALL {num_scenes} scenes without stopping
+- If response limit reached, continue in batches (1-14, 15-28, etc.)
+- No questions, no options, no explanations - just scenes
+</EXECUTION>
+
+Begin with SCENE 1:"""
+            
+            # Enhanced system message with clear role and constraints
+            system_message = f"""You are a professional music video storyboard director creating {num_scenes} scene prompts.
+
+ABSOLUTE RULES:
+1. Output ONLY scene prompts in format: "SCENE X: [duration] seconds\\n[prompt]"
+2. Generate ALL {num_scenes} scenes - no stopping, no questions
+3. 60-70% of scenes must be [NO CHARACTERS] - purely environmental/abstract
+4. Every scene must be visually distinct from all others
+5. If hitting response limits, batch output (scenes 1-14, then 15-28, etc.)
+
+Start immediately with "SCENE 1:" - no introduction or commentary."""
             
             # Calculate estimated tokens needed (rough estimate: ~100 tokens per scene)
             # song_duration and num_scenes already calculated above
@@ -4347,6 +4393,17 @@ class SunoPersona(tk.Tk):
                 
                 # Always log full AI response for debugging
                 self.log_debug('DEBUG', f'Full AI response:\n{"="*80}\n{content}\n{"="*80}')
+
+                # Persist raw response for auditing
+                self.save_storyboard_raw_response(
+                    content,
+                    seconds_per_video,
+                    {
+                        'mode': 'single',
+                        'num_scenes': num_scenes,
+                        'seconds_per_video': seconds_per_video
+                    }
+                )
                 
                 if not content:
                     self.log_debug('ERROR', 'Storyboard response is empty!')
@@ -4389,6 +4446,17 @@ class SunoPersona(tk.Tk):
                         if batch_result['success']:
                             batch_content = batch_result['content'].strip()
                             self.log_debug('DEBUG', f'Batch {batch_start}-{batch_end} response (length: {len(batch_content)} chars)')
+                            self.save_storyboard_raw_response(
+                                batch_content,
+                                seconds_per_video,
+                                {
+                                    'mode': 'batch',
+                                    'batch_start': batch_start,
+                                    'batch_end': batch_end,
+                                    'num_scenes': num_scenes,
+                                    'seconds_per_video': seconds_per_video
+                                }
+                            )
                             all_scenes_content.append(batch_content)
                         else:
                             self.log_debug('ERROR', f'Batch {batch_start}-{batch_end} failed: {batch_result["error"]}')
@@ -4420,7 +4488,15 @@ class SunoPersona(tk.Tk):
                     messagebox.showerror('Error - Too Many Scenes', error_msg)
                     return
                 
-                self.parse_storyboard_response(content, seconds_per_video)
+                combined_content = self.ensure_complete_storyboard_response(
+                    content, song_name, full_song_name, lyrics, merged_style, persona_name,
+                    visual_aesthetic, base_image_prompt, vibe, lyric_segments,
+                    song_duration, seconds_per_video, num_scenes, system_message, max_tokens
+                )
+                if not combined_content:
+                    return
+                
+                self.parse_storyboard_response(combined_content, seconds_per_video)
                 self.log_debug('INFO', 'Storyboard generated successfully')
             else:
                 messagebox.showerror('Error', f'Failed to generate storyboard: {result["error"]}')
@@ -4531,6 +4607,90 @@ class SunoPersona(tk.Tk):
         prompt += f"(Continue through SCENE {batch_end})\n"
         
         return prompt
+    
+    def _get_max_scene_number_from_text(self, content: str) -> int:
+        """Extract the highest scene number mentioned in the content."""
+        if not content:
+            return 0
+        matches = re.findall(r'SCENE\s+(\d+)', content, flags=re.IGNORECASE)
+        if not matches:
+            return 0
+        return max(int(m) for m in matches)
+    
+    def ensure_complete_storyboard_response(self, initial_content: str, song_name: str, full_song_name: str,
+                                            lyrics: str, merged_style: str, persona_name: str,
+                                            visual_aesthetic: str, base_image_prompt: str, vibe: str,
+                                            lyric_segments: list, song_duration: float, seconds_per_video: int,
+                                            total_scenes: int, system_message: str, max_tokens: int) -> str | None:
+        """Ensure we have prompts for all scenes by requesting additional batches if needed."""
+        if not initial_content:
+            return None
+        
+        aggregated_contents = [initial_content]
+        max_scene = self._get_max_scene_number_from_text(initial_content)
+        if max_scene >= total_scenes:
+            return initial_content
+        
+        self.log_debug('INFO', f'Initial storyboard response ended at scene {max_scene} of {total_scenes}. Requesting remaining scenes automatically.')
+        batch_size = 14
+        safety_counter = 0
+        
+        while max_scene < total_scenes and safety_counter < 10:
+            batch_start = max_scene + 1
+            batch_end = min(batch_start + batch_size - 1, total_scenes)
+            self.log_debug('INFO', f'Requesting additional scenes {batch_start}-{batch_end}')
+            
+            batch_prompt = self._create_batch_storyboard_prompt(
+                song_name, full_song_name, lyrics, merged_style, persona_name,
+                visual_aesthetic, base_image_prompt, vibe, lyric_segments,
+                song_duration, seconds_per_video, batch_start, batch_end, total_scenes
+            )
+            
+            batch_result = call_azure_ai(self.ai_config, batch_prompt, system_message=system_message, max_tokens=max_tokens)
+            if not batch_result['success']:
+                error_msg = f'Failed to generate scenes {batch_start}-{batch_end}: {batch_result["error"]}'
+                self.log_debug('ERROR', error_msg)
+                messagebox.showerror('Error', error_msg)
+                return None
+            
+            batch_content = batch_result['content'].strip()
+            if not batch_content:
+                error_msg = f'Failed to generate scenes {batch_start}-{batch_end}: Empty response'
+                self.log_debug('ERROR', error_msg)
+                messagebox.showerror('Error', error_msg)
+                return None
+            
+            self.log_debug('DEBUG', f'Additional scenes {batch_start}-{batch_end} received (length: {len(batch_content)} chars)')
+            aggregated_contents.append(batch_content)
+            self.save_storyboard_raw_response(
+                batch_content,
+                seconds_per_video,
+                {
+                    'mode': 'auto_batch',
+                    'batch_start': batch_start,
+                    'batch_end': batch_end,
+                    'num_scenes': total_scenes,
+                    'seconds_per_video': seconds_per_video
+                }
+            )
+            
+            previous_max = max_scene
+            new_max = self._get_max_scene_number_from_text(batch_content)
+            if new_max <= previous_max:
+                self.log_debug('WARNING', f'Additional response did not contain higher scene numbers (max {new_max}). Stopping to avoid infinite loop.')
+                break
+            max_scene = new_max
+            safety_counter += 1
+        
+        if max_scene < total_scenes:
+            error_msg = f'Storyboard still incomplete after additional requests (last scene: {max_scene}, expected: {total_scenes}).'
+            self.log_debug('ERROR', error_msg)
+            messagebox.showerror('Error', error_msg)
+            return None
+        
+        combined_content = '\n\n'.join(aggregated_contents)
+        self.log_debug('INFO', f'All {total_scenes} scenes collected successfully.')
+        return combined_content
     
     def parse_storyboard_response(self, content: str, default_duration: int):
         """Parse the AI response and populate storyboard treeview.
@@ -4646,6 +4806,37 @@ class SunoPersona(tk.Tk):
             self.log_debug('ERROR', 'No scenes were parsed from the response!')
             self.log_debug('DEBUG', f'Full response content:\n{content}')
     
+    def save_storyboard_raw_response(self, response_text: str, seconds_per_video: int, metadata=None):
+        """Save raw storyboard AI response to JSON file in current song directory."""
+        if not response_text:
+            return
+        song_path = getattr(self, 'current_song_path', '')
+        if not song_path:
+            self.log_debug('WARNING', 'Cannot save storyboard raw response - song path is not set.')
+            return
+        try:
+            os.makedirs(song_path, exist_ok=True)
+            import datetime
+            timestamp = datetime.datetime.now()
+            filename = os.path.join(song_path, f'storyboard_response_{timestamp.strftime("%Y%m%d_%H%M%S")}.json')
+            persona_name = ''
+            if hasattr(self, 'current_persona') and self.current_persona:
+                persona_name = self.current_persona.get('name', '')
+            data = {
+                'timestamp': timestamp.isoformat(),
+                'song_name': self.song_name_var.get().strip() if hasattr(self, 'song_name_var') else '',
+                'full_song_name': self.full_song_name_var.get().strip() if hasattr(self, 'full_song_name_var') else '',
+                'persona': persona_name,
+                'seconds_per_video': seconds_per_video,
+                'metadata': metadata or {},
+                'raw_response': response_text
+            }
+            with open(filename, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            self.log_debug('INFO', f'Storyboard raw response saved to {filename}')
+        except Exception as exc:
+            self.log_debug('WARNING', f'Failed to save storyboard raw response: {exc}')
+
     def generate_storyboard_image_selected(self):
         """Generate images for the selected storyboard scenes (supports multiple selection)."""
         if not hasattr(self, 'storyboard_tree'):
@@ -4954,20 +5145,28 @@ class SunoPersona(tk.Tk):
         
         # Check if persona is part of the scene by analyzing the prompt
         persona_in_scene = False
-        if self.current_persona:
+        prompt_lower = prompt.lower()
+        
+        # First check: explicit NO CHARACTERS markers - skip all persona logic if present
+        no_character_markers = ['[no characters]', 'no characters', 'no persona present', 'no human figures', 
+                                'no persona', 'no people', 'no artist', '[no persona]', 'without any human',
+                                'purely environmental', 'purely abstract', 'no human presence']
+        if any(marker in prompt_lower for marker in no_character_markers):
+            self.log_debug('INFO', f'Scene {scene_num} explicitly marked as NO CHARACTERS - skipping persona image')
+            persona_in_scene = False
+        elif self.current_persona:
             persona_name = self.current_persona.get('name', '').lower()
-            prompt_lower = prompt.lower()
             visual_aesthetic = self.current_persona.get('visual_aesthetic', '').lower()
             base_image_prompt = self.current_persona.get('base_image_prompt', '').lower()
             
-            # First check: explicit persona name or character-related keywords
+            # Second check: explicit persona name or character-related keywords
             if persona_name and persona_name in prompt_lower:
                 persona_in_scene = True
                 self.log_debug('INFO', f'Persona detected in scene {scene_num} by name match')
             elif any(keyword in prompt_lower for keyword in ['character', 'persona', 'singer', 'artist', 'performer', 'person', 'figure', 'protagonist', 'main character', 'vocalist', 'musician']):
                 persona_in_scene = True
                 self.log_debug('INFO', f'Persona detected in scene {scene_num} by keyword match')
-            # Second check: if no explicit keywords, use AI to analyze if persona should be in scene
+            # Third check: if no explicit keywords, use AI to analyze if persona should be in scene
             elif visual_aesthetic or base_image_prompt:
                 try:
                     self.log_debug('INFO', f'Analyzing scene {scene_num} prompt to determine if persona should be featured...')
@@ -5269,17 +5468,32 @@ class SunoPersona(tk.Tk):
         full_song_name = self.full_song_name_var.get().strip() or 'video'
         safe_basename = full_song_name.replace(':', '_').replace('/', '_').replace('\\', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace("'", '_').replace('<', '_').replace('>', '_').replace('|', '_')
         
-        self.log_debug('INFO', 'Calling Azure Video model...')
-        self.config(cursor='wait')
-        self.update()
-        
         # Get video size from configuration
         video_size = self.get_video_loop_size()
+        
+        # Log video generation parameters
+        video_profile = self.ai_config.get('profiles', {}).get('video_gen', {})
+        video_endpoint = video_profile.get('endpoint', 'Not configured')
+        video_model = video_profile.get('model_name', video_profile.get('deployment', 'Not configured'))
+        self.log_debug('INFO', f'Calling Azure Video model...')
+        self.log_debug('DEBUG', f'Video endpoint: {video_endpoint}')
+        self.log_debug('DEBUG', f'Video model: {video_model}, size: {video_size}')
+        
+        self.config(cursor='wait')
+        self.update()
         
         try:
             result = call_azure_video(self.ai_config, prompt, size=video_size, seconds='4', profile='video_gen')
         finally:
             self.config(cursor='')
+        
+        # Log debug info from result
+        debug_info = result.get('debug', {})
+        if debug_info:
+            self.log_debug('DEBUG', f"Video API URL: {debug_info.get('url', 'N/A')}")
+            self.log_debug('DEBUG', f"Video API status: {debug_info.get('status', 'N/A')}, content-type: {debug_info.get('content_type', 'N/A')}")
+            if debug_info.get('body_preview'):
+                self.log_debug('DEBUG', f"Response preview: {debug_info.get('body_preview', '')[:200]}")
         
         if not result['success']:
             messagebox.showerror('Error', f"Video generation failed: {result['error']}")

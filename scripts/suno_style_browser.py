@@ -476,11 +476,7 @@ def call_azure_image(config: dict, prompt: str, size: str = '1024x1024', profile
 
 
 def call_azure_video(config: dict, prompt: str, size: str = '720x1280', seconds: str = '4', profile: str = 'video_gen') -> dict:
-    """
-    Call a video generations endpoint (expects Azure-like auth with Api-key header).
-    Uses profile endpoint as-is (no path added) to allow custom URLs.
-    Returns dict with success, video_bytes (optional), url (optional), error.
-    """
+    """Call a video generations endpoint."""
     try:
         profiles = config.get('profiles', {})
         if profile not in profiles:
@@ -490,17 +486,12 @@ def call_azure_video(config: dict, prompt: str, size: str = '720x1280', seconds:
         endpoint = (profile_config.get('endpoint', '') or '').strip()
         model_name = profile_config.get('model_name', 'sora-2')
         deployment = profile_config.get('deployment', '')
-        api_version = profile_config.get('api_version', '')  # optional for custom endpoints
+        api_version = profile_config.get('api_version', '')
         subscription_key = profile_config.get('subscription_key', '')
 
         if not endpoint or not subscription_key:
             return {'success': False, 'video_bytes': b'', 'url': '', 'error': 'Missing video endpoint or key'}
 
-        # Decide URL pattern
-        # 1) If endpoint already includes openai/v1/video path → use as-is (append /jobs if missing)
-        # 2) Else if base resource URL AND deployment provided → try PUBLIC first: /openai/deployments/{deployment}/video/generations
-        #    and have JOBS fallback: /openai/deployments/{deployment}/video/generations/jobs
-        # 3) Else default to openai/v1/video/generations/jobs pattern from provided endpoint
         url = endpoint.rstrip('/')
         try:
             parsed = urllib.parse.urlparse(endpoint)
@@ -512,7 +503,19 @@ def call_azure_video(config: dict, prompt: str, size: str = '720x1280', seconds:
 
         use_jobs_api = False
         public_url = jobs_url = ''
-        if 'openai/v1/video' in path_lower:
+        
+        # Check endpoint type:
+        # 1. /openai/v1/videos (plural, ends with 's') = direct API, no jobs, no api-version
+        # 2. /openai/v1/video/generations/jobs = jobs API
+        # 3. Base URL with deployment = try public first, fallback to jobs
+        skip_api_version = False
+        if path_lower.endswith('/videos') or '/v1/videos' in path_lower:
+            # Direct video API (e.g., Azure Cognitive Services Sora endpoint)
+            # Don't append /jobs, don't add api-version - use as-is with direct payload
+            use_jobs_api = False
+            skip_api_version = True
+        elif 'openai/v1/video/' in path_lower or path_lower.endswith('/jobs'):
+            # Jobs-based API
             if not url.endswith('/jobs'):
                 url = f"{url}/jobs"
             use_jobs_api = True
@@ -525,17 +528,15 @@ def call_azure_video(config: dict, prompt: str, size: str = '720x1280', seconds:
             url = f"{url}/openai/v1/video/generations/jobs"
             use_jobs_api = True
 
-        # Append api-version if provided and missing
-        if api_version and 'api-version=' not in url:
+        if api_version and 'api-version=' not in url and not skip_api_version:
             sep = '&' if '?' in url else '?'
             url = f"{url}{sep}api-version={api_version}"
 
         headers = {
             'Content-Type': 'application/json',
-            'Api-key': subscription_key  # matches provided curl sample
+            'Api-key': subscription_key
         }
 
-        # Parse size into width/height if using jobs API; otherwise send size string
         width, height = None, None
         try:
             parts = size.lower().split('x')
@@ -545,9 +546,11 @@ def call_azure_video(config: dict, prompt: str, size: str = '720x1280', seconds:
         except Exception:
             pass
 
-        using_jobs_api = (
-            ('/openai/v1/video/' in url) or ('/openai/deployments/' in url and '/video/generations/jobs' in url)
-        ) and (url.endswith('/jobs') or '/jobs?' in url)
+        # Determine if using jobs-based API based on URL pattern
+        using_jobs_api = use_jobs_api or (
+            (('/openai/v1/video/' in url) or ('/openai/deployments/' in url and '/video/generations/jobs' in url))
+            and (url.endswith('/jobs') or '/jobs?' in url)
+        )
 
         if using_jobs_api:
             payload = {
@@ -578,18 +581,67 @@ def call_azure_video(config: dict, prompt: str, size: str = '720x1280', seconds:
             'content_type': ctype,
         }
         if resp.status_code == 200 and not using_jobs_api:
-            # If binary video is returned
             if 'video' in ctype or 'application/octet-stream' in ctype:
                 return {'success': True, 'video_bytes': resp.content, 'url': '', 'error': '', 'debug': debug_info}
-            # Otherwise try JSON structure
             try:
                 data = resp.json()
-                # Common patterns: direct URL
                 if isinstance(data, dict):
+                    # Check for async polling format (status: queued/processing with id)
+                    video_id = data.get('id') or data.get('video_id')
+                    status = (data.get('status') or '').lower()
+                    if video_id and status in ['queued', 'processing', 'pending', 'in_progress', 'running']:
+                        # Async API - need to poll for completion
+                        base_url = endpoint.rstrip('/')
+                        poll_url = f"{base_url}/{video_id}"
+                        debug_info['poll_url'] = poll_url
+                        debug_info['video_id'] = video_id
+                        
+                        start_time = time.time()
+                        max_wait = 300  # 5 minutes max
+                        while status not in ['completed', 'succeeded', 'failed', 'error'] and (time.time() - start_time) < max_wait:
+                            time.sleep(5)
+                            poll_resp = requests.get(poll_url, headers=headers, timeout=60)
+                            try:
+                                poll_data = poll_resp.json()
+                                status = (poll_data.get('status') or '').lower()
+                                debug_info['poll_status'] = status
+                            except Exception:
+                                continue
+                        
+                        if status in ['completed', 'succeeded']:
+                            # Try to get video content
+                            # Check for direct video URL in response
+                            video_url = poll_data.get('output', {}).get('url') if isinstance(poll_data.get('output'), dict) else None
+                            video_url = video_url or poll_data.get('video_url') or poll_data.get('url') or poll_data.get('result', {}).get('url') if isinstance(poll_data.get('result'), dict) else None
+                            
+                            if video_url:
+                                vid_resp = requests.get(video_url, headers=headers, timeout=300)
+                                if vid_resp.ok:
+                                    return {'success': True, 'video_bytes': vid_resp.content, 'url': video_url, 'error': '', 'debug': debug_info}
+                            
+                            # Try content endpoint
+                            content_url = f"{poll_url}/content"
+                            vid_resp = requests.get(content_url, headers=headers, timeout=300)
+                            if vid_resp.ok and vid_resp.content:
+                                return {'success': True, 'video_bytes': vid_resp.content, 'url': '', 'error': '', 'debug': {**debug_info, 'content_url': content_url}}
+                            
+                            # Check for base64 in poll response
+                            b64 = poll_data.get('b64_json') or poll_data.get('video_b64') or ''
+                            if not b64 and 'output' in poll_data and isinstance(poll_data['output'], dict):
+                                b64 = poll_data['output'].get('b64_json') or poll_data['output'].get('video_b64') or ''
+                            if b64:
+                                return {'success': True, 'video_bytes': base64.b64decode(b64), 'url': '', 'error': '', 'debug': debug_info}
+                            
+                            debug_info['final_poll_response'] = str(poll_data)[:500]
+                            return {'success': False, 'video_bytes': b'', 'url': '', 'error': f'Video completed but could not retrieve content', 'debug': debug_info}
+                        else:
+                            error_msg = poll_data.get('error', {}).get('message') if isinstance(poll_data.get('error'), dict) else poll_data.get('error') or f'Video generation failed with status: {status}'
+                            return {'success': False, 'video_bytes': b'', 'url': '', 'error': str(error_msg), 'debug': debug_info}
+                    
+                    # Check for immediate video URL response
                     url_value = data.get('url') or data.get('video_url') or ''
                     if url_value:
                         return {'success': True, 'video_bytes': b'', 'url': url_value, 'error': '', 'debug': debug_info}
-                    # Base64 variants
                     b64 = ''
                     if 'data' in data and isinstance(data['data'], list) and data['data']:
                         b64 = data['data'][0].get('b64_json', '') or data['data'][0].get('video_b64', '')
@@ -599,7 +651,6 @@ def call_azure_video(config: dict, prompt: str, size: str = '720x1280', seconds:
                 debug_info['body_preview'] = resp.text[:500]
                 return {'success': False, 'video_bytes': b'', 'url': '', 'error': 'Unknown video response format', 'debug': debug_info}
             except Exception as e:
-                # Attach a short preview of body to help debugging
                 body_preview = ''
                 try:
                     body_preview = resp.text[:500]
@@ -608,7 +659,6 @@ def call_azure_video(config: dict, prompt: str, size: str = '720x1280', seconds:
                 debug_info['body_preview'] = body_preview
                 return {'success': False, 'video_bytes': b'', 'url': '', 'error': f'Invalid JSON response: {e}', 'debug': debug_info}
         
-        # Public API fallback: if we tried public and got 404/400 suggesting preview mode, try jobs URL automatically
         if (resp.status_code in (400, 404)) and (public_url and jobs_url) and (not using_jobs_api):
             body_text = ''
             try:
@@ -616,7 +666,6 @@ def call_azure_video(config: dict, prompt: str, size: str = '720x1280', seconds:
             except Exception:
                 pass
             if ('private preview' in body_text.lower()) or (resp.status_code == 404):
-                # Switch to jobs
                 url = jobs_url
                 if api_version and 'api-version=' not in url:
                     sep = '&' if '?' in url else '?'
@@ -634,7 +683,6 @@ def call_azure_video(config: dict, prompt: str, size: str = '720x1280', seconds:
                 debug_info.update({'url': url, 'status': resp.status_code, 'content_type': ctype})
                 using_jobs_api = True
 
-        # Jobs API flow: expect JSON with id/status, then poll and download
         if using_jobs_api:
             try:
                 job = resp.json()
@@ -648,13 +696,11 @@ def call_azure_video(config: dict, prompt: str, size: str = '720x1280', seconds:
                 debug_info['body_preview'] = resp.text[:500] if resp.text else ''
                 return {'success': False, 'video_bytes': b'', 'url': '', 'error': 'No job id in response', 'debug': debug_info}
 
-            # Build status URL
             base = endpoint.rstrip('/')
             status_url = f"{base}/openai/v1/video/generations/jobs/{job_id}"
             if api_version and 'api-version=' not in status_url:
                 status_url += f"?api-version={api_version}"
 
-            # Poll
             start_time = time.time()
             while status not in ['succeeded', 'failed'] and (time.time() - start_time) < 300:
                 time.sleep(5)
@@ -675,7 +721,6 @@ def call_azure_video(config: dict, prompt: str, size: str = '720x1280', seconds:
             if not generation_id:
                 return {'success': False, 'video_bytes': b'', 'url': '', 'error': 'No generation id in response', 'debug': debug_info}
 
-            # Download video content
             video_url = f"{base}/openai/v1/video/generations/{generation_id}/content/video"
             if api_version and 'api-version=' not in video_url:
                 video_url += f"?api-version={api_version}"
@@ -695,18 +740,6 @@ def call_azure_video(config: dict, prompt: str, size: str = '720x1280', seconds:
         return {'success': False, 'video_bytes': b'', 'url': '', 'error': f'Request error: {e}'}
     except Exception as e:
         return {'success': False, 'video_bytes': b'', 'url': '', 'error': f'Unexpected error: {e}'}
-    except requests.exceptions.RequestException as e:
-        return {
-            'success': False,
-            'image_bytes': b'',
-            'error': f'Request error: {str(e)}'
-        }
-    except Exception as e:
-        return {
-            'success': False,
-            'image_bytes': b'',
-            'error': f'Unexpected error: {str(e)}'
-        }
 
 
 class ExtraCommandsDialog(tk.Toplevel):
