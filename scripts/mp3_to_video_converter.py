@@ -57,6 +57,10 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
         self.image_width = None
         self.image_height = None
         
+        # Video dimensions (will be set when video is selected)
+        self.video_width = None
+        self.video_height = None
+        
         # Scaling mode for aspect ratio handling
         self.scaling_mode = tk.StringVar(value="stretch")
         
@@ -208,10 +212,10 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
         ttk.Label(settings_frame, text="Video Quality:").grid(row=1, column=0, sticky='w', pady=5)
         self.video_quality_var = tk.StringVar(value="Auto")
         quality_combo = ttk.Combobox(settings_frame, textvariable=self.video_quality_var, width=20, state='readonly')
-        quality_combo['values'] = ('Auto', '480p', '720p', '1080p', 'Mobile Portrait (9:16)', 'Mobile Landscape (16:9)', 'Instagram Square (1:1)', 'Instagram Story (9:16)', 'Portrait 2:3', 'Landscape 3:2', 'Image Size')
+        quality_combo['values'] = ('Auto', '480p', '720p', '1080p', 'Mobile Portrait (9:16)', 'Mobile Landscape (16:9)', 'Instagram Square (1:1)', 'Instagram Story (9:16)', 'Portrait 2:3', 'Landscape 3:2', 'Source Size')
         quality_combo.grid(row=1, column=1, sticky='w', padx=5)
         
-        # Image dimensions display
+        # Image/Video dimensions display
         self.image_dimensions_label = ttk.Label(settings_frame, text="", foreground='blue')
         self.image_dimensions_label.grid(row=1, column=2, sticky='w', padx=5)
         
@@ -221,15 +225,33 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
         codec_combo['values'] = ('libx264', 'libx265', 'libvpx-vp9')
         codec_combo.grid(row=2, column=1, sticky='w', padx=5)
         
-        ttk.Label(settings_frame, text="Scaling Mode:").grid(row=3, column=0, sticky='w', pady=5)
+        ttk.Label(settings_frame, text="Video Quality:").grid(row=3, column=0, sticky='w', pady=5)
+        self.video_bitrate_var = tk.StringVar(value="High Quality (CRF 18)")
+        bitrate_combo = ttk.Combobox(settings_frame, textvariable=self.video_bitrate_var, width=20, state='readonly')
+        bitrate_combo['values'] = (
+            'High Quality (CRF 18)',
+            'Medium Quality (CRF 23)',
+            'Low Quality (CRF 28)',
+            'Very High Quality (CRF 15)',
+            'Maximum Compression (CRF 32)'
+        )
+        bitrate_combo.grid(row=3, column=1, sticky='w', padx=5)
+        
+        # Quality description
+        quality_desc_frame = ttk.Frame(settings_frame)
+        quality_desc_frame.grid(row=3, column=2, sticky='w', padx=5)
+        ttk.Label(quality_desc_frame, text="Lower CRF = Higher Quality", font=('Arial', 8), foreground='gray').pack()
+        ttk.Label(quality_desc_frame, text="Recommended: Medium (23)", font=('Arial', 8), foreground='gray').pack()
+        
+        ttk.Label(settings_frame, text="Scaling Mode:").grid(row=4, column=0, sticky='w', pady=5)
         self.scaling_mode_var = tk.StringVar(value="stretch")
         scaling_combo = ttk.Combobox(settings_frame, textvariable=self.scaling_mode_var, width=20, state='readonly')
         scaling_combo['values'] = ('stretch', 'expand', 'truncate')
-        scaling_combo.grid(row=3, column=1, sticky='w', padx=5)
+        scaling_combo.grid(row=4, column=1, sticky='w', padx=5)
         
         # Scaling mode description
         scaling_desc_frame = ttk.Frame(settings_frame)
-        scaling_desc_frame.grid(row=3, column=2, sticky='w', padx=5)
+        scaling_desc_frame.grid(row=4, column=2, sticky='w', padx=5)
         ttk.Label(scaling_desc_frame, text="Stretch: Fill frame (may distort)", font=('Arial', 8), foreground='gray').pack()
         ttk.Label(scaling_desc_frame, text="Expand: Fit with black bars", font=('Arial', 8), foreground='gray').pack()
         ttk.Label(scaling_desc_frame, text="Truncate: Crop to fit", font=('Arial', 8), foreground='gray').pack()
@@ -274,6 +296,7 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
         self.output_folder_var.trace('w', self.save_settings)
         self.video_quality_var.trace('w', self.save_settings)
         self.video_codec_var.trace('w', self.save_settings)
+        self.video_bitrate_var.trace('w', self.save_settings)
         self.scaling_mode_var.trace('w', self.save_settings)
         self.video_source_type.trace('w', self.save_settings)
         self.loop_mode.trace('w', self.save_settings)
@@ -400,7 +423,6 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
                     with Image.open(self.selected_image_file) as img:
                         self.image_width, self.image_height = img.size
                         self.image_dimensions_label.config(text=f"({self.image_width}x{self.image_height})")
-                        self.video_quality_var.set("Image Size")
                 except Exception:
                     self.image_width, self.image_height = None, None
                     self.image_dimensions_label.config(text="")
@@ -419,7 +441,16 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
                 self.selected_video_file = p
                 filename = os.path.basename(self.selected_video_file)
                 self.lbl_video_status.config(text=f"Selected: {filename}")
-                self.log(f"[INFO] Video selected via drag and drop: {filename}")
+                
+                # Get video dimensions
+                self.video_width, self.video_height = self._get_video_resolution(self.selected_video_file)
+                if self.video_width and self.video_height:
+                    self.image_dimensions_label.config(text=f"({self.video_width}x{self.video_height})")
+                    self.log(f"[INFO] Video selected via drag and drop: {filename} ({self.video_width}x{self.video_height})")
+                else:
+                    self.video_width, self.video_height = None, None
+                    self.image_dimensions_label.config(text="(dimensions unknown)")
+                    self.log(f"[INFO] Video selected via drag and drop: {filename}")
                 break
         else:
             print("[DEBUG] No valid video file in drop")
@@ -445,6 +476,15 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
                 self.selected_video_file = p
                 filename = os.path.basename(self.selected_video_file)
                 self.lbl_video_status.config(text=f"Selected: {filename}")
+                
+                # Get video dimensions
+                self.video_width, self.video_height = self._get_video_resolution(self.selected_video_file)
+                if self.video_width and self.video_height:
+                    self.image_dimensions_label.config(text=f"({self.video_width}x{self.video_height})")
+                else:
+                    self.video_width, self.video_height = None, None
+                    self.image_dimensions_label.config(text="(dimensions unknown)")
+                
                 set_video = True
         if added_audio:
             self.update_mp3_file_list()
@@ -487,10 +527,7 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
                 with Image.open(self.selected_image_file) as img:
                     self.image_width, self.image_height = img.size
                     self.image_dimensions_label.config(text=f"({self.image_width}x{self.image_height})")
-                    # Auto-select "Image Size" when image is selected
-                    self.video_quality_var.set("Image Size")
                     self.log(f"[INFO] Selected image: {filename} ({self.image_width}x{self.image_height})")
-                    self.log(f"[INFO] Auto-selected 'Image Size' quality to match image dimensions")
             except Exception as e:
                 self.image_width, self.image_height = None, None
                 self.image_dimensions_label.config(text="(dimensions unknown)")
@@ -506,6 +543,44 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
         # Reset to Auto when image is cleared
         self.video_quality_var.set("Auto")
         self.log("[INFO] Image selection cleared")
+    
+    def _get_video_resolution(self, video_file):
+        """Get video resolution (width, height) from video file."""
+        try:
+            ffmpeg_cmd = self.get_ffmpeg_command()
+            probe_cmd = [ffmpeg_cmd, '-i', video_file, '-f', 'null', '-']
+            # Use bytes mode and decode manually to avoid encoding issues
+            probe_result = subprocess.run(
+                probe_cmd, 
+                capture_output=True, 
+                timeout=5
+            )
+            
+            # Decode stderr with error handling
+            try:
+                stderr_text = probe_result.stderr.decode('utf-8', errors='replace')
+            except:
+                try:
+                    stderr_text = probe_result.stderr.decode('cp1252', errors='replace')
+                except:
+                    stderr_text = ''
+            
+            for line in stderr_text.split('\n'):
+                if 'Video:' in line and 'x' in line:
+                    try:
+                        parts = line.split('Video:')[1].split(',')
+                        for part in parts:
+                            if 'x' in part:
+                                res_part = part.strip().split()[0]
+                                if 'x' in res_part and res_part.replace('x', '').replace('-', '').isdigit():
+                                    w, h = res_part.split('x')
+                                    return int(w), int(h)
+                    except:
+                        pass
+            return None, None
+        except Exception as e:
+            # Silently fail - don't log to avoid encoding issues in log
+            return None, None
     
     def select_video_file(self):
         """Select video file."""
@@ -523,12 +598,26 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
             self.selected_video_file = files[0]
             filename = os.path.basename(self.selected_video_file)
             self.lbl_video_status.config(text=f"Selected: {filename}")
-            self.log(f"[INFO] Selected video: {filename}")
+            
+            # Get video dimensions
+            self.video_width, self.video_height = self._get_video_resolution(self.selected_video_file)
+            if self.video_width and self.video_height:
+                self.image_dimensions_label.config(text=f"({self.video_width}x{self.video_height})")
+                self.log(f"[INFO] Selected video: {filename} ({self.video_width}x{self.video_height})")
+            else:
+                self.video_width, self.video_height = None, None
+                self.image_dimensions_label.config(text="(dimensions unknown)")
+                self.log(f"[WARNING] Could not read video dimensions")
+                self.log(f"[INFO] Selected video: {filename}")
     
     def clear_video_selection(self):
         """Clear video selection."""
         self.selected_video_file = None
+        self.video_width, self.video_height = None, None
         self.lbl_video_status.config(text="No video selected")
+        self.image_dimensions_label.config(text="")
+        # Reset to Auto when video is cleared
+        self.video_quality_var.set("Auto")
         self.log("[INFO] Video selection cleared")
     
     def browse_output_folder(self):
@@ -568,7 +657,9 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
         self.log(f"[INFO] Starting conversion of {len(self.conversion_queue)} file(s)")
         self.log(f"[INFO] Output folder: {self.file_manager.get_folder_path('output')}")
         self.log(f"[INFO] Video source: {source_type}")
-        self.log(f"[INFO] Video quality: {self.video_quality_var.get()}")
+        self.log(f"[INFO] Video resolution: {self.video_quality_var.get()}")
+        self.log(f"[INFO] Video quality/bitrate: {self.video_bitrate_var.get()}")
+        self.log(f"[INFO] Video codec: {self.video_codec_var.get()}")
         
         self.progress['maximum'] = len(self.conversion_queue)
         self.progress['value'] = 0
@@ -588,6 +679,7 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
         loop_mode = self.loop_mode.get()
         video_quality = self.video_quality_var.get()
         video_codec = self.video_codec_var.get()
+        video_bitrate = self.video_bitrate_var.get()
         scaling_mode = self.scaling_mode_var.get()
         
         for i, input_file in enumerate(self.conversion_queue):
@@ -611,7 +703,7 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
             
             try:
                 cmd = self._build_conversion_command(
-                    input_file, output_file, source_type, loop_mode, video_quality, video_codec, scaling_mode
+                    input_file, output_file, source_type, loop_mode, video_quality, video_codec, video_bitrate, scaling_mode
                 )
                 
                 # Debug: Log the FFmpeg command
@@ -685,7 +777,30 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
             # Default to stretch
             return f"scale={target_width}:{target_height}"
     
-    def _build_conversion_command(self, input_file, output_file, source_type, loop_mode, video_quality, video_codec, scaling_mode):
+    def _get_crf_value(self, video_bitrate, video_codec):
+        """Get CRF value based on quality preset and codec."""
+        # Extract CRF number from quality string (e.g., "High Quality (CRF 18)" -> 18)
+        import re
+        match = re.search(r'CRF\s+(\d+)', video_bitrate)
+        if match:
+            base_crf = int(match.group(1))
+        else:
+            # Default fallback
+            base_crf = 23
+        
+        # Adjust for different codecs (x265 and VP9 use different ranges)
+        if video_codec == 'libx264':
+            return base_crf  # x264: 0-51, typical 18-28
+        elif video_codec == 'libx265':
+            # x265: 0-51, but typically 20-30 for similar quality to x264
+            return min(base_crf + 2, 51)  # Slightly higher for similar quality
+        elif video_codec == 'libvpx-vp9':
+            # VP9: 0-63, but typically 30-50 for similar quality
+            return min(base_crf + 12, 63)  # Much higher for similar quality
+        else:
+            return base_crf
+    
+    def _build_conversion_command(self, input_file, output_file, source_type, loop_mode, video_quality, video_codec, video_bitrate, scaling_mode):
         """Build FFmpeg conversion command."""
         ffmpeg_cmd = self.get_ffmpeg_command()
         
@@ -728,12 +843,17 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
             elif video_quality == "Landscape 3:2":
                 scale_filter = self._get_scaling_filter(1080, 720, scaling_mode)
                 cmd.extend(['-vf', scale_filter])
-            elif video_quality == "Image Size" and self.image_width and self.image_height:
-                # Use image dimensions as video output
-                scale_filter = self._get_scaling_filter(self.image_width, self.image_height, scaling_mode)
-                cmd.extend(['-vf', scale_filter])
+            elif video_quality == "Source Size":
+                # Use source dimensions (image for image source, video for video source)
+                if self.image_width and self.image_height:
+                    scale_filter = self._get_scaling_filter(self.image_width, self.image_height, scaling_mode)
+                    cmd.extend(['-vf', scale_filter])
+                else:
+                    # Fallback to 720p if dimensions not available
+                    scale_filter = self._get_scaling_filter(1280, 720, scaling_mode)
+                    cmd.extend(['-vf', scale_filter])
             elif video_quality == "Auto":
-                # Auto mode: use image dimensions if available, otherwise default to 720p
+                # Auto mode: use source dimensions if available, otherwise default to 720p
                 if self.image_width and self.image_height:
                     scale_filter = self._get_scaling_filter(self.image_width, self.image_height, scaling_mode)
                     cmd.extend(['-vf', scale_filter])
@@ -746,6 +866,18 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
             
             # Video codec
             cmd.extend(['-c:v', video_codec])
+            
+            # Video quality (CRF)
+            crf_value = self._get_crf_value(video_bitrate, video_codec)
+            if video_codec == 'libx264':
+                cmd.extend(['-crf', str(crf_value)])
+                cmd.extend(['-preset', 'medium'])  # Balance between speed and compression
+            elif video_codec == 'libx265':
+                cmd.extend(['-crf', str(crf_value)])
+                cmd.extend(['-preset', 'medium'])
+            elif video_codec == 'libvpx-vp9':
+                cmd.extend(['-crf', str(crf_value)])
+                cmd.extend(['-b:v', '0'])  # VP9 requires -b:v 0 when using CRF
             
             # Duration (match audio length)
             cmd.extend(['-shortest'])
@@ -774,9 +906,19 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
                 scale_filter = self._get_scaling_filter(720, 1080, scaling_mode)
             elif video_quality == "Landscape 3:2":
                 scale_filter = self._get_scaling_filter(1080, 720, scaling_mode)
+            elif video_quality == "Source Size":
+                # Use source dimensions (video for video source)
+                if self.video_width and self.video_height:
+                    scale_filter = self._get_scaling_filter(self.video_width, self.video_height, scaling_mode)
+                else:
+                    # Fallback to 720p if dimensions not available
+                    scale_filter = self._get_scaling_filter(1280, 720, scaling_mode)
             elif video_quality == "Auto":
-                # Auto mode: default to 720p for video sources
-                scale_filter = self._get_scaling_filter(1280, 720, scaling_mode)
+                # Auto mode: use source dimensions if available, otherwise default to 720p
+                if self.video_width and self.video_height:
+                    scale_filter = self._get_scaling_filter(self.video_width, self.video_height, scaling_mode)
+                else:
+                    scale_filter = self._get_scaling_filter(1280, 720, scaling_mode)
             else:
                 scale_filter = self._get_scaling_filter(1280, 720, scaling_mode)  # Default fallback
             
@@ -792,12 +934,30 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
                                f'[0:v]{scale_filter}[v_scaled];[0:v]{scale_filter}[v_scaled2];[v_scaled2]reverse[v_rev];[v_scaled][v_rev]concat=n=2:v=1:a=0[v_final]'])
                 temp_cmd.extend(['-map', '[v_final]'])
                 temp_cmd.extend(['-c:v', video_codec])
+                # Add CRF for temp video too
+                crf_value = self._get_crf_value(video_bitrate, video_codec)
+                if video_codec == 'libx264':
+                    temp_cmd.extend(['-crf', str(crf_value)])
+                    temp_cmd.extend(['-preset', 'medium'])
+                elif video_codec == 'libx265':
+                    temp_cmd.extend(['-crf', str(crf_value)])
+                    temp_cmd.extend(['-preset', 'medium'])
+                elif video_codec == 'libvpx-vp9':
+                    temp_cmd.extend(['-crf', str(crf_value)])
+                    temp_cmd.extend(['-b:v', '0'])
                 temp_cmd.append(temp_video)
                 
                 # Execute temp video creation
                 try:
                     self.log(f"[DEBUG] Temp video creation command: {' '.join(temp_cmd)}")
-                    result = subprocess.run(temp_cmd, capture_output=True, text=True, cwd=self.root_dir)
+                    result = subprocess.run(
+                        temp_cmd, 
+                        capture_output=True, 
+                        text=True, 
+                        encoding='utf-8',
+                        errors='replace',
+                        cwd=self.root_dir
+                    )
                     self.log(f"[DEBUG] Temp video creation stdout: {result.stdout}")
                     self.log(f"[DEBUG] Temp video creation stderr: {result.stderr}")
                     self.log(f"[DEBUG] Temp video creation return code: {result.returncode}")
@@ -839,6 +999,18 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
             
             # Video codec
             cmd.extend(['-c:v', video_codec])
+            
+            # Video quality (CRF)
+            crf_value = self._get_crf_value(video_bitrate, video_codec)
+            if video_codec == 'libx264':
+                cmd.extend(['-crf', str(crf_value)])
+                cmd.extend(['-preset', 'medium'])  # Balance between speed and compression
+            elif video_codec == 'libx265':
+                cmd.extend(['-crf', str(crf_value)])
+                cmd.extend(['-preset', 'medium'])
+            elif video_codec == 'libvpx-vp9':
+                cmd.extend(['-crf', str(crf_value)])
+                cmd.extend(['-b:v', '0'])  # VP9 requires -b:v 0 when using CRF
             
             # Duration (match audio length)
             cmd.extend(['-shortest'])
@@ -895,13 +1067,16 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
                 'output_folder': self.output_folder_var.get(),
                 'video_quality': self.video_quality_var.get(),
                 'video_codec': self.video_codec_var.get(),
+                'video_bitrate': self.video_bitrate_var.get(),
                 'scaling_mode': self.scaling_mode_var.get(),
                 'video_source_type': self.video_source_type.get(),
                 'loop_mode': self.loop_mode.get(),
                 'selected_image_file': self.selected_image_file,
                 'selected_video_file': self.selected_video_file,
                 'image_width': self.image_width,
-                'image_height': self.image_height
+                'image_height': self.image_height,
+                'video_width': self.video_width,
+                'video_height': self.video_height
             }
             
             with open(self.settings_file, 'w', encoding='utf-8') as f:
@@ -924,10 +1099,17 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
                     self.file_manager.set_folder_path('output', settings['output_folder'])
                 
                 if 'video_quality' in settings:
-                    self.video_quality_var.set(settings['video_quality'])
+                    quality = settings['video_quality']
+                    # Migrate old option names to "Source Size"
+                    if quality in ("Image Size", "Input Video Size"):
+                        quality = "Source Size"
+                    self.video_quality_var.set(quality)
                 
                 if 'video_codec' in settings:
                     self.video_codec_var.set(settings['video_codec'])
+                
+                if 'video_bitrate' in settings:
+                    self.video_bitrate_var.set(settings['video_bitrate'])
                 
                 if 'scaling_mode' in settings:
                     self.scaling_mode_var.set(settings['scaling_mode'])
@@ -956,6 +1138,18 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
                         self.selected_video_file = settings['selected_video_file']
                         filename = os.path.basename(self.selected_video_file)
                         self.lbl_video_status.config(text=f"Selected: {filename}")
+                        
+                        # Restore video dimensions or try to get them
+                        if 'video_width' in settings and 'video_height' in settings:
+                            self.video_width = settings['video_width']
+                            self.video_height = settings['video_height']
+                            if self.video_width and self.video_height:
+                                self.image_dimensions_label.config(text=f"({self.video_width}x{self.video_height})")
+                        else:
+                            # Try to get dimensions if not saved
+                            self.video_width, self.video_height = self._get_video_resolution(self.selected_video_file)
+                            if self.video_width and self.video_height:
+                                self.image_dimensions_label.config(text=f"({self.video_width}x{self.video_height})")
                 
                 # Update UI state
                 self.on_source_type_change()
