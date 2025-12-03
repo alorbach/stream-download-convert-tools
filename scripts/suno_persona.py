@@ -221,7 +221,14 @@ def get_prompt_template(template_name: str) -> str:
         return ''
 
 
-def call_azure_ai(config: dict, prompt: str, system_message: str = None, profile: str = 'text', max_tokens: int = 8000) -> dict:
+def call_azure_ai(
+    config: dict,
+    prompt: str,
+    system_message: str = None,
+    profile: str = 'text',
+    max_tokens: int = 8000,
+    temperature: float | None = 0.7
+) -> dict:
     """Generic Azure AI caller function."""
     try:
         profiles = config.get('profiles', {})
@@ -259,9 +266,10 @@ def call_azure_ai(config: dict, prompt: str, system_message: str = None, profile
         
         payload = {
             'messages': messages,
-            'temperature': 0.7,
             'max_completion_tokens': max_tokens
         }
+        if temperature is not None:
+            payload['temperature'] = temperature
         
         response = requests.post(url, headers=headers, json=payload, timeout=30)
         
@@ -272,7 +280,7 @@ def call_azure_ai(config: dict, prompt: str, system_message: str = None, profile
                 error_msg = str(error_data.get('error', {}).get('message', '')).lower()
                 
                 # Handle temperature restriction (some models only support default temperature=1)
-                if 'temperature' in error_msg and ('not support' in error_msg or 'only the default' in error_msg):
+                if ('temperature' in error_msg) and ('not support' in error_msg or 'only the default' in error_msg):
                     # Try forcing temperature=1 first
                     payload['temperature'] = 1
                     response = requests.post(url, headers=headers, json=payload, timeout=30)
@@ -4385,7 +4393,7 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
             max_tokens = min(max(int(estimated_tokens * 1.5), 8000), 64000)
             self.log_debug('INFO', f'Using max_tokens: {max_tokens} for {num_scenes} scenes (estimated: {estimated_tokens} tokens)')
             
-            result = call_azure_ai(self.ai_config, prompt, system_message=system_message, profile='text', max_tokens=max_tokens)
+            result = call_azure_ai(self.ai_config, prompt, system_message=system_message, profile='text', max_tokens=max_tokens, temperature=1)
             
             if result['success']:
                 content = result['content'].strip()
@@ -4441,7 +4449,7 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
                             song_duration, seconds_per_video, batch_start, batch_end, num_scenes
                         )
                         
-                        batch_result = call_azure_ai(self.ai_config, batch_prompt, system_message=system_message, max_tokens=max_tokens)
+                        batch_result = call_azure_ai(self.ai_config, batch_prompt, system_message=system_message, max_tokens=max_tokens, temperature=1)
                         
                         if batch_result['success']:
                             batch_content = batch_result['content'].strip()
@@ -4646,7 +4654,7 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
                 song_duration, seconds_per_video, batch_start, batch_end, total_scenes
             )
             
-            batch_result = call_azure_ai(self.ai_config, batch_prompt, system_message=system_message, max_tokens=max_tokens)
+            batch_result = call_azure_ai(self.ai_config, batch_prompt, system_message=system_message, max_tokens=max_tokens, temperature=1)
             if not batch_result['success']:
                 error_msg = f'Failed to generate scenes {batch_start}-{batch_end}: {batch_result["error"]}'
                 self.log_debug('ERROR', error_msg)
