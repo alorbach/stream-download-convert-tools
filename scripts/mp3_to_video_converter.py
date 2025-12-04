@@ -24,6 +24,8 @@ import sys
 import threading
 import subprocess
 import json
+import random
+import hashlib
 from pathlib import Path
 from PIL import Image
 
@@ -63,6 +65,30 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
         
         # Scaling mode for aspect ratio handling
         self.scaling_mode = tk.StringVar(value="stretch")
+        
+        # Transition settings
+        self.transition_enabled = False
+        self.transition_type = "fade"  # Legacy single type (for backward compatibility)
+        self.selected_transition_types = ["fade"]  # List of selected transition types for randomization
+        self.transition_duration = 0.5  # Duration in seconds
+        self.transition_types = [
+            ("Fade", "fade"),
+            ("Wipe Left", "wipeleft"),
+            ("Wipe Right", "wiperight"),
+            ("Wipe Up", "wipeup"),
+            ("Wipe Down", "wipedown"),
+            ("Slide Left", "slideleft"),
+            ("Slide Right", "slideright"),
+            ("Slide Up", "slideup"),
+            ("Slide Down", "slidedown"),
+            ("Circle Crop", "circlecrop"),
+            ("Distance", "distance"),
+            ("Fade Black", "fadeblack"),
+            ("Fade White", "fadewhite"),
+            ("Radial", "radial"),
+            ("Dissolve", "dissolve"),
+            ("Pixelize", "pixelize"),
+        ]
         
         # Settings file path
         self.settings_file = os.path.join(self.root_dir, "mp3_to_video_converter_settings.json")
@@ -210,9 +236,21 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
         ttk.Button(settings_frame, text="Browse", command=self.browse_output_folder).grid(row=0, column=2)
         
         ttk.Label(settings_frame, text="Video Quality:").grid(row=1, column=0, sticky='w', pady=5)
-        self.video_quality_var = tk.StringVar(value="Auto")
+        self.video_quality_var = tk.StringVar(value="Auto (720p default)")
         quality_combo = ttk.Combobox(settings_frame, textvariable=self.video_quality_var, width=20, state='readonly')
-        quality_combo['values'] = ('Auto', '480p', '720p', '1080p', 'Mobile Portrait (9:16)', 'Mobile Landscape (16:9)', 'Instagram Square (1:1)', 'Instagram Story (9:16)', 'Portrait 2:3', 'Landscape 3:2', 'Source Size')
+        quality_combo['values'] = (
+            'Auto (720p default)',
+            '480p (854x480)',
+            '720p HD (1280x720)',
+            '1080p Full HD (1920x1080)',
+            'Mobile Portrait 9:16 (720x1280)',
+            'Mobile Landscape 16:9 (1280x720)',
+            'Instagram Square 1:1 (1080x1080)',
+            'Instagram Story 9:16 (1080x1920)',
+            'Portrait 2:3 (720x1080)',
+            'Landscape 3:2 (1080x720)',
+            'Source Size (Match Input)'
+        )
         quality_combo.grid(row=1, column=1, sticky='w', padx=5)
         
         # Image/Video dimensions display
@@ -226,13 +264,13 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
         codec_combo.grid(row=2, column=1, sticky='w', padx=5)
         
         ttk.Label(settings_frame, text="Video Quality:").grid(row=3, column=0, sticky='w', pady=5)
-        self.video_bitrate_var = tk.StringVar(value="High Quality (CRF 18)")
+        self.video_bitrate_var = tk.StringVar(value="Medium Quality (CRF 23)")
         bitrate_combo = ttk.Combobox(settings_frame, textvariable=self.video_bitrate_var, width=20, state='readonly')
         bitrate_combo['values'] = (
+            'Very High Quality (CRF 15)',
             'High Quality (CRF 18)',
             'Medium Quality (CRF 23)',
             'Low Quality (CRF 28)',
-            'Very High Quality (CRF 15)',
             'Maximum Compression (CRF 32)'
         )
         bitrate_combo.grid(row=3, column=1, sticky='w', padx=5)
@@ -256,6 +294,34 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
         ttk.Label(scaling_desc_frame, text="Expand: Fit with black bars", font=('Arial', 8), foreground='gray').pack()
         ttk.Label(scaling_desc_frame, text="Truncate: Crop to fit", font=('Arial', 8), foreground='gray').pack()
         
+        # Transition Settings (only shown when multiple files selected)
+        self.transition_frame = ttk.LabelFrame(main_frame, text="Transition Settings", padding=10)
+        self.transition_frame.pack(fill='x', pady=(0, 10))
+        
+        transition_controls = ttk.Frame(self.transition_frame)
+        transition_controls.pack(fill='x')
+        
+        ttk.Label(transition_controls, text="Transitions:").pack(side='left', padx=5)
+        self.transition_enabled_var = tk.BooleanVar(value=self.transition_enabled)
+        ttk.Checkbutton(transition_controls, text="Enable", variable=self.transition_enabled_var,
+                        command=self.toggle_transitions).pack(side='left', padx=2)
+        
+        ttk.Button(transition_controls, text="Select Types...", command=self.select_transition_types,
+                  width=12).pack(side='left', padx=2)
+        
+        # Label showing selected count
+        self.transition_selection_label = ttk.Label(transition_controls, text="(1 selected)", 
+                                                     font=('Arial', 8))
+        self.transition_selection_label.pack(side='left', padx=2)
+        
+        ttk.Label(transition_controls, text="Duration:").pack(side='left', padx=(5, 2))
+        self.transition_duration_var = tk.StringVar(value=str(self.transition_duration))
+        duration_spin = ttk.Spinbox(transition_controls, from_=0.1, to=5.0, increment=0.1,
+                                    textvariable=self.transition_duration_var, width=6)
+        duration_spin.pack(side='left', padx=2)
+        duration_spin.bind('<Return>', lambda e: self.update_transition_duration())
+        duration_spin.bind('<FocusOut>', lambda e: self.update_transition_duration())
+        
         # Conversion Controls
         convert_frame = ttk.Frame(main_frame)
         convert_frame.pack(fill='x', pady=(0, 10))
@@ -265,6 +331,7 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
         
         ttk.Button(batch_frame, text="Convert Selected Files", command=self.start_conversion).pack(side='left', padx=5)
         ttk.Button(batch_frame, text="Convert All Files", command=self.convert_all_files).pack(side='left', padx=5)
+        ttk.Button(batch_frame, text="Convert & Merge with Transitions", command=self.convert_and_merge).pack(side='left', padx=5)
         
         self.progress = ttk.Progressbar(convert_frame, mode='determinate')
         self.progress.pack(fill='x', pady=5)
@@ -300,6 +367,12 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
         self.scaling_mode_var.trace('w', self.save_settings)
         self.video_source_type.trace('w', self.save_settings)
         self.loop_mode.trace('w', self.save_settings)
+        if hasattr(self, 'transition_enabled_var'):
+            self.transition_enabled_var.trace('w', lambda *args: self.save_settings())
+        
+        # Update transition label after UI is created
+        if hasattr(self, 'transition_selection_label'):
+            self.update_transition_selection_label()
 
         # Global drag-and-drop as a safety net (window and main container)
         try:
@@ -541,19 +614,51 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
         self.lbl_image_status.config(text="No image selected")
         self.image_dimensions_label.config(text="")
         # Reset to Auto when image is cleared
-        self.video_quality_var.set("Auto")
+        self.video_quality_var.set("Auto (720p default)")
         self.log("[INFO] Image selection cleared")
     
     def _get_video_resolution(self, video_file):
-        """Get video resolution (width, height) from video file."""
+        """Get video resolution (width, height) from video file using multiple methods."""
+        if not video_file or not os.path.exists(video_file):
+            return None, None
+        
         try:
             ffmpeg_cmd = self.get_ffmpeg_command()
+            if not ffmpeg_cmd:
+                return None, None
+            
+            # Method 1: Try ffprobe if available (more reliable)
+            ffprobe_cmd = ffmpeg_cmd.replace('ffmpeg', 'ffprobe')
+            if os.path.exists(ffprobe_cmd):
+                try:
+                    probe_cmd = [ffprobe_cmd, '-v', 'error', '-select_streams', 'v:0',
+                                '-show_entries', 'stream=width,height', '-of', 'csv=s=x:p=0', video_file]
+                    probe_result = subprocess.run(
+                        probe_cmd,
+                        capture_output=True,
+                        timeout=5
+                    )
+                    
+                    if probe_result.returncode == 0:
+                        try:
+                            output = probe_result.stdout.decode('utf-8', errors='replace').strip()
+                            if output and 'x' in output:
+                                parts = output.split('x')
+                                if len(parts) == 2:
+                                    w, h = int(parts[0].strip()), int(parts[1].strip())
+                                    if w > 0 and h > 0:
+                                        return w, h
+                        except:
+                            pass
+                except:
+                    pass
+            
+            # Method 2: Use FFmpeg probe (fallback)
             probe_cmd = [ffmpeg_cmd, '-i', video_file, '-f', 'null', '-']
-            # Use bytes mode and decode manually to avoid encoding issues
             probe_result = subprocess.run(
                 probe_cmd, 
                 capture_output=True, 
-                timeout=5
+                timeout=10
             )
             
             # Decode stderr with error handling
@@ -565,6 +670,25 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
                 except:
                     stderr_text = ''
             
+            # Try multiple patterns to find resolution
+            patterns = [
+                r'Video:.*?(\d{3,5})x(\d{3,5})',  # Standard pattern
+                r'(\d{3,5})\s*x\s*(\d{3,5})',     # Generic WxH pattern
+                r'Stream.*?Video:.*?(\d{3,5})x(\d{3,5})',  # Stream pattern
+            ]
+            
+            import re
+            for pattern in patterns:
+                matches = re.findall(pattern, stderr_text)
+                if matches:
+                    try:
+                        w, h = int(matches[0][0]), int(matches[0][1])
+                        if w > 0 and h > 0:
+                            return w, h
+                    except:
+                        continue
+            
+            # Fallback: parse line by line
             for line in stderr_text.split('\n'):
                 if 'Video:' in line and 'x' in line:
                     try:
@@ -572,11 +696,22 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
                         for part in parts:
                             if 'x' in part:
                                 res_part = part.strip().split()[0]
-                                if 'x' in res_part and res_part.replace('x', '').replace('-', '').isdigit():
-                                    w, h = res_part.split('x')
-                                    return int(w), int(h)
+                                # More flexible parsing
+                                if 'x' in res_part:
+                                    w_h = res_part.split('x')
+                                    if len(w_h) == 2:
+                                        w = w_h[0].strip()
+                                        h = w_h[1].strip()
+                                        # Remove any non-digit characters
+                                        w = ''.join(filter(str.isdigit, w))
+                                        h = ''.join(filter(str.isdigit, h))
+                                        if w and h:
+                                            w, h = int(w), int(h)
+                                            if w > 0 and h > 0:
+                                                return w, h
                     except:
                         pass
+            
             return None, None
         except Exception as e:
             # Silently fail - don't log to avoid encoding issues in log
@@ -617,7 +752,7 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
         self.lbl_video_status.config(text="No video selected")
         self.image_dimensions_label.config(text="")
         # Reset to Auto when video is cleared
-        self.video_quality_var.set("Auto")
+        self.video_quality_var.set("Auto (720p default)")
         self.log("[INFO] Video selection cleared")
     
     def browse_output_folder(self):
@@ -816,35 +951,43 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
             cmd.extend(['-map', '0:v:0', '-map', '1:a:0'])
             
             # Video settings
-            if video_quality == "480p":
+            if video_quality == "480p (854x480)" or video_quality == "480p":
                 scale_filter = self._get_scaling_filter(854, 480, scaling_mode)
                 cmd.extend(['-vf', scale_filter])
-            elif video_quality == "720p":
+            elif video_quality == "720p HD (1280x720)" or video_quality == "720p":
                 scale_filter = self._get_scaling_filter(1280, 720, scaling_mode)
                 cmd.extend(['-vf', scale_filter])
-            elif video_quality == "1080p":
+            elif video_quality == "1080p Full HD (1920x1080)" or video_quality == "1080p":
                 scale_filter = self._get_scaling_filter(1920, 1080, scaling_mode)
                 cmd.extend(['-vf', scale_filter])
-            elif video_quality == "Mobile Portrait (9:16)":
+            elif video_quality == "Mobile Portrait 9:16 (720x1280)" or "Mobile Portrait" in video_quality:
                 scale_filter = self._get_scaling_filter(720, 1280, scaling_mode)
                 cmd.extend(['-vf', scale_filter])
-            elif video_quality == "Mobile Landscape (16:9)":
+            elif video_quality == "Mobile Landscape 16:9 (1280x720)" or "Mobile Landscape" in video_quality:
                 scale_filter = self._get_scaling_filter(1280, 720, scaling_mode)
                 cmd.extend(['-vf', scale_filter])
-            elif video_quality == "Instagram Square (1:1)":
+            elif video_quality == "Instagram Square 1:1 (1080x1080)" or "Instagram Square" in video_quality:
                 scale_filter = self._get_scaling_filter(1080, 1080, scaling_mode)
                 cmd.extend(['-vf', scale_filter])
-            elif video_quality == "Instagram Story (9:16)":
+            elif video_quality == "Instagram Story 9:16 (1080x1920)" or "Instagram Story" in video_quality:
                 scale_filter = self._get_scaling_filter(1080, 1920, scaling_mode)
                 cmd.extend(['-vf', scale_filter])
-            elif video_quality == "Portrait 2:3":
+            elif video_quality == "Portrait 2:3 (720x1080)" or "Portrait 2:3" in video_quality:
                 scale_filter = self._get_scaling_filter(720, 1080, scaling_mode)
                 cmd.extend(['-vf', scale_filter])
-            elif video_quality == "Landscape 3:2":
+            elif video_quality == "Landscape 3:2 (1080x720)" or "Landscape 3:2" in video_quality:
                 scale_filter = self._get_scaling_filter(1080, 720, scaling_mode)
                 cmd.extend(['-vf', scale_filter])
-            elif video_quality == "Source Size":
-                # Use source dimensions (image for image source, video for video source)
+            elif video_quality == "Source Size (Match Input)" or video_quality == "Source Size":
+                # Use source dimensions (image for image source) - detect if not already detected
+                if not (self.image_width and self.image_height) and self.selected_image_file:
+                    # Try to detect dimensions on-the-fly
+                    try:
+                        with Image.open(self.selected_image_file) as img:
+                            self.image_width, self.image_height = img.size
+                    except:
+                        pass
+                
                 if self.image_width and self.image_height:
                     scale_filter = self._get_scaling_filter(self.image_width, self.image_height, scaling_mode)
                     cmd.extend(['-vf', scale_filter])
@@ -852,8 +995,16 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
                     # Fallback to 720p if dimensions not available
                     scale_filter = self._get_scaling_filter(1280, 720, scaling_mode)
                     cmd.extend(['-vf', scale_filter])
-            elif video_quality == "Auto":
+            elif video_quality == "Auto (720p default)" or video_quality == "Auto":
                 # Auto mode: use source dimensions if available, otherwise default to 720p
+                if not (self.image_width and self.image_height) and self.selected_image_file:
+                    # Try to detect dimensions on-the-fly
+                    try:
+                        with Image.open(self.selected_image_file) as img:
+                            self.image_width, self.image_height = img.size
+                    except:
+                        pass
+                
                 if self.image_width and self.image_height:
                     scale_filter = self._get_scaling_filter(self.image_width, self.image_height, scaling_mode)
                     cmd.extend(['-vf', scale_filter])
@@ -888,33 +1039,47 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
             cmd.extend(['-i', input_file])
             
             # Get scaling filter for the selected quality
-            if video_quality == "480p":
+            if video_quality == "480p (854x480)" or video_quality == "480p":
                 scale_filter = self._get_scaling_filter(854, 480, scaling_mode)
-            elif video_quality == "720p":
+            elif video_quality == "720p HD (1280x720)" or video_quality == "720p":
                 scale_filter = self._get_scaling_filter(1280, 720, scaling_mode)
-            elif video_quality == "1080p":
+            elif video_quality == "1080p Full HD (1920x1080)" or video_quality == "1080p":
                 scale_filter = self._get_scaling_filter(1920, 1080, scaling_mode)
-            elif video_quality == "Mobile Portrait (9:16)":
+            elif video_quality == "Mobile Portrait 9:16 (720x1280)" or "Mobile Portrait" in video_quality:
                 scale_filter = self._get_scaling_filter(720, 1280, scaling_mode)
-            elif video_quality == "Mobile Landscape (16:9)":
+            elif video_quality == "Mobile Landscape 16:9 (1280x720)" or "Mobile Landscape" in video_quality:
                 scale_filter = self._get_scaling_filter(1280, 720, scaling_mode)
-            elif video_quality == "Instagram Square (1:1)":
+            elif video_quality == "Instagram Square 1:1 (1080x1080)" or "Instagram Square" in video_quality:
                 scale_filter = self._get_scaling_filter(1080, 1080, scaling_mode)
-            elif video_quality == "Instagram Story (9:16)":
+            elif video_quality == "Instagram Story 9:16 (1080x1920)" or "Instagram Story" in video_quality:
                 scale_filter = self._get_scaling_filter(1080, 1920, scaling_mode)
-            elif video_quality == "Portrait 2:3":
+            elif video_quality == "Portrait 2:3 (720x1080)" or "Portrait 2:3" in video_quality:
                 scale_filter = self._get_scaling_filter(720, 1080, scaling_mode)
-            elif video_quality == "Landscape 3:2":
+            elif video_quality == "Landscape 3:2 (1080x720)" or "Landscape 3:2" in video_quality:
                 scale_filter = self._get_scaling_filter(1080, 720, scaling_mode)
-            elif video_quality == "Source Size":
-                # Use source dimensions (video for video source)
+            elif video_quality == "Source Size (Match Input)" or video_quality == "Source Size":
+                # Use source dimensions (video for video source) - detect if not already detected
+                if not (self.video_width and self.video_height) and self.selected_video_file:
+                    # Try to detect dimensions on-the-fly
+                    self.video_width, self.video_height = self._get_video_resolution(self.selected_video_file)
+                    if self.video_width and self.video_height:
+                        # Update UI to show detected dimensions
+                        self.root.after(0, lambda: self.image_dimensions_label.config(text=f"({self.video_width}x{self.video_height})"))
+                
                 if self.video_width and self.video_height:
                     scale_filter = self._get_scaling_filter(self.video_width, self.video_height, scaling_mode)
                 else:
                     # Fallback to 720p if dimensions not available
                     scale_filter = self._get_scaling_filter(1280, 720, scaling_mode)
-            elif video_quality == "Auto":
+            elif video_quality == "Auto (720p default)" or video_quality == "Auto":
                 # Auto mode: use source dimensions if available, otherwise default to 720p
+                if not (self.video_width and self.video_height) and self.selected_video_file:
+                    # Try to detect dimensions on-the-fly
+                    self.video_width, self.video_height = self._get_video_resolution(self.selected_video_file)
+                    if self.video_width and self.video_height:
+                        # Update UI to show detected dimensions
+                        self.root.after(0, lambda: self.image_dimensions_label.config(text=f"({self.video_width}x{self.video_height})"))
+                
                 if self.video_width and self.video_height:
                     scale_filter = self._get_scaling_filter(self.video_width, self.video_height, scaling_mode)
                 else:
@@ -1055,10 +1220,498 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
         # Start conversion with all files
         self.start_conversion()
     
+    def convert_and_merge(self):
+        """Convert MP3s to videos and merge them with transitions."""
+        if self.is_busy:
+            messagebox.showwarning("Warning", "Conversion already in progress")
+            return
+        
+        if not self.selected_mp3_files:
+            messagebox.showwarning("Warning", "Please select at least one MP3 file")
+            return
+        
+        if len(self.selected_mp3_files) < 2:
+            messagebox.showwarning("Warning", "At least 2 MP3 files are required for merging with transitions")
+            return
+        
+        source_type = self.video_source_type.get()
+        if source_type == "image" and not self.selected_image_file:
+            messagebox.showwarning("Warning", "Please select an image file")
+            return
+        elif source_type == "video" and not self.selected_video_file:
+            messagebox.showwarning("Warning", "Please select a video file")
+            return
+        
+        if not self.check_ffmpeg():
+            self.offer_ffmpeg_install()
+            return
+        
+        self.file_manager.set_folder_path('output', self.output_folder_var.get())
+        self.ensure_directory(self.file_manager.get_folder_path('output'))
+        
+        self.log(f"[INFO] Starting conversion and merge of {len(self.selected_mp3_files)} file(s)")
+        self.log(f"[INFO] Output folder: {self.file_manager.get_folder_path('output')}")
+        self.log(f"[INFO] Transitions: {'enabled' if self.transition_enabled else 'disabled'}")
+        
+        self.progress['maximum'] = len(self.selected_mp3_files) + 1  # +1 for merge step
+        self.progress['value'] = 0
+        
+        self.set_busy(True, "Converting and merging...")
+        
+        thread = threading.Thread(target=self._convert_and_merge_thread)
+        thread.daemon = True
+        thread.start()
+    
+    def _convert_and_merge_thread(self):
+        """Convert MP3s to videos and merge with transitions."""
+        # Step 1: Convert all MP3s to individual videos
+        converted_videos = []
+        source_type = self.video_source_type.get()
+        loop_mode = self.loop_mode.get()
+        video_quality = self.video_quality_var.get()
+        video_codec = self.video_codec_var.get()
+        video_bitrate = self.video_bitrate_var.get()
+        scaling_mode = self.scaling_mode_var.get()
+        
+        for i, input_file in enumerate(self.selected_mp3_files):
+            input_path = Path(input_file)
+            output_file = os.path.join(
+                self.file_manager.get_folder_path('output'), 
+                f"{input_path.stem}_video.mp4"
+            )
+            
+            self.root.after(
+                0,
+                lambda idx=i+1, total=len(self.selected_mp3_files), name=input_path.name:
+                self.set_busy(True, f"Converting {idx}/{total}: {name}")
+            )
+            
+            self.root.after(
+                0,
+                lambda msg=f"\n[INFO] Converting ({i+1}/{len(self.selected_mp3_files)}): {input_path.name}":
+                self.log(msg)
+            )
+            
+            try:
+                cmd = self._build_conversion_command(
+                    input_file, output_file, source_type, loop_mode, video_quality, video_codec, video_bitrate, scaling_mode
+                )
+                
+                process = self.run_ffmpeg_command(cmd)
+                
+                if process.returncode == 0:
+                    converted_videos.append(output_file)
+                    self.root.after(
+                        0,
+                        lambda out=output_file:
+                        self.log(f"[SUCCESS] Converted: {os.path.basename(out)}")
+                    )
+                else:
+                    error_msg = process.stderr if process.stderr else "Unknown error"
+                    self.root.after(
+                        0,
+                        lambda err=error_msg:
+                        self.log(f"[ERROR] Conversion failed: {err[:500]}")
+                    )
+                
+            except Exception as e:
+                error_msg = str(e)
+                self.root.after(
+                    0,
+                    lambda msg=error_msg:
+                    self.log(f"[ERROR] Exception: {msg}")
+                )
+            
+            self.root.after(0, lambda v=i+1: self.progress.config(value=v))
+        
+        # Step 2: Merge videos with transitions if enabled
+        if len(converted_videos) >= 2 and self.transition_enabled:
+            self.root.after(0, lambda: self.log(f"\n[INFO] Merging {len(converted_videos)} videos with transitions"))
+            self.root.after(0, lambda: self.set_busy(True, "Merging videos..."))
+            
+            merged_output = os.path.join(
+                self.file_manager.get_folder_path('output'),
+                "merged_video.mp4"
+            )
+            
+            try:
+                self._merge_videos_with_transitions(converted_videos, merged_output)
+                self.root.after(0, lambda: self.progress.config(value=len(self.selected_mp3_files) + 1))
+                self.root.after(
+                    0,
+                    lambda:
+                    self.log(f"[SUCCESS] Merged video saved: {os.path.basename(merged_output)}")
+                )
+            except Exception as e:
+                error_msg = str(e)
+                self.root.after(
+                    0,
+                    lambda msg=error_msg:
+                    self.log(f"[ERROR] Merge failed: {msg}")
+                )
+        elif len(converted_videos) >= 2:
+            # Merge without transitions (simple concat)
+            self.root.after(0, lambda: self.log(f"\n[INFO] Merging {len(converted_videos)} videos (no transitions)"))
+            merged_output = os.path.join(
+                self.file_manager.get_folder_path('output'),
+                "merged_video.mp4"
+            )
+            try:
+                self._merge_videos_simple(converted_videos, merged_output)
+                self.root.after(0, lambda: self.progress.config(value=len(self.selected_mp3_files) + 1))
+                self.root.after(
+                    0,
+                    lambda:
+                    self.log(f"[SUCCESS] Merged video saved: {os.path.basename(merged_output)}")
+                )
+            except Exception as e:
+                error_msg = str(e)
+                self.root.after(
+                    0,
+                    lambda msg=error_msg:
+                    self.log(f"[ERROR] Merge failed: {msg}")
+                )
+        
+        self.root.after(
+            0,
+            lambda s=len(converted_videos):
+            self.log(f"\n[COMPLETE] Conversion finished: {s} video(s) created")
+        )
+        
+        self.root.after(
+            0,
+            lambda s=len(converted_videos):
+            messagebox.showinfo(
+                "Conversion Complete",
+                f"Conversion finished!\n\nCreated: {s} video(s)"
+            )
+        )
+        
+        self.root.after(0, lambda: self.set_busy(False))
+    
     def log(self, message):
         """Log a message."""
         self.log_text.insert(tk.END, f"{message}\n")
         self.log_text.see(tk.END)
+    
+    def _get_video_duration(self, video_file):
+        """Get video duration in seconds."""
+        try:
+            ffmpeg_cmd = self.get_ffmpeg_command()
+            cmd = [ffmpeg_cmd, '-i', video_file, '-f', 'null', '-']
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            
+            for line in result.stderr.split('\n'):
+                if 'Duration:' in line:
+                    parts = line.split('Duration:')[1].split(',')[0].strip()
+                    # Parse HH:MM:SS.ms
+                    time_parts = parts.split(':')
+                    if len(time_parts) == 3:
+                        hours = int(time_parts[0])
+                        minutes = int(time_parts[1])
+                        sec_ms = time_parts[2].split('.')
+                        seconds = int(sec_ms[0])
+                        ms = int(sec_ms[1]) if len(sec_ms) > 1 else 0
+                        return hours * 3600 + minutes * 60 + seconds + ms / 100.0
+            return None
+        except Exception as e:
+            self.log(f"[WARNING] Could not get duration for {os.path.basename(video_file)}: {e}")
+            return None
+    
+    def _get_output_resolution_for_transitions(self, video_files):
+        """Get output resolution for transitions - use first video's resolution."""
+        if video_files:
+            width, height = self._get_video_resolution(video_files[0])
+            if width and height:
+                return width, height
+        
+        # Default fallback
+        return 1920, 1080
+    
+    def _build_transition_filter(self, video_files):
+        """Build FFmpeg filter graph for transitions between videos."""
+        if not self.transition_enabled or len(video_files) < 2:
+            return None
+        
+        # Ensure we have at least one transition type selected
+        if not self.selected_transition_types:
+            self.selected_transition_types = ["fade"]  # Default fallback
+        
+        # Get video durations for calculating offsets
+        durations = []
+        for vf in video_files:
+            dur = self._get_video_duration(vf)
+            if dur is None:
+                dur = 5.0  # Default fallback
+            durations.append(dur)
+        
+        # Get target resolution (from first video)
+        width, height = self._get_output_resolution_for_transitions(video_files)
+        
+        filter_parts = []
+        transition_dur = self.transition_duration
+        
+        # Scale and normalize all video inputs
+        for i in range(len(video_files)):
+            filter_parts.append(f"[{i}:v]scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1[v{i}]")
+            filter_parts.append(f"[{i}:a]aformat=sample_rates=44100:channel_layouts=stereo[a{i}]")
+        
+        # Calculate xfade offsets for chained transitions
+        xfade_offsets = []
+        xfade_output_durations = []
+        
+        for i in range(len(video_files) - 1):
+            if i == 0:
+                offset = max(0.1, durations[0] - transition_dur)
+                output_dur = offset + durations[1]
+            else:
+                prev_output_dur = xfade_output_durations[i-1]
+                offset = max(0.1, prev_output_dur - transition_dur)
+                output_dur = offset + durations[i+1]
+            
+            xfade_offsets.append(offset)
+            xfade_output_durations.append(output_dur)
+        
+        # Randomly select transition types for each transition
+        selected_transitions = []
+        for i in range(len(video_files) - 1):
+            transition_type = random.choice(self.selected_transition_types)
+            selected_transitions.append(transition_type)
+        
+        # Log selected transitions
+        transition_names = []
+        for trans_type in selected_transitions:
+            for name, value in self.transition_types:
+                if value == trans_type:
+                    transition_names.append(name)
+                    break
+        self.root.after(0, lambda names=', '.join(transition_names): 
+                      self.log(f"[INFO] Random transitions selected: {names}"))
+        
+        # Build xfade chain
+        if len(video_files) == 2:
+            # Simple two-video case
+            filter_parts.append(f"[v0][v1]xfade=transition={selected_transitions[0]}:duration={transition_dur}:offset={xfade_offsets[0]}[vout]")
+            filter_parts.append(f"[a0][a1]acrossfade=d={transition_dur}[aout]")
+        else:
+            # Chain multiple xfade filters
+            filter_parts.append(f"[v0][v1]xfade=transition={selected_transitions[0]}:duration={transition_dur}:offset={xfade_offsets[0]}[v01]")
+            filter_parts.append(f"[a0][a1]acrossfade=d={transition_dur}[a01]")
+            
+            # Chain remaining videos
+            for i in range(2, len(video_files)):
+                prev_label = f"v{i-2}{i-1}" if i > 2 else "v01"
+                prev_audio = f"a{i-2}{i-1}" if i > 2 else "a01"
+                curr_label = f"v{i-1}{i}"
+                curr_audio = f"a{i-1}{i}"
+                
+                offset = xfade_offsets[i-1]
+                filter_parts.append(f"[{prev_label}][v{i}]xfade=transition={selected_transitions[i-1]}:duration={transition_dur}:offset={offset}[{curr_label}]")
+                filter_parts.append(f"[{prev_audio}][a{i}]acrossfade=d={transition_dur}[{curr_audio}]")
+            
+            # Final output labels
+            final_v = f"v{len(video_files)-2}{len(video_files)-1}"
+            final_a = f"a{len(video_files)-2}{len(video_files)-1}"
+            filter_parts.append(f"[{final_v}]null[vout]")
+            filter_parts.append(f"[{final_a}]anull[aout]")
+        
+        filter_complex = ";".join(filter_parts)
+        return filter_complex
+    
+    def _write_concat_file_for_batch(self, video_files):
+        """Write concat file for a specific batch of videos."""
+        concat_file = os.path.join(self.root_dir, f"temp_concat_{hashlib.md5(str(video_files).encode()).hexdigest()[:8]}.txt")
+        with open(concat_file, 'w', encoding='utf-8', newline='\n') as f:
+            for vf in video_files:
+                if not os.path.isfile(vf):
+                    continue
+                # Escape path for concat demuxer
+                posix_path = Path(vf).resolve().as_posix()
+                safe_path = posix_path.replace("'", r"'\''")
+                f.write(f"file '{safe_path}'\n")
+        return concat_file
+    
+    def _merge_videos_with_transitions(self, video_files, output_file):
+        """Merge videos with transitions using FFmpeg filter complex."""
+        ffmpeg_cmd = self.get_ffmpeg_command()
+        
+        # Build transition filter
+        filter_complex = self._build_transition_filter(video_files)
+        
+        if not filter_complex:
+            # Fallback to simple merge
+            self._merge_videos_simple(video_files, output_file)
+            return
+        
+        # Build input arguments
+        input_args = []
+        for vf in video_files:
+            input_args.extend(['-i', vf])
+        
+        # Build command with filter complex
+        cmd = [ffmpeg_cmd] + input_args + [
+            '-filter_complex', filter_complex,
+            '-map', '[vout]',
+            '-map', '[aout]',
+            '-c:v', 'libx264',
+            '-preset', 'veryfast',
+            '-crf', '18',
+            '-c:a', 'aac',
+            '-b:a', '192k',
+            '-movflags', '+faststart',
+            '-y', output_file
+        ]
+        
+        self.root.after(0, lambda: self.log(f"[DEBUG] Merge command: {' '.join(cmd)}"))
+        
+        result = subprocess.run(cmd, capture_output=True, text=True, cwd=self.root_dir)
+        
+        if result.returncode != 0:
+            error_msg = result.stderr[:4000] if result.stderr else "Unknown error"
+            raise Exception(f"Merge failed: {error_msg}")
+    
+    def _merge_videos_simple(self, video_files, output_file):
+        """Merge videos using simple concat (no transitions)."""
+        ffmpeg_cmd = self.get_ffmpeg_command()
+        concat_file = self._write_concat_file_for_batch(video_files)
+        
+        try:
+            # Use concat demuxer
+            cmd = [ffmpeg_cmd, '-f', 'concat', '-safe', '0', '-i', concat_file, 
+                  '-c', 'copy', '-y', output_file]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, cwd=self.root_dir)
+            
+            if result.returncode != 0:
+                # Retry with re-encode
+                reencode_cmd = [ffmpeg_cmd, '-f', 'concat', '-safe', '0', '-i', concat_file,
+                              '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18',
+                              '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart',
+                              '-y', output_file]
+                result = subprocess.run(reencode_cmd, capture_output=True, text=True, cwd=self.root_dir)
+                
+                if result.returncode != 0:
+                    error_msg = result.stderr[:4000] if result.stderr else "Unknown error"
+                    raise Exception(f"Merge failed: {error_msg}")
+        finally:
+            # Clean up concat file
+            if concat_file and os.path.exists(concat_file):
+                try:
+                    os.remove(concat_file)
+                except:
+                    pass
+    
+    def toggle_transitions(self):
+        """Toggle transitions option."""
+        self.transition_enabled = self.transition_enabled_var.get()
+        self.save_settings()
+        status_text = "enabled" if self.transition_enabled else "disabled"
+        self.log(f"[INFO] Transitions: {status_text}")
+    
+    def select_transition_types(self):
+        """Open dialog to select multiple transition types."""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Select Transition Types")
+        dialog.geometry("400x500")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        # Instructions
+        info_label = ttk.Label(dialog, 
+                              text="Select multiple transition types.\nThey will be randomly applied between clips.",
+                              justify='center')
+        info_label.pack(pady=10)
+        
+        # Frame with scrollbar for checkboxes
+        frame = ttk.Frame(dialog)
+        frame.pack(fill='both', expand=True, padx=10, pady=10)
+        
+        canvas = tk.Canvas(frame, bg='white')
+        scrollbar = ttk.Scrollbar(frame, orient='vertical', command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+        
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        # Create checkboxes for each transition type
+        transition_checkbox_vars = {}
+        
+        for name, value in self.transition_types:
+            var = tk.BooleanVar(value=value in self.selected_transition_types)
+            transition_checkbox_vars[value] = var
+            cb = ttk.Checkbutton(scrollable_frame, text=name, variable=var)
+            cb.pack(anchor='w', padx=5, pady=2)
+        
+        canvas.pack(side='left', fill='both', expand=True)
+        scrollbar.pack(side='right', fill='y')
+        
+        # Buttons
+        btn_frame = ttk.Frame(dialog)
+        btn_frame.pack(pady=10)
+        
+        def select_all():
+            for var in transition_checkbox_vars.values():
+                var.set(True)
+        
+        def deselect_all():
+            for var in transition_checkbox_vars.values():
+                var.set(False)
+        
+        def apply_selection():
+            selected = []
+            for value, var in transition_checkbox_vars.items():
+                if var.get():
+                    selected.append(value)
+            
+            if not selected:
+                messagebox.showwarning("Warning", "Please select at least one transition type.")
+                return
+            
+            self.selected_transition_types = selected
+            self.transition_type = selected[0]  # Keep first for backward compatibility
+            self.update_transition_selection_label()
+            self.save_settings()
+            self.log(f"[INFO] Selected {len(selected)} transition type(s) for randomization")
+            dialog.destroy()
+        
+        ttk.Button(btn_frame, text="Select All", command=select_all).pack(side='left', padx=5)
+        ttk.Button(btn_frame, text="Deselect All", command=deselect_all).pack(side='left', padx=5)
+        ttk.Button(btn_frame, text="Apply", command=apply_selection).pack(side='left', padx=5)
+        ttk.Button(btn_frame, text="Cancel", command=dialog.destroy).pack(side='left', padx=5)
+    
+    def update_transition_selection_label(self):
+        """Update the label showing how many transitions are selected."""
+        count = len(self.selected_transition_types)
+        if count == 0:
+            self.transition_selection_label.config(text="(none selected)")
+        elif count == 1:
+            # Show the name of the single selected transition
+            for name, value in self.transition_types:
+                if value == self.selected_transition_types[0]:
+                    self.transition_selection_label.config(text=f"({name})")
+                    break
+        else:
+            self.transition_selection_label.config(text=f"({count} types - randomized)")
+    
+    def update_transition_duration(self):
+        """Update transition duration."""
+        try:
+            self.transition_duration = float(self.transition_duration_var.get())
+            if self.transition_duration < 0.1:
+                self.transition_duration = 0.1
+                self.transition_duration_var.set('0.1')
+            elif self.transition_duration > 5.0:
+                self.transition_duration = 5.0
+                self.transition_duration_var.set('5.0')
+            self.save_settings()
+            self.log(f"[INFO] Transition duration: {self.transition_duration}s")
+        except ValueError:
+            self.transition_duration_var.set(str(self.transition_duration))
     
     def save_settings(self, *args):
         """Save current settings to file."""
@@ -1076,7 +1729,11 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
                 'image_width': self.image_width,
                 'image_height': self.image_height,
                 'video_width': self.video_width,
-                'video_height': self.video_height
+                'video_height': self.video_height,
+                'transition_enabled': self.transition_enabled,
+                'transition_type': self.transition_type,  # Legacy single type
+                'selected_transition_types': self.selected_transition_types,  # New multi-select
+                'transition_duration': self.transition_duration
             }
             
             with open(self.settings_file, 'w', encoding='utf-8') as f:
@@ -1100,9 +1757,19 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
                 
                 if 'video_quality' in settings:
                     quality = settings['video_quality']
-                    # Migrate old option names to "Source Size"
+                    # Migrate old option names to new format
                     if quality in ("Image Size", "Input Video Size"):
-                        quality = "Source Size"
+                        quality = "Source Size (Match Input)"
+                    elif quality == "Auto":
+                        quality = "Auto (720p default)"
+                    elif quality == "480p":
+                        quality = "480p (854x480)"
+                    elif quality == "720p":
+                        quality = "720p HD (1280x720)"
+                    elif quality == "1080p":
+                        quality = "1080p Full HD (1920x1080)"
+                    elif quality == "Source Size":
+                        quality = "Source Size (Match Input)"
                     self.video_quality_var.set(quality)
                 
                 if 'video_codec' in settings:
@@ -1150,6 +1817,34 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
                             self.video_width, self.video_height = self._get_video_resolution(self.selected_video_file)
                             if self.video_width and self.video_height:
                                 self.image_dimensions_label.config(text=f"({self.video_width}x{self.video_height})")
+                
+                # Load transition settings
+                if 'transition_enabled' in settings:
+                    self.transition_enabled = settings['transition_enabled']
+                    if hasattr(self, 'transition_enabled_var'):
+                        self.transition_enabled_var.set(self.transition_enabled)
+                
+                # Load transition types (new multi-select or legacy single)
+                if 'selected_transition_types' in settings:
+                    self.selected_transition_types = settings['selected_transition_types']
+                    if self.selected_transition_types:
+                        self.transition_type = self.selected_transition_types[0]  # Keep first for compatibility
+                elif 'transition_type' in settings:
+                    # Legacy: convert single type to list
+                    self.transition_type = settings['transition_type']
+                    if self.transition_type != "none":
+                        self.selected_transition_types = [self.transition_type]
+                    else:
+                        self.selected_transition_types = ["fade"]  # Default
+                
+                # Update transition label if it exists
+                if hasattr(self, 'transition_selection_label'):
+                    self.update_transition_selection_label()
+                
+                if 'transition_duration' in settings:
+                    self.transition_duration = settings['transition_duration']
+                    if hasattr(self, 'transition_duration_var'):
+                        self.transition_duration_var.set(str(self.transition_duration))
                 
                 # Update UI state
                 self.on_source_type_change()
