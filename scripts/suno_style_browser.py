@@ -1,6 +1,7 @@
 import csv
 import json
 import os
+import re
 import sys
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, scrolledtext
@@ -1000,6 +1001,34 @@ class SunoStyleBrowser(tk.Tk):
         if save_path and os.path.exists(save_path) and os.path.isdir(save_path):
             return save_path
         return os.getcwd()
+    
+    def get_album_cover_image_size(self) -> str:
+        """Get the image size string for album cover images.
+        
+        Returns:
+            Size string like '1024x1024' extracted from dropdown value
+        """
+        if hasattr(self, 'album_cover_size_var'):
+            size_value = self.album_cover_size_var.get()
+            # Extract size from format like "1:1 (1024x1024)" -> "1024x1024"
+            match = re.search(r'\((\d+x\d+)\)', size_value)
+            if match:
+                return match.group(1)
+        # Default to 1:1 aspect ratio
+        return '1024x1024'
+    
+    def get_album_cover_format(self) -> str:
+        """Get the image format for album cover (PNG or JPEG).
+        
+        Returns:
+            Format string: 'png' or 'jpeg'
+        """
+        if hasattr(self, 'album_cover_format_var'):
+            format_value = self.album_cover_format_var.get().upper()
+            if format_value == 'JPEG':
+                return 'jpeg'
+            return 'png'
+        return 'png'
 
 
     def create_widgets(self):
@@ -1397,9 +1426,26 @@ class SunoStyleBrowser(tk.Tk):
         self.album_cover_preview = ttk.Label(preview_frame, text='No image generated yet')
         self.album_cover_preview.pack(fill=tk.BOTH, expand=True)
 
+        # Album Cover Options (size/format)
+        album_cover_opts = ttk.LabelFrame(main_frame, text='Album Cover Options', padding=5)
+        album_cover_opts.grid(row=9, column=0, columnspan=3, sticky=tk.W+tk.E, pady=(8, 0))
+        ttk.Label(album_cover_opts, text='Size:').pack(side=tk.LEFT)
+        self.album_cover_size_var = tk.StringVar(value='1:1 (1024x1024)')
+        album_cover_sizes = ['1:1 (1024x1024)', '3:2 (1536x1024)', '16:9 (1792x1024)', 
+                             '4:3 (1365x1024)', '9:16 (1024x1792)', '21:9 (2048x1024)']
+        self.album_cover_size_combo = ttk.Combobox(album_cover_opts, textvariable=self.album_cover_size_var, 
+                                                   values=album_cover_sizes, width=18, state='readonly')
+        self.album_cover_size_combo.pack(side=tk.LEFT, padx=6)
+        ttk.Label(album_cover_opts, text='Format:').pack(side=tk.LEFT, padx=(10, 0))
+        self.album_cover_format_var = tk.StringVar(value='PNG')
+        album_cover_format_combo = ttk.Combobox(album_cover_opts, textvariable=self.album_cover_format_var, 
+                                               values=['PNG', 'JPEG'], state='readonly', width=8)
+        album_cover_format_combo.pack(side=tk.LEFT, padx=6)
+        create_tooltip(album_cover_format_combo, 'Select image output format from AI (PNG or JPEG)')
+
         # Video Options (size/seconds)
         video_opts = ttk.LabelFrame(main_frame, text='Video Options', padding=5)
-        video_opts.grid(row=9, column=0, columnspan=3, sticky=tk.W+tk.E, pady=(8, 0))
+        video_opts.grid(row=10, column=0, columnspan=3, sticky=tk.W+tk.E, pady=(8, 0))
         ttk.Label(video_opts, text='Size:').pack(side=tk.LEFT)
         self.video_size_var = tk.StringVar(value='720x1280')
         sizes = ['720x1280', '1280x720']
@@ -1413,7 +1459,7 @@ class SunoStyleBrowser(tk.Tk):
         
         # Buttons frame
         btn_frame = ttk.Frame(main_frame)
-        btn_frame.grid(row=10, column=0, columnspan=3, pady=10, sticky=tk.W)
+        btn_frame.grid(row=11, column=0, columnspan=3, pady=10, sticky=tk.W)
 
         # Two rows of buttons
         btn_row1 = ttk.Frame(btn_frame)
@@ -2257,6 +2303,10 @@ class SunoStyleBrowser(tk.Tk):
 
         safe_basename = ai_cover_name.replace(':', '_').replace('/', '_').replace('\\', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace("'", '_').replace('<', '_').replace('>', '_').replace('|', '_')
 
+        # Get image size and format from configuration
+        image_size = self.get_album_cover_image_size()
+        image_format = self.get_album_cover_format()
+        
         # Call Azure Images API
         profiles = self.ai_config.get('profiles', {})
         img_profile = profiles.get('image_gen', {})
@@ -2264,11 +2314,11 @@ class SunoStyleBrowser(tk.Tk):
         dep = img_profile.get('deployment', '')
         ver = img_profile.get('api_version', '2024-02-15-preview')
         self.log_debug('INFO', f'Calling Azure Image model...')
-        self.log_debug('DEBUG', f'Image profile details: endpoint={ep or "<empty>"}, deployment={dep or "<empty>"}, api_version={ver}')
+        self.log_debug('DEBUG', f'Image profile details: endpoint={ep or "<empty>"}, deployment={dep or "<empty>"}, api_version={ver}, size={image_size}, format={image_format}')
         self.config(cursor='wait')
         self.update()
         try:
-            result = call_azure_image(self.ai_config, prompt, size='1024x1024', profile='image_gen')
+            result = call_azure_image(self.ai_config, prompt, size=image_size, profile='image_gen', output_format=image_format)
         finally:
             self.config(cursor='')
 
@@ -2299,12 +2349,17 @@ class SunoStyleBrowser(tk.Tk):
         except Exception as e:
             self.log_debug('ERROR', f'Failed to render preview: {e}')
 
+        # Determine file extension based on format
+        file_extension = '.jpg' if image_format == 'jpeg' else '.png'
+        file_type_label = 'JPEG Image' if image_format == 'jpeg' else 'PNG Image'
+        file_types = [(file_type_label, f'*{file_extension}'), ('All Files', '*.*')]
+        
         # Ask user where to save
         filename = filedialog.asksaveasfilename(
             title='Save Generated Album Cover',
-            defaultextension='.png',
-            filetypes=[('PNG Image', '*.png'), ('All Files', '*.*')],
-            initialfile=f"{safe_basename}.png"
+            defaultextension=file_extension,
+            filetypes=file_types,
+            initialfile=f"{safe_basename}{file_extension}"
         )
         if not filename:
             self.log_debug('INFO', 'Save image canceled by user')
