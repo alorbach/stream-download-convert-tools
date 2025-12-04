@@ -4225,7 +4225,6 @@ class SunoPersona(tk.Tk):
         
         song_name = self.song_name_var.get().strip()
         full_song_name = self.full_song_name_var.get().strip()
-        lyrics = self.lyrics_text.get('1.0', tk.END).strip()
         merged_style = self.merged_style_text.get('1.0', tk.END).strip()
         persona_name = self.current_persona.get('name', '')
         visual_aesthetic = self.current_persona.get('visual_aesthetic', '')
@@ -4237,18 +4236,19 @@ class SunoPersona(tk.Tk):
         self.update()
         
         try:
-            # Extract lyrics from MP3 if not already in text field
+            # ALWAYS use extracted lyrics - only they have exact timing data needed for storyboard
+            self.log_debug('INFO', 'Extracting lyrics from MP3 (required for timing data)...')
+            lyrics = self.get_extracted_lyrics(mp3_path, force_extract=False)
             if not lyrics:
-                self.log_debug('INFO', 'No lyrics in text field - extracting from MP3...')
-                extracted_lyrics = self.get_extracted_lyrics(mp3_path, force_extract=False)
-                if extracted_lyrics:
-                    lyrics = extracted_lyrics
-                    # Update the text field with extracted lyrics
-                    self.lyrics_text.delete('1.0', tk.END)
-                    self.lyrics_text.insert('1.0', lyrics)
-                    self.log_debug('INFO', f'Extracted and embedded {len(lyrics)} characters of lyrics from MP3')
-                else:
-                    self.log_debug('WARNING', 'No lyrics found in MP3 file and text field is empty')
+                messagebox.showwarning(
+                    'No Lyrics Found',
+                    'Could not extract lyrics from MP3 file. Storyboard generation requires extracted lyrics with timing data.\n\n'
+                    'Please extract lyrics first using the "Extract Lyrics" button, or ensure the MP3 file contains lyrics metadata.'
+                )
+                self.config(cursor='')
+                return
+            
+            self.log_debug('INFO', f'Using extracted lyrics with timing data ({len(lyrics)} characters)')
             
             # Get MP3 duration and parse lyrics with timing
             song_duration = self.get_mp3_duration(mp3_path)
