@@ -73,11 +73,17 @@ class VideoEditorGUI(BaseAudioGUI):
         self.transition_type = "fade"  # Legacy single type (for backward compatibility)
         self.selected_transition_types = ["fade"]  # List of selected transition types for randomization
         self.transition_duration = 0.5  # Duration in seconds
+        self.transition_mode = "xfade"  # "xfade" (loses time) or "overlay" (preserves time)
         
         # Output video size settings
         self.output_width = None  # None means use first video's width
         self.output_height = None  # None means use first video's height
         self.use_first_video_size = True  # Default: use first video's size
+        
+        # Output quality settings
+        self.video_codec = "libx264"  # libx264, libx265, libvpx-vp9
+        self.video_bitrate = "Medium Quality (CRF 23)"  # Quality preset
+        self.video_preset = "veryfast"  # Encoding preset
         self.transition_types = [
             ("Fade", "fade"),
             ("Wipe Left", "wipeleft"),
@@ -222,6 +228,15 @@ class VideoEditorGUI(BaseAudioGUI):
         if not self.transition_enabled or len(video_files) < 2:
             return None
         
+        # Use overlay mode if selected, otherwise use xfade
+        if self.transition_mode == "overlay":
+            return self._build_overlay_transition_filter(video_files)
+        else:
+            return self._build_xfade_transition_filter(video_files)
+    
+    def _build_xfade_transition_filter(self, video_files):
+        """Build FFmpeg filter graph for xfade transitions (reduces total duration)."""
+        
         # Ensure we have at least one transition type selected
         if not self.selected_transition_types:
             self.selected_transition_types = ["fade"]  # Default fallback
@@ -357,6 +372,125 @@ class VideoEditorGUI(BaseAudioGUI):
                 self.root.after(0, lambda: self.log(f"[WARNING] Final labels missing: {final_v}, {final_a}"))
         
         return filter_complex
+    
+    def _build_overlay_transition_filter(self, video_files):
+        """Build FFmpeg filter graph for overlay transitions (preserves full duration).
+        
+        Strategy: Create a color background as base timeline, then overlay each video
+        at its proper time with fade transitions. This preserves full duration.
+        """
+        # Get video durations
+        durations = []
+        for vf in video_files:
+            dur = self._get_video_duration(vf)
+            if dur is None:
+                dur = 5.0  # Default fallback
+            durations.append(dur)
+        
+        # Get target resolution
+        width, height = self._get_output_resolution(video_files)
+        
+        filter_parts = []
+        transition_dur = self.transition_duration
+        
+        # Calculate total duration (sum of all videos - preserved in overlay mode)
+        total_duration = sum(durations)
+        
+        # Scale and normalize all video inputs
+        for i in range(len(video_files)):
+            filter_parts.append(f"[{i}:v]scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1[v{i}_scaled]")
+            filter_parts.append(f"[{i}:a]aformat=sample_rates=44100:channel_layouts=stereo[a{i}]")
+        
+        # Log mode info
+        if hasattr(self, 'root'):
+            self.root.after(0, lambda: self.log(f"[INFO] Overlay mode: preserving full duration ({total_duration:.2f}s)"))
+            self.root.after(0, lambda: self.log(f"[INFO] Note: Overlay mode uses fade transitions (other types not supported)"))
+        
+        # Create a black background video of total duration as base
+        filter_parts.append(f"color=c=black:s={width}x{height}:d={total_duration}[bg]")
+        
+        # Start with background
+        current_output = "bg"
+        current_audio = None
+        current_time = 0.0
+        
+        # Overlay each video at its proper time
+        for i in range(len(video_files)):
+            video_start = current_time
+            
+            # For videos after the first, start transition before previous ends
+            if i > 0:
+                video_start = current_time - transition_dur
+            
+            # Position video at correct time first using setpts
+            filter_parts.append(f"[v{i}_scaled]setpts=PTS+{video_start}/TB[v{i}_positioned]")
+            
+            # Apply fade-in at start (for transitions after first video) using absolute time
+            if i > 0:
+                # This video fades in during transition (absolute time)
+                filter_parts.append(f"[v{i}_positioned]fade=t=in:st={video_start}:d={transition_dur}[v{i}_fadein]")
+                video_label = f"v{i}_fadein"
+            else:
+                video_label = f"v{i}_positioned"
+            
+            # Apply fade-out at end (for all videos except the last) using absolute time
+            if i < len(video_files) - 1:
+                # Calculate when fade-out should start in absolute time
+                # The video ends at video_start + durations[i]
+                # Fade-out should start (transition_dur) before the video ends
+                fade_out_start_absolute = video_start + durations[i] - transition_dur
+                filter_parts.append(f"[{video_label}]fade=t=out:st={fade_out_start_absolute}:d={transition_dur}[v{i}_faded]")
+                video_label = f"v{i}_faded"
+            
+            # Overlay on current output - use the final video_label after all fades
+            # Use gte (greater than or equal) so video plays from start onwards
+            # The video stream itself will naturally end at its duration
+            if i == 0:
+                filter_parts.append(f"[{current_output}][{video_label}]overlay=0:0:enable='gte(t,{video_start})'[vout{i}]")
+                current_output = f"vout{i}"
+            else:
+                filter_parts.append(f"[{current_output}][{video_label}]overlay=0:0:enable='gte(t,{video_start})'[vout{i}]")
+                current_output = f"vout{i}"
+            
+            # Audio: delay and mix
+            delay_ms = int(video_start * 1000)
+            if delay_ms > 0:
+                filter_parts.append(f"[a{i}]adelay={delay_ms}|{delay_ms}[a{i}_delayed]")
+                audio_label = f"a{i}_delayed"
+            else:
+                audio_label = f"a{i}"
+            
+            # Mix audio streams
+            if i == 0:
+                current_audio = audio_label
+            else:
+                # Mix previous audio with new delayed audio
+                filter_parts.append(f"[{current_audio}][{audio_label}]amix=inputs=2:duration=longest[a{i}_mixed]")
+                current_audio = f"a{i}_mixed"
+            
+            # Update current time for next video
+            # For overlay mode, we preserve full duration, so each video adds its full duration
+            # except we account for the overlap in transition
+            if i == 0:
+                current_time = durations[i]
+            else:
+                # Next video starts (transition_dur) before current ends, so:
+                # current_time = previous_end - transition_dur + current_duration
+                # But we want: current_time = previous_start + previous_duration - transition_dur
+                current_time = current_time + durations[i] - transition_dur
+        
+        # Final output - ensure full duration by trimming/padding to exact total_duration
+        # Use trim to ensure output is exactly total_duration
+        filter_parts.append(f"[{current_output}]trim=duration={total_duration},setpts=PTS-STARTPTS[vout_trimmed]")
+        filter_parts.append(f"[vout_trimmed]null[vout]")
+        filter_parts.append(f"[{current_audio}]anull[aout]")
+        
+        filter_complex = ";".join(filter_parts)
+        
+        if hasattr(self, 'root'):
+            self.root.after(0, lambda: self.log(f"[DEBUG] Overlay filter graph built"))
+        
+        return filter_complex
 
     def setup_ui(self):
         # Main container
@@ -439,6 +573,13 @@ class VideoEditorGUI(BaseAudioGUI):
         duration_spin.pack(side='left', padx=2)
         duration_spin.bind('<Return>', lambda e: self.update_transition_duration())
         
+        ttk.Label(toolbar, text="Mode:").pack(side='left', padx=(5, 2))
+        self.transition_mode_var = tk.StringVar(value=self.transition_mode)
+        mode_combo = ttk.Combobox(toolbar, textvariable=self.transition_mode_var, 
+                                  values=["xfade", "overlay"], width=8, state="readonly")
+        mode_combo.pack(side='left', padx=2)
+        mode_combo.bind('<<ComboboxSelected>>', lambda e: self.update_transition_mode())
+        
         ttk.Separator(toolbar, orient='vertical').pack(side='left', fill='y', padx=10)
         
         # Output size controls
@@ -447,6 +588,31 @@ class VideoEditorGUI(BaseAudioGUI):
                   width=10).pack(side='left', padx=2)
         self.output_size_label = ttk.Label(toolbar, text="(auto)", font=('Arial', 8))
         self.output_size_label.pack(side='left', padx=2)
+        
+        ttk.Separator(toolbar, orient='vertical').pack(side='left', fill='y', padx=10)
+        
+        # Output quality controls
+        ttk.Label(toolbar, text="Codec:").pack(side='left', padx=(5, 2))
+        self.video_codec_var = tk.StringVar(value=self.video_codec)
+        codec_combo = ttk.Combobox(toolbar, textvariable=self.video_codec_var, 
+                                  values=('libx264', 'libx265', 'libvpx-vp9'), width=10, state='readonly')
+        codec_combo.pack(side='left', padx=2)
+        codec_combo.bind('<<ComboboxSelected>>', lambda e: self.update_video_codec())
+        
+        ttk.Label(toolbar, text="Quality:").pack(side='left', padx=(5, 2))
+        self.video_bitrate_var = tk.StringVar(value=self.video_bitrate)
+        bitrate_combo = ttk.Combobox(toolbar, textvariable=self.video_bitrate_var, width=20, state='readonly')
+        bitrate_combo['values'] = (
+            'Very High Quality (CRF 15)',
+            'High Quality (CRF 18)',
+            'Medium Quality (CRF 23)',
+            'Low Quality (CRF 28)',
+            'Maximum Compression (CRF 32)'
+        )
+        bitrate_combo.pack(side='left', padx=2)
+        bitrate_combo.bind('<<ComboboxSelected>>', lambda e: self.update_video_bitrate())
+        
+        ttk.Separator(toolbar, orient='vertical').pack(side='left', fill='y', padx=10)
         
         # Status bar
         self.status_var = tk.StringVar(value="Ready")
@@ -1039,13 +1205,16 @@ class VideoEditorGUI(BaseAudioGUI):
                     input_args.extend(['-i', vf])
                 
                 # Build command with filter complex (faster encoding for preview)
+                # For preview, use faster preset but still respect codec choice
+                preview_encoding = self._get_video_encoding_args()
+                # Override preset to ultrafast for preview speed, and use lower quality
+                preview_encoding = [arg for arg in preview_encoding if arg != '-preset' and not arg.startswith('-crf')]
+                preview_encoding.extend(['-preset', 'ultrafast', '-crf', '28'])
                 cmd = [ffmpeg_cmd] + input_args + [
                     '-filter_complex', filter_complex,
                     '-map', '[vout]',
-                    '-map', '[aout]',
-                    '-c:v', 'libx264',
-                    '-preset', 'ultrafast',
-                    '-crf', '28',
+                    '-map', '[aout]'
+                ] + preview_encoding + [
                     '-c:a', 'aac',
                     '-b:a', '128k',
                     '-y', preview_file
@@ -1068,8 +1237,14 @@ class VideoEditorGUI(BaseAudioGUI):
                 # Use simple concat for preview
                 concat_file = self._write_concat_file()
                 
-                # Use concat demuxer with faster encoding for preview
-                cmd = f'{ffmpeg_cmd} -f concat -safe 0 -i "{concat_file}" -c:v libx264 -preset ultrafast -crf 28 -c:a aac -b:a 128k -y "{preview_file}"'
+                # Use concat demuxer with faster encoding for preview (preview uses lower quality for speed)
+                # For preview, use faster preset but still respect codec choice
+                preview_encoding = self._get_video_encoding_args()
+                # Override preset to ultrafast for preview speed
+                preview_encoding = [arg for arg in preview_encoding if arg != '-preset']
+                preview_encoding.extend(['-preset', 'ultrafast'])
+                encoding_str = ' '.join(preview_encoding)
+                cmd = f'{ffmpeg_cmd} -f concat -safe 0 -i "{concat_file}" {encoding_str} -c:a aac -b:a 128k -y "{preview_file}"'
                 
                 self.root.after(0, lambda: self.log(f"[DEBUG] Preview FFmpeg command: {cmd}"))
                 
@@ -1266,7 +1441,9 @@ class VideoEditorGUI(BaseAudioGUI):
                 # Retry with re-encode if stream copy fails
                 error_msg = result.stderr[:2000] if result.stderr else "Unknown error"
                 self.root.after(0, lambda: self.log(f"[WARNING] Copy combine failed, retrying with re-encode..."))
-                reencode_cmd = f"{ffmpeg_cmd} -f concat -safe 0 -i \"{concat_file}\" -c:v libx264 -preset veryfast -crf 18 -c:a aac -b:a 192k -movflags +faststart -y \"{output_file}\""
+                encoding_args = self._get_video_encoding_args()
+                encoding_str = ' '.join(encoding_args)
+                reencode_cmd = f"{ffmpeg_cmd} -f concat -safe 0 -i \"{concat_file}\" {encoding_str} -c:a aac -b:a 192k -movflags +faststart -y \"{output_file}\""
                 self.root.after(0, lambda: self.log(f"[DEBUG] FFmpeg reencode command: {reencode_cmd}"))
                 retry = subprocess.run(reencode_cmd, capture_output=True, text=True, cwd=self.root_dir, shell=True)
                 if retry.returncode == 0:
@@ -1368,13 +1545,12 @@ class VideoEditorGUI(BaseAudioGUI):
                                 batch_input_args.extend(['-i', vf])
                             
                             # Build command for this batch
+                            encoding_args = self._get_video_encoding_args()
                             batch_cmd = [ffmpeg_cmd] + batch_input_args + [
                                 '-filter_complex', batch_filter,
                                 '-map', '[vout]',
-                                '-map', '[aout]',
-                                '-c:v', 'libx264',
-                                '-preset', 'veryfast',
-                                '-crf', '18',
+                                '-map', '[aout]'
+                            ] + encoding_args + [
                                 '-c:a', 'aac',
                                 '-b:a', '192k',
                                 '-movflags', '+faststart',
@@ -1398,8 +1574,8 @@ class VideoEditorGUI(BaseAudioGUI):
                         else:
                             # No transitions, use concat
                             batch_concat = self._write_concat_file_for_batch(batch_videos)
-                            batch_cmd = [ffmpeg_cmd, '-f', 'concat', '-safe', '0', '-i', batch_concat,
-                                       '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18',
+                            encoding_args = self._get_video_encoding_args()
+                            batch_cmd = [ffmpeg_cmd, '-f', 'concat', '-safe', '0', '-i', batch_concat] + encoding_args + [
                                        '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart',
                                        '-y', batch_output]
                             result = subprocess.run(batch_cmd, capture_output=True, text=True, cwd=self.root_dir)
@@ -1427,8 +1603,8 @@ class VideoEditorGUI(BaseAudioGUI):
                     
                     # Use concat demuxer to combine batch outputs (faster and simpler)
                     final_concat = self._write_concat_file_for_batch(batch_outputs)
-                    final_cmd = [ffmpeg_cmd, '-f', 'concat', '-safe', '0', '-i', final_concat,
-                               '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18',
+                    encoding_args = self._get_video_encoding_args()
+                    final_cmd = [ffmpeg_cmd, '-f', 'concat', '-safe', '0', '-i', final_concat] + encoding_args + [
                                '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart',
                                '-y', output_file]
                     
@@ -1463,13 +1639,12 @@ class VideoEditorGUI(BaseAudioGUI):
                         input_args.extend(['-i', vf])
                     
                     # Build command with filter complex
+                    encoding_args = self._get_video_encoding_args()
                     cmd = [ffmpeg_cmd] + input_args + [
                         '-filter_complex', filter_complex,
                         '-map', '[vout]',
-                        '-map', '[aout]',
-                        '-c:v', 'libx264',
-                        '-preset', 'veryfast',
-                        '-crf', '18',
+                        '-map', '[aout]'
+                    ] + encoding_args + [
                         '-c:a', 'aac',
                         '-b:a', '192k',
                         '-movflags', '+faststart',
@@ -1541,6 +1716,63 @@ class VideoEditorGUI(BaseAudioGUI):
         self.save_settings()
         status_text = "enabled" if self.transition_enabled else "disabled"
         self.log(f"[INFO] Transitions: {status_text}")
+    
+    def update_transition_mode(self):
+        """Update transition mode setting."""
+        self.transition_mode = self.transition_mode_var.get()
+        self.save_settings()
+        mode_desc = "xfade (reduces duration)" if self.transition_mode == "xfade" else "overlay (preserves duration)"
+        self.log(f"[INFO] Transition mode: {self.transition_mode} - {mode_desc}")
+    
+    def update_video_codec(self):
+        """Update video codec setting."""
+        self.video_codec = self.video_codec_var.get()
+        self.save_settings()
+        self.log(f"[INFO] Video codec: {self.video_codec}")
+    
+    def update_video_bitrate(self):
+        """Update video quality/bitrate setting."""
+        self.video_bitrate = self.video_bitrate_var.get()
+        self.save_settings()
+        self.log(f"[INFO] Video quality: {self.video_bitrate}")
+    
+    def _get_crf_value(self, video_bitrate, video_codec):
+        """Get CRF value based on quality preset and codec."""
+        import re
+        match = re.search(r'CRF\s+(\d+)', video_bitrate)
+        if match:
+            base_crf = int(match.group(1))
+        else:
+            base_crf = 23
+        
+        # Adjust for different codecs
+        if video_codec == 'libx264':
+            return base_crf
+        elif video_codec == 'libx265':
+            return min(base_crf + 2, 51)
+        elif video_codec == 'libvpx-vp9':
+            return min(base_crf + 12, 63)
+        else:
+            return base_crf
+    
+    def _get_video_encoding_args(self):
+        """Get video encoding arguments based on current settings."""
+        args = []
+        args.extend(['-c:v', self.video_codec])
+        
+        crf_value = self._get_crf_value(self.video_bitrate, self.video_codec)
+        
+        if self.video_codec == 'libx264':
+            args.extend(['-crf', str(crf_value)])
+            args.extend(['-preset', self.video_preset])
+        elif self.video_codec == 'libx265':
+            args.extend(['-crf', str(crf_value)])
+            args.extend(['-preset', self.video_preset])
+        elif self.video_codec == 'libvpx-vp9':
+            args.extend(['-crf', str(crf_value)])
+            args.extend(['-b:v', '0'])
+        
+        return args
     
     def select_transition_types(self):
         """Open dialog to select multiple transition types."""
@@ -1808,7 +2040,8 @@ class VideoEditorGUI(BaseAudioGUI):
                     'transition_enabled': self.transition_enabled,
                     'transition_type': self.transition_type,  # Legacy
                     'selected_transition_types': self.selected_transition_types,  # New
-                    'transition_duration': self.transition_duration
+                    'transition_duration': self.transition_duration,
+                    'transition_mode': self.transition_mode
                 }
                 
                 with open(filename, 'w', encoding='utf-8') as f:
@@ -1865,6 +2098,11 @@ class VideoEditorGUI(BaseAudioGUI):
                     if hasattr(self, 'transition_duration_var'):
                         self.transition_duration_var.set(str(self.transition_duration))
                 
+                if 'transition_mode' in project_data:
+                    self.transition_mode = project_data['transition_mode']
+                    if hasattr(self, 'transition_mode_var'):
+                        self.transition_mode_var.set(self.transition_mode)
+                
                 self.log(f"[INFO] Project loaded: {os.path.basename(filename)}")
                 self.refresh_grid()
                 self.save_settings()
@@ -1910,6 +2148,10 @@ class VideoEditorGUI(BaseAudioGUI):
                 'transition_type': self.transition_type,  # Legacy single type
                 'selected_transition_types': self.selected_transition_types,  # New multi-select
                 'transition_duration': self.transition_duration,
+                'transition_mode': self.transition_mode,  # xfade or overlay
+                'video_codec': self.video_codec,
+                'video_bitrate': self.video_bitrate,
+                'video_preset': self.video_preset,
                 'output_width': self.output_width,
                 'output_height': self.output_height,
                 'use_first_video_size': self.use_first_video_size,
@@ -1965,6 +2207,25 @@ class VideoEditorGUI(BaseAudioGUI):
                     self.transition_duration = settings['transition_duration']
                     if hasattr(self, 'transition_duration_var'):
                         self.transition_duration_var.set(str(self.transition_duration))
+                
+                if 'transition_mode' in settings:
+                    self.transition_mode = settings['transition_mode']
+                    if hasattr(self, 'transition_mode_var'):
+                        self.transition_mode_var.set(self.transition_mode)
+                
+                # Load quality settings
+                if 'video_codec' in settings:
+                    self.video_codec = settings['video_codec']
+                    if hasattr(self, 'video_codec_var'):
+                        self.video_codec_var.set(self.video_codec)
+                
+                if 'video_bitrate' in settings:
+                    self.video_bitrate = settings['video_bitrate']
+                    if hasattr(self, 'video_bitrate_var'):
+                        self.video_bitrate_var.set(self.video_bitrate)
+                
+                if 'video_preset' in settings:
+                    self.video_preset = settings['video_preset']
                 
                 # Load output size settings
                 if 'use_first_video_size' in settings:
