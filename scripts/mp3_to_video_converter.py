@@ -784,6 +784,10 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
             self.offer_ffmpeg_install()
             return
         
+        # Sync transition state from checkbox
+        if hasattr(self, 'transition_enabled_var'):
+            self.transition_enabled = self.transition_enabled_var.get()
+        
         self.file_manager.set_folder_path('output', self.output_folder_var.get())
         self.ensure_directory(self.file_manager.get_folder_path('output'))
         
@@ -792,6 +796,7 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
         self.log(f"[INFO] Starting conversion of {len(self.conversion_queue)} file(s)")
         self.log(f"[INFO] Output folder: {self.file_manager.get_folder_path('output')}")
         self.log(f"[INFO] Video source: {source_type}")
+        self.log(f"[INFO] Transitions: {'enabled' if self.transition_enabled else 'disabled'}")
         self.log(f"[INFO] Video resolution: {self.video_quality_var.get()}")
         self.log(f"[INFO] Video quality/bitrate: {self.video_bitrate_var.get()}")
         self.log(f"[INFO] Video codec: {self.video_codec_var.get()}")
@@ -807,6 +812,10 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
     
     def _conversion_thread(self):
         """Conversion thread."""
+        # Sync transition state from checkbox
+        if hasattr(self, 'transition_enabled_var'):
+            self.transition_enabled = self.transition_enabled_var.get()
+        
         success_count = 0
         error_count = 0
         
@@ -1035,8 +1044,6 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
             
         else:  # video source
             # Video + MP3 = New Video (loop video to match audio length)
-            cmd.extend(['-stream_loop', '-1', '-i', self.selected_video_file])  # Loop video indefinitely
-            cmd.extend(['-i', input_file])
             
             # Get scaling filter for the selected quality
             if video_quality == "480p (854x480)" or video_quality == "480p":
@@ -1058,26 +1065,19 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
             elif video_quality == "Landscape 3:2 (1080x720)" or "Landscape 3:2" in video_quality:
                 scale_filter = self._get_scaling_filter(1080, 720, scaling_mode)
             elif video_quality == "Source Size (Match Input)" or video_quality == "Source Size":
-                # Use source dimensions (video for video source) - detect if not already detected
                 if not (self.video_width and self.video_height) and self.selected_video_file:
-                    # Try to detect dimensions on-the-fly
                     self.video_width, self.video_height = self._get_video_resolution(self.selected_video_file)
                     if self.video_width and self.video_height:
-                        # Update UI to show detected dimensions
                         self.root.after(0, lambda: self.image_dimensions_label.config(text=f"({self.video_width}x{self.video_height})"))
                 
                 if self.video_width and self.video_height:
                     scale_filter = self._get_scaling_filter(self.video_width, self.video_height, scaling_mode)
                 else:
-                    # Fallback to 720p if dimensions not available
                     scale_filter = self._get_scaling_filter(1280, 720, scaling_mode)
             elif video_quality == "Auto (720p default)" or video_quality == "Auto":
-                # Auto mode: use source dimensions if available, otherwise default to 720p
                 if not (self.video_width and self.video_height) and self.selected_video_file:
-                    # Try to detect dimensions on-the-fly
                     self.video_width, self.video_height = self._get_video_resolution(self.selected_video_file)
                     if self.video_width and self.video_height:
-                        # Update UI to show detected dimensions
                         self.root.after(0, lambda: self.image_dimensions_label.config(text=f"({self.video_width}x{self.video_height})"))
                 
                 if self.video_width and self.video_height:
@@ -1085,7 +1085,18 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
                 else:
                     scale_filter = self._get_scaling_filter(1280, 720, scaling_mode)
             else:
-                scale_filter = self._get_scaling_filter(1280, 720, scaling_mode)  # Default fallback
+                scale_filter = self._get_scaling_filter(1280, 720, scaling_mode)
+            
+            # Check if transitions are enabled for looping video
+            if self.transition_enabled and loop_mode != "forward_reverse":
+                # Build looped video with transitions between each loop
+                return self._build_looped_video_with_transitions_command(
+                    input_file, output_file, scale_filter, video_codec, video_bitrate
+                )
+            
+            # Standard approach without transitions
+            cmd.extend(['-stream_loop', '-1', '-i', self.selected_video_file])
+            cmd.extend(['-i', input_file])
             
             if loop_mode == "forward_reverse":
                 # Create forward-reverse loop effect - use temp file approach
@@ -1230,9 +1241,7 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
             messagebox.showwarning("Warning", "Please select at least one MP3 file")
             return
         
-        if len(self.selected_mp3_files) < 2:
-            messagebox.showwarning("Warning", "At least 2 MP3 files are required for merging with transitions")
-            return
+        # Allow single file with transitions (will create repeating segments with transitions)
         
         source_type = self.video_source_type.get()
         if source_type == "image" and not self.selected_image_file:
@@ -1245,6 +1254,10 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
         if not self.check_ffmpeg():
             self.offer_ffmpeg_install()
             return
+        
+        # Sync transition state from checkbox
+        if hasattr(self, 'transition_enabled_var'):
+            self.transition_enabled = self.transition_enabled_var.get()
         
         self.file_manager.set_folder_path('output', self.output_folder_var.get())
         self.ensure_directory(self.file_manager.get_folder_path('output'))
@@ -1264,6 +1277,10 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
     
     def _convert_and_merge_thread(self):
         """Convert MP3s to videos and merge with transitions."""
+        # Sync transition state from checkbox (in case it changed)
+        if hasattr(self, 'transition_enabled_var'):
+            self.transition_enabled = self.transition_enabled_var.get()
+        
         # Step 1: Convert all MP3s to individual videos
         converted_videos = []
         source_type = self.video_source_type.get()
@@ -1325,8 +1342,20 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
             self.root.after(0, lambda v=i+1: self.progress.config(value=v))
         
         # Step 2: Merge videos with transitions if enabled
-        if len(converted_videos) >= 2 and self.transition_enabled:
-            self.root.after(0, lambda: self.log(f"\n[INFO] Merging {len(converted_videos)} videos with transitions"))
+        self.root.after(0, lambda: self.log(f"[DEBUG] Transition enabled state: {self.transition_enabled}"))
+        self.root.after(0, lambda: self.log(f"[DEBUG] Number of converted videos: {len(converted_videos)}"))
+        
+        if len(converted_videos) >= 1 and self.transition_enabled:
+            # For single video, duplicate it to create transitions between repeats
+            if len(converted_videos) == 1:
+                # Create 2 additional copies for transitions (total 3 segments)
+                original_video = converted_videos[0]
+                video_files_for_transitions = [original_video, original_video, original_video]
+                self.root.after(0, lambda: self.log(f"\n[INFO] Creating transitions with repeating video (3 segments)"))
+            else:
+                video_files_for_transitions = converted_videos
+                self.root.after(0, lambda: self.log(f"\n[INFO] Merging {len(converted_videos)} videos with transitions"))
+            
             self.root.after(0, lambda: self.set_busy(True, "Merging videos..."))
             
             merged_output = os.path.join(
@@ -1335,7 +1364,7 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
             )
             
             try:
-                self._merge_videos_with_transitions(converted_videos, merged_output)
+                self._merge_videos_with_transitions(video_files_for_transitions, merged_output)
                 self.root.after(0, lambda: self.progress.config(value=len(self.selected_mp3_files) + 1))
                 self.root.after(
                     0,
@@ -1394,12 +1423,184 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
         self.log_text.insert(tk.END, f"{message}\n")
         self.log_text.see(tk.END)
     
+    def _get_audio_duration(self, audio_file):
+        """Get audio duration in seconds."""
+        try:
+            ffmpeg_cmd = self.get_ffmpeg_command()
+            cmd = [ffmpeg_cmd, '-i', audio_file, '-f', 'null', '-']
+            result = subprocess.run(
+                cmd, 
+                capture_output=True, 
+                text=True, 
+                encoding='utf-8',
+                errors='replace',
+                timeout=10
+            )
+            
+            for line in result.stderr.split('\n'):
+                if 'Duration:' in line:
+                    parts = line.split('Duration:')[1].split(',')[0].strip()
+                    time_parts = parts.split(':')
+                    if len(time_parts) == 3:
+                        hours = int(time_parts[0])
+                        minutes = int(time_parts[1])
+                        sec_ms = time_parts[2].split('.')
+                        seconds = int(sec_ms[0])
+                        ms = int(sec_ms[1]) if len(sec_ms) > 1 else 0
+                        return hours * 3600 + minutes * 60 + seconds + ms / 100.0
+            return None
+        except Exception as e:
+            return None
+    
+    def _build_looped_video_with_transitions_command(self, audio_file, output_file, scale_filter, video_codec, video_bitrate):
+        """Build FFmpeg command for looped video with transitions between each loop."""
+        ffmpeg_cmd = self.get_ffmpeg_command()
+        
+        # Get durations
+        audio_duration = self._get_audio_duration(audio_file)
+        video_duration = self._get_video_duration(self.selected_video_file)
+        
+        if not audio_duration or not video_duration:
+            self.log(f"[WARNING] Could not get durations, falling back to simple loop")
+            return self._build_simple_loop_command(audio_file, output_file, scale_filter, video_codec, video_bitrate)
+        
+        # Calculate number of loops needed
+        transition_dur = self.transition_duration
+        # Account for transition overlap when calculating loops
+        effective_video_duration = video_duration - transition_dur
+        if effective_video_duration <= 0:
+            effective_video_duration = video_duration
+        
+        num_loops = int((audio_duration / effective_video_duration) + 1)
+        num_loops = max(2, min(num_loops, 20))  # At least 2, max 20 loops
+        
+        self.log(f"[INFO] Building looped video with transitions: {num_loops} loops, {transition_dur}s transitions")
+        self.log(f"[INFO] Audio duration: {audio_duration:.1f}s, Video duration: {video_duration:.1f}s")
+        
+        # Randomly select transition types for each loop
+        selected_transitions = []
+        for i in range(num_loops - 1):
+            transition_type = random.choice(self.selected_transition_types)
+            selected_transitions.append(transition_type)
+        
+        # Log selected transitions
+        transition_names = []
+        for trans_type in selected_transitions:
+            for name, value in self.transition_types:
+                if value == trans_type:
+                    transition_names.append(name)
+                    break
+        self.log(f"[INFO] Transitions: {', '.join(transition_names)}")
+        
+        # Build filter graph
+        filter_parts = []
+        
+        # Create scaled copies for each loop using split
+        filter_parts.append(f"[0:v]{scale_filter},split={num_loops}" + "".join([f"[v{i}]" for i in range(num_loops)]))
+        
+        # Calculate xfade offsets
+        xfade_offsets = []
+        xfade_output_durations = []
+        
+        for i in range(num_loops - 1):
+            if i == 0:
+                offset = max(0.1, video_duration - transition_dur)
+                output_dur = offset + video_duration
+            else:
+                prev_output_dur = xfade_output_durations[i-1]
+                offset = max(0.1, prev_output_dur - transition_dur)
+                output_dur = offset + video_duration
+            
+            xfade_offsets.append(offset)
+            xfade_output_durations.append(output_dur)
+        
+        # Build xfade chain
+        if num_loops == 2:
+            filter_parts.append(f"[v0][v1]xfade=transition={selected_transitions[0]}:duration={transition_dur}:offset={xfade_offsets[0]}[vout]")
+        else:
+            # Chain multiple xfade filters
+            filter_parts.append(f"[v0][v1]xfade=transition={selected_transitions[0]}:duration={transition_dur}:offset={xfade_offsets[0]}[v01]")
+            
+            for i in range(2, num_loops):
+                prev_label = f"v{i-2}{i-1}" if i > 2 else "v01"
+                if i == num_loops - 1:
+                    curr_label = "vout"
+                else:
+                    curr_label = f"v{i-1}{i}"
+                
+                offset = xfade_offsets[i-1]
+                filter_parts.append(f"[{prev_label}][v{i}]xfade=transition={selected_transitions[i-1]}:duration={transition_dur}:offset={offset}[{curr_label}]")
+        
+        filter_complex = ";".join(filter_parts)
+        
+        # Build command
+        cmd = [ffmpeg_cmd, '-y']
+        cmd.extend(['-i', self.selected_video_file])
+        cmd.extend(['-i', audio_file])
+        cmd.extend(['-filter_complex', filter_complex])
+        cmd.extend(['-map', '[vout]'])
+        cmd.extend(['-map', '1:a:0'])
+        cmd.extend(['-c:a', 'aac', '-b:a', '192k'])
+        cmd.extend(['-c:v', video_codec])
+        
+        crf_value = self._get_crf_value(video_bitrate, video_codec)
+        if video_codec == 'libx264':
+            cmd.extend(['-crf', str(crf_value)])
+            cmd.extend(['-preset', 'medium'])
+        elif video_codec == 'libx265':
+            cmd.extend(['-crf', str(crf_value)])
+            cmd.extend(['-preset', 'medium'])
+        elif video_codec == 'libvpx-vp9':
+            cmd.extend(['-crf', str(crf_value)])
+            cmd.extend(['-b:v', '0'])
+        
+        cmd.extend(['-t', str(audio_duration)])  # Match audio duration
+        cmd.append(output_file)
+        
+        return cmd
+    
+    def _build_simple_loop_command(self, audio_file, output_file, scale_filter, video_codec, video_bitrate):
+        """Build simple loop command without transitions (fallback)."""
+        ffmpeg_cmd = self.get_ffmpeg_command()
+        
+        cmd = [ffmpeg_cmd, '-y']
+        cmd.extend(['-stream_loop', '-1', '-i', self.selected_video_file])
+        cmd.extend(['-i', audio_file])
+        cmd.extend(['-vf', scale_filter])
+        cmd.extend(['-map', '0:v:0'])
+        cmd.extend(['-map', '1:a:0'])
+        cmd.extend(['-c:a', 'aac', '-b:a', '192k'])
+        cmd.extend(['-c:v', video_codec])
+        
+        crf_value = self._get_crf_value(video_bitrate, video_codec)
+        if video_codec == 'libx264':
+            cmd.extend(['-crf', str(crf_value)])
+            cmd.extend(['-preset', 'medium'])
+        elif video_codec == 'libx265':
+            cmd.extend(['-crf', str(crf_value)])
+            cmd.extend(['-preset', 'medium'])
+        elif video_codec == 'libvpx-vp9':
+            cmd.extend(['-crf', str(crf_value)])
+            cmd.extend(['-b:v', '0'])
+        
+        cmd.extend(['-shortest'])
+        cmd.append(output_file)
+        
+        return cmd
+    
     def _get_video_duration(self, video_file):
         """Get video duration in seconds."""
         try:
             ffmpeg_cmd = self.get_ffmpeg_command()
             cmd = [ffmpeg_cmd, '-i', video_file, '-f', 'null', '-']
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            result = subprocess.run(
+                cmd, 
+                capture_output=True, 
+                text=True, 
+                encoding='utf-8',
+                errors='replace',
+                timeout=10
+            )
             
             for line in result.stderr.split('\n'):
                 if 'Duration:' in line:
@@ -1430,7 +1631,11 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
     
     def _build_transition_filter(self, video_files):
         """Build FFmpeg filter graph for transitions between videos."""
-        if not self.transition_enabled or len(video_files) < 2:
+        if not self.transition_enabled:
+            return None
+        
+        # Allow single video (will be duplicated in merge function)
+        if len(video_files) < 1:
             return None
         
         # Ensure we have at least one transition type selected
@@ -1518,6 +1723,69 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
         filter_complex = ";".join(filter_parts)
         return filter_complex
     
+    def _build_looped_transition_filter(self, video_file, video_duration, num_segments=3):
+        """Build FFmpeg filter for transitions with a single looping video using multiple inputs."""
+        if not self.transition_enabled:
+            return None
+        
+        # Ensure we have at least one transition type selected
+        if not self.selected_transition_types:
+            self.selected_transition_types = ["fade"]
+        
+        # Get target resolution
+        width, height = self._get_video_resolution(video_file)
+        if not width or not height:
+            width, height = 1920, 1080
+        
+        filter_parts = []
+        transition_dur = self.transition_duration
+        
+        # Scale and normalize all inputs (same file passed multiple times)
+        for i in range(num_segments):
+            filter_parts.append(f"[{i}:v]scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1[v{i}]")
+            filter_parts.append(f"[{i}:a]aformat=sample_rates=44100:channel_layouts=stereo[a{i}]")
+        
+        # Randomly select transition types
+        selected_transitions = []
+        for i in range(num_segments - 1):
+            transition_type = random.choice(self.selected_transition_types)
+            selected_transitions.append(transition_type)
+        
+        # Log selected transitions
+        transition_names = []
+        for trans_type in selected_transitions:
+            for name, value in self.transition_types:
+                if value == trans_type:
+                    transition_names.append(name)
+                    break
+        self.root.after(0, lambda names=', '.join(transition_names): 
+                      self.log(f"[INFO] Random transitions selected for loop: {names}"))
+        
+        # Calculate xfade offsets
+        xfade_offsets = []
+        xfade_output_durations = []
+        
+        for i in range(num_segments - 1):
+            if i == 0:
+                offset = max(0.1, video_duration - transition_dur)
+                output_dur = offset + video_duration
+            else:
+                prev_output_dur = xfade_output_durations[i-1]
+                offset = max(0.1, prev_output_dur - transition_dur)
+                output_dur = offset + video_duration
+            
+            xfade_offsets.append(offset)
+            xfade_output_durations.append(output_dur)
+        
+        # Build xfade chain for 3 segments
+        filter_parts.append(f"[v0][v1]xfade=transition={selected_transitions[0]}:duration={transition_dur}:offset={xfade_offsets[0]}[v01]")
+        filter_parts.append(f"[a0][a1]acrossfade=d={transition_dur}[a01]")
+        filter_parts.append(f"[v01][v2]xfade=transition={selected_transitions[1]}:duration={transition_dur}:offset={xfade_offsets[1]}[vout]")
+        filter_parts.append(f"[a01][a2]acrossfade=d={transition_dur}[aout]")
+        
+        filter_complex = ";".join(filter_parts)
+        return filter_complex
+    
     def _write_concat_file_for_batch(self, video_files):
         """Write concat file for a specific batch of videos."""
         concat_file = os.path.join(self.root_dir, f"temp_concat_{hashlib.md5(str(video_files).encode()).hexdigest()[:8]}.txt")
@@ -1535,40 +1803,121 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
         """Merge videos with transitions using FFmpeg filter complex."""
         ffmpeg_cmd = self.get_ffmpeg_command()
         
-        # Build transition filter
-        filter_complex = self._build_transition_filter(video_files)
+        # Debug logging
+        self.root.after(0, lambda: self.log(f"[DEBUG] _merge_videos_with_transitions called with {len(video_files)} files"))
+        self.root.after(0, lambda: self.log(f"[DEBUG] Transition enabled: {self.transition_enabled}"))
         
-        if not filter_complex:
-            # Fallback to simple merge
-            self._merge_videos_simple(video_files, output_file)
-            return
+        # Check if we have a single video that needs looping (all files are the same)
+        is_single_video_loop = len(video_files) > 0 and len(set(video_files)) == 1
+        self.root.after(0, lambda: self.log(f"[DEBUG] Is single video loop: {is_single_video_loop}"))
         
-        # Build input arguments
-        input_args = []
-        for vf in video_files:
-            input_args.extend(['-i', vf])
-        
-        # Build command with filter complex
-        cmd = [ffmpeg_cmd] + input_args + [
-            '-filter_complex', filter_complex,
-            '-map', '[vout]',
-            '-map', '[aout]',
-            '-c:v', 'libx264',
-            '-preset', 'veryfast',
-            '-crf', '18',
-            '-c:a', 'aac',
-            '-b:a', '192k',
-            '-movflags', '+faststart',
-            '-y', output_file
-        ]
+        if is_single_video_loop:
+            # Use multiple inputs of same file to create transitions between repeats
+            original_video = video_files[0]
+            video_duration = self._get_video_duration(original_video)
+            if video_duration is None:
+                video_duration = 5.0
+            
+            # Determine number of segments (use existing count if we have multiple copies, otherwise create 3)
+            num_segments = len(video_files) if len(video_files) >= 2 else 3
+            
+            # Create filter for looped transitions
+            filter_complex = self._build_looped_transition_filter(original_video, video_duration, num_segments=num_segments)
+            self.root.after(0, lambda: self.log(f"[DEBUG] Looped transition filter built: {filter_complex is not None}"))
+            if filter_complex:
+                self.root.after(0, lambda: self.log(f"[DEBUG] Using looped transition filter with {num_segments} segments"))
+                # Pass the same file multiple times as separate inputs
+                input_args = []
+                for _ in range(num_segments):
+                    input_args.extend(['-i', original_video])
+                
+                cmd = [ffmpeg_cmd] + input_args + [
+                    '-filter_complex', filter_complex,
+                    '-map', '[vout]',
+                    '-map', '[aout]',
+                    '-c:v', 'libx264',
+                    '-preset', 'veryfast',
+                    '-crf', '18',
+                    '-c:a', 'aac',
+                    '-b:a', '192k',
+                    '-movflags', '+faststart',
+                    '-y', output_file
+                ]
+            else:
+                # Fallback: use standard transition filter
+                if len(video_files) < 3:
+                    video_files = [original_video] * 3
+                filter_complex = self._build_transition_filter(video_files)
+                if not filter_complex:
+                    self._merge_videos_simple([original_video], output_file)
+                    return
+                
+                input_args = []
+                for vf in video_files:
+                    input_args.extend(['-i', vf])
+                
+                cmd = [ffmpeg_cmd] + input_args + [
+                    '-filter_complex', filter_complex,
+                    '-map', '[vout]',
+                    '-map', '[aout]',
+                    '-c:v', 'libx264',
+                    '-preset', 'veryfast',
+                    '-crf', '18',
+                    '-c:a', 'aac',
+                    '-b:a', '192k',
+                    '-movflags', '+faststart',
+                    '-y', output_file
+                ]
+        else:
+            # Multiple different videos - use standard approach
+            filter_complex = self._build_transition_filter(video_files)
+            self.root.after(0, lambda: self.log(f"[DEBUG] Standard transition filter built: {filter_complex is not None}"))
+            
+            if not filter_complex:
+                # Fallback to simple merge
+                self.root.after(0, lambda: self.log(f"[WARNING] Transition filter is None, falling back to simple merge"))
+                self._merge_videos_simple(video_files, output_file)
+                return
+            
+            # Build input arguments
+            input_args = []
+            for vf in video_files:
+                input_args.extend(['-i', vf])
+            
+            # Build command with filter complex
+            cmd = [ffmpeg_cmd] + input_args + [
+                '-filter_complex', filter_complex,
+                '-map', '[vout]',
+                '-map', '[aout]',
+                '-c:v', 'libx264',
+                '-preset', 'veryfast',
+                '-crf', '18',
+                '-c:a', 'aac',
+                '-b:a', '192k',
+                '-movflags', '+faststart',
+                '-y', output_file
+            ]
         
         self.root.after(0, lambda: self.log(f"[DEBUG] Merge command: {' '.join(cmd)}"))
+        self.root.after(0, lambda: self.log(f"[DEBUG] Filter complex: {filter_complex[:200] if filter_complex else 'None'}..."))
         
-        result = subprocess.run(cmd, capture_output=True, text=True, cwd=self.root_dir)
+        result = subprocess.run(
+            cmd, 
+            capture_output=True, 
+            text=True, 
+            encoding='utf-8',
+            errors='replace',
+            cwd=self.root_dir
+        )
         
         if result.returncode != 0:
             error_msg = result.stderr[:4000] if result.stderr else "Unknown error"
+            self.root.after(0, lambda err=error_msg: self.log(f"[ERROR] FFmpeg stderr: {err}"))
             raise Exception(f"Merge failed: {error_msg}")
+        else:
+            self.root.after(0, lambda: self.log(f"[DEBUG] FFmpeg completed successfully"))
+            if result.stderr:
+                self.root.after(0, lambda err=result.stderr[:500]: self.log(f"[DEBUG] FFmpeg stderr (first 500 chars): {err}"))
     
     def _merge_videos_simple(self, video_files, output_file):
         """Merge videos using simple concat (no transitions)."""
@@ -1580,7 +1929,14 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
             cmd = [ffmpeg_cmd, '-f', 'concat', '-safe', '0', '-i', concat_file, 
                   '-c', 'copy', '-y', output_file]
             
-            result = subprocess.run(cmd, capture_output=True, text=True, cwd=self.root_dir)
+            result = subprocess.run(
+                cmd, 
+                capture_output=True, 
+                text=True, 
+                encoding='utf-8',
+                errors='replace',
+                cwd=self.root_dir
+            )
             
             if result.returncode != 0:
                 # Retry with re-encode
@@ -1588,7 +1944,14 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
                               '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18',
                               '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart',
                               '-y', output_file]
-                result = subprocess.run(reencode_cmd, capture_output=True, text=True, cwd=self.root_dir)
+                result = subprocess.run(
+                    reencode_cmd, 
+                    capture_output=True, 
+                    text=True, 
+                    encoding='utf-8',
+                    errors='replace',
+                    cwd=self.root_dir
+                )
                 
                 if result.returncode != 0:
                     error_msg = result.stderr[:4000] if result.stderr else "Unknown error"
