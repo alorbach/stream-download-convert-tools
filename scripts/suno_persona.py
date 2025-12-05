@@ -997,7 +997,7 @@ class SettingsDialog(tk.Toplevel):
         self.destroy()
 
 
-def call_azure_audio_transcription(config: dict, audio_file_path: str, profile: str = 'text', language: str = None, response_format: str = 'verbose_json') -> dict:
+def call_azure_audio_transcription(config: dict, audio_file_path: str, profile: str = 'text', language: str = None, response_format: str = 'verbose_json', prompt: str = None) -> dict:
     """Call Azure OpenAI Whisper API to transcribe audio with timestamps.
     
     Args:
@@ -1006,6 +1006,7 @@ def call_azure_audio_transcription(config: dict, audio_file_path: str, profile: 
         profile: Profile name to use (default 'text')
         language: Optional language code (e.g., 'en', 'de')
         response_format: Response format - 'verbose_json' for timestamps, 'json' for simple, 'text' for plain text
+        prompt: Optional prompt to guide transcription (e.g., style or vocabulary hints)
     
     Returns:
         Dictionary with 'success', 'content' (transcription text), 'segments' (with timestamps), 'error'
@@ -1077,17 +1078,17 @@ def call_azure_audio_transcription(config: dict, audio_file_path: str, profile: 
             'response_format': actual_response_format
         }
         
-        # For json format, try to request segments with timestamps
-        if not use_verbose_json:
-            # Some models support timestamp_granularities even with json format
-            data['timestamp_granularities[]'] = 'segment'  # Request segment-level timestamps
-        
-        # Only add timestamp_granularities for verbose_json (word-level)
+        # Request timestamps: prefer both word- and segment-level when possible
         if use_verbose_json:
-            data['timestamp_granularities[]'] = 'word'  # Get word-level timestamps
+            # Some Whisper variants accept multiple values; send both to maximize detail
+            data['timestamp_granularities[]'] = ['word', 'segment']
+        else:
+            data['timestamp_granularities[]'] = 'segment'
         
         if language:
             data['language'] = language
+        if prompt:
+            data['prompt'] = prompt
         
         print(f'[DEBUG] Request data: {data}')
         print(f'[DEBUG] Actual response format: {actual_response_format}')
@@ -1548,7 +1549,9 @@ def load_song_config(song_path: str) -> dict:
         'storyboard_image_size': '3:2 (1536x1024)',
         'album_cover_size': '1:1 (1024x1024)',
         'album_cover_format': 'PNG',
-        'video_loop_size': '9:16 (720x1280)'
+        'video_loop_size': '9:16 (720x1280)',
+        'overlay_lyrics_on_image': False,
+        'embed_lyrics_in_prompt': True
     }
     
     if os.path.exists(config_file):
@@ -1617,6 +1620,7 @@ class SunoPersona(tk.Tk):
         self.current_persona_path = None
         self.current_song = None
         self.current_song_path = None
+        self.scene_final_prompts = {}
         
         self.create_widgets()
         self.refresh_personas_list()
@@ -2742,9 +2746,17 @@ class SunoPersona(tk.Tk):
         self.merged_style_text = scrolledtext.ScrolledText(scrollable_frame, height=3, wrap=tk.WORD, width=60)
         self.merged_style_text.grid(row=5, column=1, columnspan=2, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
         ttk.Button(scrollable_frame, text='Merge', command=self.merge_song_style).grid(row=5, column=3, padx=5, pady=5, sticky=tk.N)
+
+        # Lyrics handling options
+        options_frame = ttk.LabelFrame(scrollable_frame, text='Lyrics Handling', padding=5)
+        options_frame.grid(row=6, column=0, columnspan=4, sticky=tk.W+tk.E, pady=(5, 10), padx=5)
+        self.overlay_lyrics_var = tk.BooleanVar(value=False)
+        self.embed_lyrics_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(options_frame, text='Overlay lyrics on image (bottom bar)', variable=self.overlay_lyrics_var).pack(anchor=tk.W, pady=2)
+        ttk.Checkbutton(options_frame, text='Embed lyrics into scene prompts', variable=self.embed_lyrics_var).pack(anchor=tk.W, pady=2)
         
         ai_results_notebook = ttk.Notebook(scrollable_frame)
-        ai_results_notebook.grid(row=6, column=0, columnspan=4, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
+        ai_results_notebook.grid(row=7, column=0, columnspan=4, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
         
         album_cover_frame = ttk.Frame(ai_results_notebook)
         ai_results_notebook.add(album_cover_frame, text='Album Cover')
@@ -2856,7 +2868,7 @@ class SunoPersona(tk.Tk):
                                         state='readonly', width=18)
         image_size_combo.pack(side=tk.LEFT, padx=5)
         
-        ttk.Button(controls_frame, text='Analyze MP3 & Generate Storyboard', command=self.generate_storyboard).pack(side=tk.LEFT, padx=10)
+        ttk.Button(controls_frame, text='Generate Storyboard', command=self.generate_storyboard).pack(side=tk.LEFT, padx=10)
         
         # Storyboard scenes list
         list_frame = ttk.LabelFrame(main_frame, text='Storyboard Scenes', padding=5)
@@ -2868,13 +2880,15 @@ class SunoPersona(tk.Tk):
         tree_container.columnconfigure(0, weight=1)
         
         # Create treeview for scenes
-        columns = ('scene_num', 'duration', 'lyrics', 'prompt')
+        columns = ('scene_num', 'timestamp', 'duration', 'lyrics', 'prompt')
         self.storyboard_tree = ttk.Treeview(tree_container, columns=columns, show='headings', selectmode='extended', height=10)
         self.storyboard_tree.heading('scene_num', text='Scene')
+        self.storyboard_tree.heading('timestamp', text='Start')
         self.storyboard_tree.heading('duration', text='Duration')
         self.storyboard_tree.heading('lyrics', text='Lyrics')
         self.storyboard_tree.heading('prompt', text='Prompt')
         self.storyboard_tree.column('scene_num', width=60, anchor=tk.CENTER)
+        self.storyboard_tree.column('timestamp', width=80, anchor=tk.CENTER)
         self.storyboard_tree.column('duration', width=80, anchor=tk.CENTER)
         self.storyboard_tree.column('lyrics', width=200, anchor=tk.W)
         self.storyboard_tree.column('prompt', width=400, anchor=tk.W)
@@ -2934,11 +2948,14 @@ class SunoPersona(tk.Tk):
         prompts = []
         for item in selection:
             values = self.storyboard_tree.item(item, 'values')
-            if len(values) >= 4:
+            if len(values) >= 5:
                 scene_num = values[0]
-                prompt = values[3]  # Prompt is in 4th column
+                lyrics = values[3]
+                prompt = values[4]  # Prompt is in 5th column
                 if prompt:
-                    prompts.append(f"Scene {scene_num}:\n{prompt}")
+                    final_prompt = self.scene_final_prompts.get(str(scene_num)) or self.build_scene_image_prompt(scene_num, prompt, lyrics)
+                    safe_prompt = self.sanitize_lyrics_for_prompt(final_prompt)
+                    prompts.append(f"Scene {scene_num}:\n{safe_prompt}")
             elif len(values) >= 3:
                 # Fallback for old format
                 scene_num = values[0]
@@ -2965,9 +2982,9 @@ class SunoPersona(tk.Tk):
         lyrics_list = []
         for item in selection:
             values = self.storyboard_tree.item(item, 'values')
-            if len(values) >= 3:
+            if len(values) >= 5:
                 scene_num = values[0]
-                lyrics = values[2]  # Lyrics in 3rd column
+                lyrics = values[3]  # Lyrics in 4th column
                 if lyrics:
                     lyrics_list.append(f"Scene {scene_num}: {lyrics}")
         
@@ -2990,12 +3007,13 @@ class SunoPersona(tk.Tk):
         scenes_info = []
         for item in selection:
             values = self.storyboard_tree.item(item, 'values')
-            if len(values) >= 4:
+            if len(values) >= 5:
                 scene_num = values[0]
-                duration = values[1]
-                lyrics = values[2]
-                prompt = values[3]
-                scene_text = f"Scene {scene_num} ({duration}):\n"
+                timestamp = values[1]
+                duration = values[2]
+                lyrics = values[3]
+                prompt = values[4]
+                scene_text = f"Scene {scene_num} @ {timestamp} ({duration}):\n"
                 if lyrics:
                     scene_text += f"Lyrics: {lyrics}\n"
                 scene_text += f"Prompt: {prompt}"
@@ -3153,6 +3171,8 @@ class SunoPersona(tk.Tk):
         """Load song info into the form."""
         if not self.current_song:
             return
+        # Reset cached final prompts for new song
+        self.scene_final_prompts = {}
         
         self.song_name_var.set(self.current_song.get('song_name', ''))
         self.full_song_name_var.set(self.current_song.get('full_song_name', ''))
@@ -3168,6 +3188,10 @@ class SunoPersona(tk.Tk):
         self.album_cover_text.insert('1.0', self.current_song.get('album_cover', ''))
         self.video_loop_text.delete('1.0', tk.END)
         self.video_loop_text.insert('1.0', self.current_song.get('video_loop', ''))
+        if hasattr(self, 'overlay_lyrics_var'):
+            self.overlay_lyrics_var.set(bool(self.current_song.get('overlay_lyrics_on_image', False)))
+        if hasattr(self, 'embed_lyrics_var'):
+            self.embed_lyrics_var.set(bool(self.current_song.get('embed_lyrics_in_prompt', True)))
         
         # Load album cover and video loop settings
         if hasattr(self, 'album_cover_size_var'):
@@ -3204,6 +3228,11 @@ class SunoPersona(tk.Tk):
         self.merged_style_text.delete('1.0', tk.END)
         self.album_cover_text.delete('1.0', tk.END)
         self.video_loop_text.delete('1.0', tk.END)
+        if hasattr(self, 'overlay_lyrics_var'):
+            self.overlay_lyrics_var.set(False)
+        if hasattr(self, 'embed_lyrics_var'):
+            self.embed_lyrics_var.set(True)
+        self.scene_final_prompts = {}
     
     def get_mp3_filepath(self) -> str:
         """Get the MP3 file path for the current song using Full Song Name.
@@ -3330,7 +3359,9 @@ class SunoPersona(tk.Tk):
             'storyboard_image_size': self.storyboard_image_size_var.get() if hasattr(self, 'storyboard_image_size_var') else '3:2 (1536x1024)',
             'album_cover_size': self.album_cover_size_var.get() if hasattr(self, 'album_cover_size_var') else '1:1 (1024x1024)',
             'album_cover_format': self.album_cover_format_var.get() if hasattr(self, 'album_cover_format_var') else 'PNG',
-            'video_loop_size': self.video_loop_size_var.get() if hasattr(self, 'video_loop_size_var') else '9:16 (720x1280)'
+            'video_loop_size': self.video_loop_size_var.get() if hasattr(self, 'video_loop_size_var') else '9:16 (720x1280)',
+            'overlay_lyrics_on_image': bool(self.overlay_lyrics_var.get()) if hasattr(self, 'overlay_lyrics_var') else False,
+            'embed_lyrics_in_prompt': bool(self.embed_lyrics_var.get()) if hasattr(self, 'embed_lyrics_var') else True
         }
         
         if save_song_config(self.current_song_path, config):
@@ -3669,9 +3700,18 @@ class SunoPersona(tk.Tk):
             for scene in storyboard:
                 scene_num = scene.get('scene', len(self.storyboard_tree.get_children()) + 1)
                 duration = scene.get('duration', '')
+                timestamp = scene.get('timestamp', '')
                 lyrics = scene.get('lyrics', '')
                 prompt = scene.get('prompt', '')
-                self.storyboard_tree.insert('', tk.END, values=(scene_num, duration, lyrics, prompt))
+                # Compute timestamp if missing
+                if not timestamp:
+                    try:
+                        seconds_per_video = int(self.storyboard_seconds_var.get() or '8')
+                        start_time = (int(scene_num) - 1) * seconds_per_video
+                        timestamp = self.format_timestamp(start_time)
+                    except Exception:
+                        timestamp = '0:00'
+                self.storyboard_tree.insert('', tk.END, values=(scene_num, timestamp, duration, lyrics, prompt))
     
     def get_storyboard_data(self):
         """Get storyboard data from treeview."""
@@ -3681,14 +3721,35 @@ class SunoPersona(tk.Tk):
         storyboard = []
         for item in self.storyboard_tree.get_children():
             values = self.storyboard_tree.item(item, 'values')
-            if len(values) >= 3:
+            if len(values) >= 5:
                 storyboard.append({
                     'scene': int(values[0]) if values[0].isdigit() else len(storyboard) + 1,
+                    'timestamp': values[1],
+                    'duration': values[2],
+                    'lyrics': values[3] if len(values) > 3 else '',
+                    'prompt': values[4] if len(values) > 4 else values[3] if len(values) > 3 else ''
+                })
+            elif len(values) >= 4:
+                storyboard.append({
+                    'scene': int(values[0]) if str(values[0]).isdigit() else len(storyboard) + 1,
+                    'timestamp': '0:00',
                     'duration': values[1],
                     'lyrics': values[2] if len(values) > 2 else '',
-                    'prompt': values[3] if len(values) > 3 else values[2] if len(values) > 2 else ''
+                    'prompt': values[3] if len(values) > 3 else ''
                 })
         return storyboard
+
+    def format_timestamp(self, seconds_value: float) -> str:
+        """Format seconds as M:SS timestamp string."""
+        if seconds_value is None:
+            return '0:00'
+        try:
+            total_seconds = max(0, float(seconds_value))
+            minutes = int(total_seconds // 60)
+            seconds = int(total_seconds % 60)
+            return f"{minutes}:{seconds:02d}"
+        except Exception:
+            return '0:00'
     
     def get_mp3_duration(self, mp3_path: str) -> float:
         """Get MP3 duration in seconds."""
@@ -3901,6 +3962,13 @@ class SunoPersona(tk.Tk):
         self.log_debug('DEBUG', f'Transcribe profile endpoint: {transcribe_profile.get("endpoint", "NOT SET")}')
         self.log_debug('DEBUG', f'Transcribe profile deployment: {transcribe_profile.get("deployment", "NOT SET")}')
         self.log_debug('DEBUG', f'Transcribe profile API version: {transcribe_profile.get("api_version", "NOT SET")}')
+        self.log_debug('DEBUG', f'Transcription request: file="{mp3_path}", response_format="verbose_json" (preferred), profile="transcribe"')
+        
+        # Guidance prompt for transcription (helps retain lyrical structure and punctuation)
+        transcription_prompt = (
+            "Transcribe the song lyrics with clear line breaks. Preserve repetitions, fillers, and non-verbal cues if present. "
+            "Include chorus/verse lines as heard. Do not summarize; produce the full text."
+        )
         
         self.config(cursor='wait')
         self.update()
@@ -3911,7 +3979,8 @@ class SunoPersona(tk.Tk):
                 self.ai_config, 
                 mp3_path, 
                 profile='transcribe', 
-                response_format='verbose_json'
+                response_format='verbose_json',
+                prompt=transcription_prompt
             )
             
             if result['success']:
@@ -3958,7 +4027,7 @@ class SunoPersona(tk.Tk):
                     elif text_only:
                         # No segments available - estimate timestamps based on text length and song duration
                         # Split text into sentences/phrases and distribute evenly
-                        self.log_debug('WARNING', 'No segments available, estimating timestamps based on song duration')
+                        self.log_debug('WARNING', 'No segments/words in transcription; estimating timestamps based on song duration')
                         
                         # Get song duration
                         song_duration = self.get_mp3_duration(mp3_path)
@@ -4164,6 +4233,14 @@ class SunoPersona(tk.Tk):
         cleaned_text = re.sub(r'^\s*[\[\(]?(Intro|Outro|Verse\s*\d*|Chorus|Bridge|Pre-Chorus|Hook|Interlude|Solo|Instrumental|Break)\s*[:\]\)]\s*', '', cleaned_text, flags=re.IGNORECASE | re.MULTILINE)
         
         return cleaned_text.strip()
+
+    def sanitize_lyrics_for_prompt(self, text: str) -> str:
+        """Remove pipe separators and tidy whitespace for prompt safety."""
+        if not text:
+            return text
+        sanitized = re.sub(r'\s*\|\s*', ' ', text)
+        sanitized = re.sub(r'\s{2,}', ' ', sanitized)
+        return sanitized.strip()
     
     def get_lyrics_for_scene(self, scene_start_time: float, scene_end_time: float, lyric_segments: list) -> str:
         """Get lyrics that match a scene's time range."""
@@ -4178,7 +4255,8 @@ class SunoPersona(tk.Tk):
                     matching_lyrics.append(cleaned_text)
         
         if matching_lyrics:
-            return ' | '.join(matching_lyrics)
+            # Use spaces to avoid unwanted separator characters in prompts
+            return ' '.join(matching_lyrics)
         return ''
     
     def generate_storyboard(self):
@@ -4231,14 +4309,26 @@ class SunoPersona(tk.Tk):
         base_image_prompt = self.current_persona.get('base_image_prompt', '')
         vibe = self.current_persona.get('vibe', '')
         
+        # Reset cached prompts for fresh generation
+        self.scene_final_prompts = {}
+
         self.log_debug('INFO', f'Generating storyboard for MP3: {mp3_path}')
         self.config(cursor='wait')
         self.update()
         
         try:
-            # ALWAYS use extracted lyrics - only they have exact timing data needed for storyboard
-            self.log_debug('INFO', 'Extracting lyrics from MP3 (required for timing data)...')
-            lyrics = self.get_extracted_lyrics(mp3_path, force_extract=False)
+            # ALWAYS prefer already-extracted lyrics; only analyze MP3 if missing
+            lyrics = ''
+            if self.current_song:
+                lyrics = self.current_song.get('extracted_lyrics', '').strip()
+
+            if not lyrics:
+                self.log_debug('INFO', 'Extracting lyrics from MP3 (only because none cached)...')
+                lyrics = self.get_extracted_lyrics(mp3_path, force_extract=True)
+                if hasattr(self, 'extracted_lyrics_text') and lyrics:
+                    self.extracted_lyrics_text.delete('1.0', tk.END)
+                    self.extracted_lyrics_text.insert('1.0', lyrics)
+
             if not lyrics:
                 messagebox.showwarning(
                     'No Lyrics Found',
@@ -4270,7 +4360,7 @@ class SunoPersona(tk.Tk):
                 for scene_idx in range(1, num_scenes + 1):
                     scene_start_time = current_time
                     scene_end_time = min(current_time + seconds_per_video, song_duration)
-                    scene_lyrics = self.get_lyrics_for_scene(scene_start_time, scene_end_time, lyric_segments)
+                    scene_lyrics = self.sanitize_lyrics_for_prompt(self.get_lyrics_for_scene(scene_start_time, scene_end_time, lyric_segments))
                     if scene_lyrics:
                         scene_lyrics_info += f"Scene {scene_idx} ({scene_start_time:.1f}s-{scene_end_time:.1f}s): {scene_lyrics}\n"
                         scene_lyrics_dict[scene_idx] = scene_lyrics
@@ -4278,6 +4368,22 @@ class SunoPersona(tk.Tk):
                     if current_time >= song_duration:
                         break
                 scene_lyrics_info += "</LYRICS_TIMING>\n"
+            
+            embed_lyrics = bool(self.embed_lyrics_var.get()) if hasattr(self, 'embed_lyrics_var') else True
+            if scene_lyrics_info:
+                if embed_lyrics:
+                    lyrics_rule = """
+   - Each scene MUST visualize its corresponding lyrics from LYRICS_TIMING
+   - Embed lyrics INTO the environment (carved in walls, neon signs, formed by patterns)
+   - NEVER use text overlays, subtitles, or floating text"""
+                else:
+                    lyrics_rule = """
+   - Each scene should reflect the mood/meaning of its lyrics from LYRICS_TIMING
+   - Do NOT render or embed any visible text or lyrics in the scene
+   - Keep all scenes text-free (no overlays, no environmental text)"""
+            else:
+                lyrics_rule = """
+   - Visualize song theme and mood in each scene"""
             
             # Build improved prompt with clear structure and best practices
             prompt = f"""Generate {num_scenes} music video scene prompts for a {song_duration:.1f} second song ({seconds_per_video}s per scene).
@@ -4317,15 +4423,7 @@ Vibe: {vibe if vibe else 'N/A'}
    - Brief mention only - focus on scene, not persona details
 
 5. LYRICS INTEGRATION:"""
-            
-            if scene_lyrics_info:
-                prompt += """
-   - Each scene MUST visualize its corresponding lyrics from LYRICS_TIMING
-   - Embed lyrics INTO the environment (carved in walls, neon signs, formed by patterns)
-   - NEVER use text overlays, subtitles, or floating text"""
-            else:
-                prompt += """
-   - Visualize song theme and mood in each scene"""
+            prompt += lyrics_rule
             
             prompt += """
 
@@ -4344,9 +4442,17 @@ SCENE 1: {seconds_per_video} seconds"""
             # Add one comprehensive example
             example_lyrics = scene_lyrics_dict.get(1, 'sample lyrics here')
             if scene_lyrics_info and example_lyrics:
-                prompt += f"""
+                if embed_lyrics:
+                    prompt += f"""
 LYRICS: "{example_lyrics}"
 [Detailed visual description matching the lyrics mood and imagery. Include shot type, lighting, colors, setting. End with: 'Lyrics "{example_lyrics}" integrated as [specific environment method - e.g., glowing neon on wet pavement, etched into stone, formed by smoke wisps]']
+
+SCENE 2: {seconds_per_video} seconds
+[NO CHARACTERS] [Detailed abstract/environmental scene - atmospheric visuals, symbolic imagery, no human figures. Different shot type and palette from Scene 1.]"""
+                else:
+                    prompt += f"""
+LYRICS: "{example_lyrics}"
+[Detailed visual description matching the lyrics mood and imagery. Include shot type, lighting, colors, setting. Do NOT render lyrics as text anywhere; keep scene text-free.]
 
 SCENE 2: {seconds_per_video} seconds
 [NO CHARACTERS] [Detailed abstract/environmental scene - atmospheric visuals, symbolic imagery, no human figures. Different shot type and palette from Scene 1.]"""
@@ -4711,6 +4817,9 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
             self.log_debug('ERROR', 'Storyboard treeview not found')
             return
         
+        # Clear cached prompts for a fresh parse
+        self.scene_final_prompts = {}
+
         self.log_debug('INFO', f'Parsing storyboard response (length: {len(content)} chars, default_duration: {default_duration}s)')
         self.log_debug('DEBUG', f'Response preview (first 500 chars): {content[:500]}')
         
@@ -4718,8 +4827,18 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
         for item in self.storyboard_tree.get_children():
             self.storyboard_tree.delete(item)
         
-        # Get lyrics and song duration for calculating scene lyrics
-        lyrics = self.lyrics_text.get('1.0', tk.END).strip() if hasattr(self, 'lyrics_text') else ''
+        # Get extracted lyrics and song duration for calculating scene lyrics
+        lyrics = ''
+        if self.current_song:
+            lyrics = self.current_song.get('extracted_lyrics', '').strip()
+        if not lyrics and hasattr(self, 'get_mp3_filepath'):
+            mp3_path = self.get_mp3_filepath()
+            if mp3_path:
+                lyrics = self.get_extracted_lyrics(mp3_path, force_extract=False)
+                # Keep UI in sync
+                if hasattr(self, 'extracted_lyrics_text') and lyrics:
+                    self.extracted_lyrics_text.delete('1.0', tk.END)
+                    self.extracted_lyrics_text.insert('1.0', lyrics)
         mp3_path = self.get_mp3_filepath() if hasattr(self, 'get_mp3_filepath') else ''
         song_duration = self.get_mp3_duration(mp3_path) if mp3_path else 0.0
         lyric_segments = []
@@ -4754,8 +4873,8 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
                             scene_start_time = (current_scene - 1) * default_duration
                             scene_end_time = min(scene_start_time + default_duration, song_duration)
                             scene_lyrics = self.get_lyrics_for_scene(scene_start_time, scene_end_time, lyric_segments)
-                        
-                        self.storyboard_tree.insert('', tk.END, values=(current_scene, f'{default_duration}s', scene_lyrics, prompt_text))
+                        scene_timestamp = self.format_timestamp((current_scene - 1) * default_duration)
+                        self.storyboard_tree.insert('', tk.END, values=(current_scene, scene_timestamp, f'{default_duration}s', scene_lyrics, prompt_text))
                         scenes_found += 1
                         self.log_debug('DEBUG', f'Saved scene {current_scene} with prompt length {len(prompt_text)} chars, lyrics: {scene_lyrics[:50] if scene_lyrics else "none"}')
                     else:
@@ -4803,7 +4922,8 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
                     scene_end_time = min(scene_start_time + default_duration, song_duration)
                     scene_lyrics = self.get_lyrics_for_scene(scene_start_time, scene_end_time, lyric_segments)
                 
-                self.storyboard_tree.insert('', tk.END, values=(current_scene, f'{default_duration}s', scene_lyrics, prompt_text))
+                scene_timestamp = self.format_timestamp((current_scene - 1) * default_duration)
+                self.storyboard_tree.insert('', tk.END, values=(current_scene, scene_timestamp, f'{default_duration}s', scene_lyrics, prompt_text))
                 scenes_found += 1
                 self.log_debug('DEBUG', f'Saved final scene {current_scene} with prompt length {len(prompt_text)} chars, lyrics: {scene_lyrics[:50] if scene_lyrics else "none"}')
             else:
@@ -4859,10 +4979,10 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
         scenes_to_generate = []
         for item in selection:
             values = self.storyboard_tree.item(item, 'values')
-            if len(values) >= 4:
+            if len(values) >= 5:
                 scene_num = values[0]
-                lyrics = values[2] if len(values) > 2 else ''  # Lyrics in 3rd column
-                prompt = values[3]  # Prompt is now 4th column (after lyrics)
+                lyrics = values[3] if len(values) > 3 else ''  # Lyrics in 4th column
+                prompt = values[4]  # Prompt is now 5th column
                 if prompt:
                     scenes_to_generate.append((scene_num, prompt, lyrics))
             elif len(values) >= 3:
@@ -4930,10 +5050,10 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
         scenes_to_generate = []
         for item in items:
             values = self.storyboard_tree.item(item, 'values')
-            if len(values) >= 4:
+            if len(values) >= 5:
                 scene_num = values[0]
-                lyrics = values[2] if len(values) > 2 else ''  # Lyrics in 3rd column
-                prompt = values[3]  # Prompt is now 4th column (after lyrics)
+                lyrics = values[3] if len(values) > 3 else ''  # Lyrics in 4th column
+                prompt = values[4]  # Prompt is now 5th column
                 if prompt:
                     scenes_to_generate.append((scene_num, prompt, lyrics))
             elif len(values) >= 3:
@@ -5126,6 +5246,119 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
         except Exception as e:
             self.log_debug('WARNING', f'Failed to overlay lyrics on image: {e}')
             return False
+
+    def build_scene_image_prompt(self, scene_num: str, base_prompt: str, lyrics: str = None) -> str:
+        """Build the final prompt that gets sent to the image model.
+        
+        This applies persona detection and reference image analysis to ensure the
+        copied prompt matches exactly what is sent to the model.
+        """
+        cache_key = str(scene_num)
+        if cache_key in self.scene_final_prompts:
+            return self.scene_final_prompts[cache_key]
+
+        prompt = self.sanitize_lyrics_for_prompt(base_prompt)
+        persona_in_scene = False
+        prompt_lower = prompt.lower()
+
+        # Explicit "no characters" markers take precedence
+        no_character_markers = [
+            '[no characters]', 'no characters', 'no persona present', 'no human figures',
+            'no persona', 'no people', 'no artist', '[no persona]', 'without any human',
+            'purely environmental', 'purely abstract', 'no human presence'
+        ]
+        if any(marker in prompt_lower for marker in no_character_markers):
+            persona_in_scene = False
+        elif self.current_persona:
+            persona_name = self.current_persona.get('name', '').lower()
+            visual_aesthetic = self.current_persona.get('visual_aesthetic', '').lower()
+            base_image_prompt = self.current_persona.get('base_image_prompt', '').lower()
+
+            # Direct name or role cues
+            if persona_name and persona_name in prompt_lower:
+                persona_in_scene = True
+            elif any(keyword in prompt_lower for keyword in ['character', 'persona', 'singer', 'artist', 'performer', 'person', 'figure', 'protagonist', 'main character', 'vocalist', 'musician']):
+                persona_in_scene = True
+            elif visual_aesthetic or base_image_prompt:
+                try:
+                    self.config(cursor='wait')
+                    self.update()
+                    analysis_prompt = (
+                        "Analyze this music video scene prompt and determine if it should feature the main artist/performer character.\n\n"
+                        f"Scene Prompt: {prompt}\n\n"
+                        f"Artist/Persona Name: {self.current_persona.get('name', '')}\n"
+                    )
+                    if visual_aesthetic:
+                        analysis_prompt += f"Persona Visual Aesthetic: {self.current_persona.get('visual_aesthetic', '')}\n"
+                    if base_image_prompt:
+                        analysis_prompt += f"Persona Base Image Description: {self.current_persona.get('base_image_prompt', '')}\n"
+                    analysis_prompt += (
+                        "\nRespond with ONLY 'YES' if the persona should be featured, or 'NO' if not."
+                    )
+                    analysis_result = call_azure_ai(
+                        self.ai_config,
+                        analysis_prompt,
+                        system_message="You are a music video analysis assistant. Respond with only YES or NO.",
+                        profile='text'
+                    )
+                    if analysis_result['success']:
+                        analysis_response = analysis_result['content'].strip().upper()
+                        if 'YES' in analysis_response:
+                            persona_in_scene = True
+                    else:
+                        persona_in_scene = False
+                except Exception as e:
+                    self.log_debug('WARNING', f'Persona detection failed for scene {scene_num}: {e}')
+                finally:
+                    self.config(cursor='')
+
+        # If persona is present, enrich prompt with reference image analysis
+        if persona_in_scene and self.current_persona and self.current_persona_path:
+            safe_name = self.current_persona.get('name', 'persona').replace(' ', '-').replace(':', '_').replace('/', '_').replace('\\', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace("'", '_').replace('<', '_').replace('>', '_').replace('|', '_')
+            front_image_path = os.path.join(self.current_persona_path, f'{safe_name}-Front.png')
+            if os.path.exists(front_image_path):
+                try:
+                    from PIL import Image
+                    original_img = Image.open(front_image_path)
+                    new_width = original_img.width // 2
+                    new_height = original_img.height // 2
+                    downscaled_img = original_img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+
+                    temp_dir = os.path.join(self.current_song_path if self.current_song_path else os.path.dirname(front_image_path), 'temp')
+                    os.makedirs(temp_dir, exist_ok=True)
+                    reference_image_path = os.path.join(temp_dir, f'{safe_name}-Front-downscaled.png')
+                    downscaled_img.save(reference_image_path, 'PNG')
+
+                    self.config(cursor='wait')
+                    self.update()
+                    vision_prompt = (
+                        "Analyze this persona reference image in extreme detail. Provide a comprehensive description of the character's appearance, "
+                        "including physical features, clothing, styling, colors, accessories, pose, and all visual characteristics. "
+                        "This description will be used to ensure the scene image features the exact same character."
+                    )
+                    vision_system = (
+                        "You are an image analysis assistant. Provide a highly detailed, objective description of the character's visual appearance "
+                        "from the reference image. Focus on all visual characteristics that should be preserved in the scene image."
+                    )
+                    vision_result = call_azure_vision(self.ai_config, [reference_image_path], vision_prompt, system_message=vision_system, profile='text')
+                    if vision_result['success']:
+                        character_description = vision_result['content'].strip()
+                        prompt = (
+                            f"REFERENCE CHARACTER DESCRIPTION (from Front Persona Image - MUST MATCH EXACTLY):\n{character_description}\n\n"
+                            f"{prompt}\n\n"
+                            "CRITICAL REQUIREMENT: The character in this scene MUST be visually identical to the reference character description above. "
+                            "Match all physical features, clothing, styling, colors, accessories, and visual characteristics exactly. "
+                            "The character appearance must be consistent with the reference image."
+                        )
+                    else:
+                        prompt += "\n\nIMPORTANT: Use the Front Persona Image as reference. The scene must feature this exact character with matching appearance, styling, and visual characteristics."
+                except Exception as e:
+                    self.log_debug('WARNING', f'Failed to prepare persona reference for scene {scene_num}: {e}')
+                finally:
+                    self.config(cursor='')
+
+        self.scene_final_prompts[cache_key] = prompt
+        return prompt
     
     def generate_storyboard_image(self, scene_num: str, prompt: str, show_success_message: bool = True, lyrics: str = None):
         """Generate image for a storyboard scene.
@@ -5141,162 +5374,49 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
         """
         if not self.current_song_path:
             return False
-        
-        # Prepare image filename
+
         safe_scene = str(scene_num).replace(':', '_').replace('/', '_').replace('\\', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace("'", '_').replace('<', '_').replace('>', '_').replace('|', '_')
         image_filename = os.path.join(self.current_song_path, f'storyboard_scene_{safe_scene}.png')
         image_exists = os.path.exists(image_filename)
-        
-        # If image exists, we'll still generate but show preview dialog
+
         if image_exists:
             self.log_debug('INFO', f'Scene {scene_num} image already exists, will show preview dialog: {image_filename}')
-        
-        # Check if persona is part of the scene by analyzing the prompt
-        persona_in_scene = False
-        prompt_lower = prompt.lower()
-        
-        # First check: explicit NO CHARACTERS markers - skip all persona logic if present
-        no_character_markers = ['[no characters]', 'no characters', 'no persona present', 'no human figures', 
-                                'no persona', 'no people', 'no artist', '[no persona]', 'without any human',
-                                'purely environmental', 'purely abstract', 'no human presence']
-        if any(marker in prompt_lower for marker in no_character_markers):
-            self.log_debug('INFO', f'Scene {scene_num} explicitly marked as NO CHARACTERS - skipping persona image')
-            persona_in_scene = False
-        elif self.current_persona:
-            persona_name = self.current_persona.get('name', '').lower()
-            visual_aesthetic = self.current_persona.get('visual_aesthetic', '').lower()
-            base_image_prompt = self.current_persona.get('base_image_prompt', '').lower()
-            
-            # Second check: explicit persona name or character-related keywords
-            if persona_name and persona_name in prompt_lower:
-                persona_in_scene = True
-                self.log_debug('INFO', f'Persona detected in scene {scene_num} by name match')
-            elif any(keyword in prompt_lower for keyword in ['character', 'persona', 'singer', 'artist', 'performer', 'person', 'figure', 'protagonist', 'main character', 'vocalist', 'musician']):
-                persona_in_scene = True
-                self.log_debug('INFO', f'Persona detected in scene {scene_num} by keyword match')
-            # Third check: if no explicit keywords, use AI to analyze if persona should be in scene
-            elif visual_aesthetic or base_image_prompt:
-                try:
-                    self.log_debug('INFO', f'Analyzing scene {scene_num} prompt to determine if persona should be featured...')
-                    analysis_prompt = f"Analyze this music video scene prompt and determine if it should feature the main artist/performer character.\n\n"
-                    analysis_prompt += f"Scene Prompt: {prompt}\n\n"
-                    analysis_prompt += f"Artist/Persona Name: {self.current_persona.get('name', '')}\n"
-                    if visual_aesthetic:
-                        analysis_prompt += f"Persona Visual Aesthetic: {self.current_persona.get('visual_aesthetic', '')}\n"
-                    if base_image_prompt:
-                        analysis_prompt += f"Persona Base Image Description: {self.current_persona.get('base_image_prompt', '')}\n"
-                    analysis_prompt += "\nDetermine if this scene should feature the main artist/performer character. "
-                    analysis_prompt += "Consider: Does the scene describe a person/character? Does it match the persona's visual style? "
-                    analysis_prompt += "Is it a performance scene, close-up, or character-focused scene? "
-                    analysis_prompt += "Respond with ONLY 'YES' if the persona should be featured, or 'NO' if not."
-                    
-                    analysis_result = call_azure_ai(self.ai_config, analysis_prompt, system_message="You are a music video analysis assistant. Analyze scene prompts to determine if they should feature the main artist character.", profile='text')
-                    
-                    if analysis_result['success']:
-                        analysis_response = analysis_result['content'].strip().upper()
-                        if 'YES' in analysis_response or 'SHOULD' in analysis_response or 'FEATURE' in analysis_response:
-                            persona_in_scene = True
-                            self.log_debug('INFO', f'Persona detected in scene {scene_num} by AI analysis')
-                        else:
-                            self.log_debug('INFO', f'Persona NOT detected in scene {scene_num} by AI analysis')
-                    else:
-                        # Fallback: if analysis fails, check if prompt contains visual elements that match persona
-                        # This is a conservative approach - if scene has visual descriptions, assume persona might be there
-                        visual_keywords = ['close-up', 'closeup', 'portrait', 'face', 'expression', 'pose', 'standing', 'sitting', 'performing', 'singing', 'dancing', 'looking', 'gazing']
-                        if any(keyword in prompt_lower for keyword in visual_keywords):
-                            # Check if visual elements match persona aesthetic keywords
-                            persona_keywords = []
-                            if visual_aesthetic:
-                                # Extract key visual words from aesthetic (simple approach)
-                                persona_keywords = [word for word in visual_aesthetic.split() if len(word) > 4]
-                            if base_image_prompt:
-                                persona_keywords.extend([word for word in base_image_prompt.split() if len(word) > 4])
-                            
-                            # If scene mentions visual elements and some match persona keywords, likely persona scene
-                            matching_keywords = [kw for kw in persona_keywords if kw in prompt_lower]
-                            if matching_keywords:
-                                persona_in_scene = True
-                                self.log_debug('INFO', f'Persona detected in scene {scene_num} by visual keyword matching: {matching_keywords[:3]}')
-                except Exception as e:
-                    self.log_debug('WARNING', f'Failed to analyze scene {scene_num} for persona detection: {e}')
-                    # Conservative fallback: if we can't determine, don't assume persona is there
-        
-        # If persona is part of scene, analyze Front Persona Image and include description
-        if persona_in_scene and self.current_persona and self.current_persona_path:
-            safe_name = self.current_persona.get('name', 'persona').replace(' ', '-').replace(':', '_').replace('/', '_').replace('\\', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace("'", '_').replace('<', '_').replace('>', '_').replace('|', '_')
-            front_image_path = os.path.join(self.current_persona_path, f'{safe_name}-Front.png')
-            
-            if os.path.exists(front_image_path):
-                try:
-                    # Downscale Front image by 50% for analysis
-                    from PIL import Image
-                    original_img = Image.open(front_image_path)
-                    new_width = original_img.width // 2
-                    new_height = original_img.height // 2
-                    downscaled_img = original_img.resize((new_width, new_height), Image.Resampling.LANCZOS)
-                    
-                    # Save to temporary file
-                    temp_dir = os.path.join(self.current_song_path, 'temp')
-                    os.makedirs(temp_dir, exist_ok=True)
-                    reference_image_path = os.path.join(temp_dir, f'{safe_name}-Front-downscaled.png')
-                    downscaled_img.save(reference_image_path, 'PNG')
-                    
-                    # Analyze the reference image using vision API to get detailed description
-                    self.log_debug('INFO', f'Analyzing Front Persona Image for scene {scene_num} reference...')
-                    vision_prompt = "Analyze this persona reference image in extreme detail. Provide a comprehensive description of the character's appearance, including: physical features, clothing, styling, colors, accessories, pose, and all visual characteristics. This description will be used to ensure the scene image features the exact same character."
-                    vision_system = "You are an image analysis assistant. Provide a highly detailed, objective description of the character's visual appearance from the reference image. Focus on all visual characteristics that should be preserved in the scene image."
-                    
-                    vision_result = call_azure_vision(self.ai_config, [reference_image_path], vision_prompt, system_message=vision_system, profile='text')
-                    
-                    if vision_result['success']:
-                        character_description = vision_result['content'].strip()
-                        # Insert character description at the beginning of the prompt for better emphasis
-                        prompt = f"REFERENCE CHARACTER DESCRIPTION (from Front Persona Image - MUST MATCH EXACTLY):\n{character_description}\n\n" + prompt
-                        prompt += "\n\nCRITICAL REQUIREMENT: The character in this scene MUST be visually identical to the reference character description above. Match all physical features, clothing, styling, colors, accessories, and visual characteristics exactly. The character appearance must be consistent with the reference image."
-                        self.log_debug('INFO', f'Added character description from Front Persona Image to scene {scene_num} prompt')
-                    else:
-                        # Fallback: just reference the image exists
-                        prompt += f"\n\nIMPORTANT: Use the Front Persona Image as reference. The scene must feature this exact character with matching appearance, styling, and visual characteristics."
-                        self.log_debug('WARNING', f'Failed to analyze reference image for scene {scene_num}: {vision_result.get("error", "Unknown error")}')
-                    
-                    self.log_debug('INFO', f'Using Front Persona Image as reference for scene {scene_num}')
-                except Exception as e:
-                    self.log_debug('WARNING', f'Failed to prepare reference image for scene {scene_num}: {e}')
-        
+
+        final_prompt = self.build_scene_image_prompt(scene_num, prompt, lyrics)
+        embed_enabled = bool(self.embed_lyrics_var.get()) if hasattr(self, 'embed_lyrics_var') else True
+        if not embed_enabled:
+            final_prompt += "\n\nDO NOT embed lyrics as text in the scene. No visible text anywhere. Focus on visuals only."
         self.log_debug('INFO', f'Generating image for scene {scene_num}...')
         self.config(cursor='wait')
         self.update()
-        
-        # Get image size from configuration
+
         image_size = self.get_storyboard_image_size()
-        
+
         try:
-            result = call_azure_image(self.ai_config, prompt, size=image_size, profile='image_gen')
-            
+            result = call_azure_image(self.ai_config, final_prompt, size=image_size, profile='image_gen')
+
             if result['success']:
                 img_bytes = result.get('image_bytes', b'')
                 if img_bytes:
-                    # Save to temp file first (or directly if no existing image)
                     if image_exists:
-                        # Save to temp file for preview
                         temp_filename = os.path.join(self.current_song_path, f'storyboard_scene_{safe_scene}_temp.png')
                         with open(temp_filename, 'wb') as f:
                             f.write(img_bytes)
                         self.log_debug('INFO', f'Scene {scene_num} image generated, saved to temp file: {temp_filename}')
-                        
-                        # Show preview dialog
+
                         preview_dialog = ImagePreviewDialog(self, temp_filename, image_filename, scene_num)
                         self.wait_window(preview_dialog)
-                        
+
                         if preview_dialog.result is True:
-                            # User chose to overwrite - move temp to final location
                             shutil.move(temp_filename, image_filename)
                             self.log_debug('INFO', f'Scene {scene_num} image overwritten: {image_filename}')
+                            overlay_enabled = bool(self.overlay_lyrics_var.get()) if hasattr(self, 'overlay_lyrics_var') else False
+                            if lyrics and overlay_enabled:
+                                self.overlay_lyrics_on_image(image_filename, lyrics, scene_num)
                             if show_success_message:
                                 messagebox.showinfo('Success', f'Scene {scene_num} image generated and saved!')
                             return True
                         elif preview_dialog.result is False:
-                            # User chose to keep existing - delete temp file
                             try:
                                 os.remove(temp_filename)
                                 self.log_debug('INFO', f'Scene {scene_num} - kept existing image, deleted temp file')
@@ -5304,9 +5424,8 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
                                 self.log_debug('WARNING', f'Failed to delete temp file: {e}')
                             if show_success_message:
                                 messagebox.showinfo('Info', f'Scene {scene_num} - kept existing image.')
-                            return True  # Return True because we didn't fail, user just chose to keep existing
+                            return True
                         else:
-                            # User cancelled - delete temp file
                             try:
                                 os.remove(temp_filename)
                                 self.log_debug('INFO', f'Scene {scene_num} - cancelled, deleted temp file')
@@ -5314,15 +5433,14 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
                                 self.log_debug('WARNING', f'Failed to delete temp file: {e}')
                             return False
                     else:
-                        # No existing image - save directly
                         with open(image_filename, 'wb') as f:
                             f.write(img_bytes)
                         self.log_debug('INFO', f'Scene {scene_num} image saved: {image_filename}')
-                        
-                        # Overlay lyrics on the image if available
-                        if lyrics:
+
+                        overlay_enabled = bool(self.overlay_lyrics_var.get()) if hasattr(self, 'overlay_lyrics_var') else False
+                        if lyrics and overlay_enabled:
                             self.overlay_lyrics_on_image(image_filename, lyrics, scene_num)
-                        
+
                         if show_success_message:
                             messagebox.showinfo('Success', f'Scene {scene_num} image generated successfully!')
                         return True
