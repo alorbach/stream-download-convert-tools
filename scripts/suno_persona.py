@@ -1706,6 +1706,11 @@ class SunoPersona(tk.Tk):
         self.debug_text.insert(tk.END, formatted_message)
         self.debug_text.see(tk.END)
         self.debug_text.config(state=tk.DISABLED)
+        # Also echo to console for full visibility
+        try:
+            print(formatted_message, end='')
+        except Exception:
+            pass
     
     def refresh_personas_list(self):
         """Refresh the personas list from the personas directory."""
@@ -2810,15 +2815,9 @@ class SunoPersona(tk.Tk):
         ai_results_notebook.add(storyboard_frame, text='Storyboard')
         self.create_storyboard_tab(storyboard_frame)
         
-        btn_frame = ttk.Frame(scrollable_frame)
-        btn_frame.grid(row=7, column=0, columnspan=4, pady=10)
-        
-        ttk.Button(btn_frame, text='Save Song', command=self.save_song).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text='Export YouTube Description', command=self.export_youtube_description).pack(side=tk.LEFT, padx=5)
-        
         scrollable_frame.columnconfigure(1, weight=1)
         scrollable_frame.rowconfigure(3, weight=1)
-        scrollable_frame.rowconfigure(6, weight=1)
+        scrollable_frame.rowconfigure(7, weight=1)
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
     
@@ -2918,6 +2917,8 @@ class SunoPersona(tk.Tk):
         ttk.Button(action_frame, text='Generate Image (Selected)', command=self.generate_storyboard_image_selected).pack(side=tk.LEFT, padx=5)
         ttk.Button(action_frame, text='Generate All Images', command=self.generate_storyboard_images_all).pack(side=tk.LEFT, padx=5)
         ttk.Button(action_frame, text='Copy Prompt (Selected)', command=self.copy_selected_scene_prompt).pack(side=tk.LEFT, padx=5)
+        ttk.Button(action_frame, text='Save Song', command=self.save_song).pack(side=tk.LEFT, padx=15)
+        ttk.Button(action_frame, text='Export YouTube Description', command=self.export_youtube_description).pack(side=tk.LEFT, padx=5)
         
         # Add right-click context menu for copying prompts
         self.storyboard_context_menu = tk.Menu(self, tearoff=0)
@@ -4241,17 +4242,63 @@ class SunoPersona(tk.Tk):
         sanitized = re.sub(r'\s*\|\s*', ' ', text)
         sanitized = re.sub(r'\s{2,}', ' ', sanitized)
         return sanitized.strip()
+
+    def sanitize_prompt_no_lyrics(self, prompt_text: str) -> str:
+        """Remove any lines mentioning lyrics when scene has no lyrics."""
+        if not prompt_text:
+            return prompt_text
+        lines = prompt_text.splitlines()
+        kept = []
+        for line in lines:
+            if re.search(r'^\s*lyrics\b', line, flags=re.IGNORECASE):
+                continue
+            kept.append(line)
+        return '\n'.join(kept).strip()
+
+    def is_non_lyric_marker(self, text: str) -> bool:
+        """Return True if the text is a structural/non-lyric marker (e.g., instrumental intro)."""
+        if not text:
+            return True
+        t = text.strip().lower()
+        marker_words = {
+            'instrumental', 'instrumental intro', 'intro', 'outro', 'bridge', 'chorus', 'verse', 'hook',
+            '(instrumental)', '(instrumental intro)'
+        }
+        if t in marker_words:
+            return True
+        if ('instrumental' in t) and len(t) <= 80:
+            return True
+        if t.startswith('(') and t.endswith(')') and len(t) <= 80:
+            return True
+        return False
+
+    def filter_sparse_trailing_lyrics(self, lyric_segments: list, gap_seconds: float = 20.0, max_words: int = 2) -> list:
+        """Drop isolated, very short lyric fragments after long gaps (no fixed cutoff).
+        
+        If the time gap since the last kept lyric exceeds gap_seconds AND the current line
+        has very few words (<= max_words), the line is dropped. Gaps reset after every kept line.
+        """
+        if not lyric_segments:
+            return lyric_segments
+        filtered = []
+        last_kept_time = None
+        for start, end, text in lyric_segments:
+            word_count = len(text.strip().split())
+            if last_kept_time is not None and (start - last_kept_time) > gap_seconds and word_count <= max_words:
+                continue
+            filtered.append((start, end, text))
+            last_kept_time = start
+        return filtered
     
     def get_lyrics_for_scene(self, scene_start_time: float, scene_end_time: float, lyric_segments: list) -> str:
-        """Get lyrics that match a scene's time range."""
+        """Get lyrics whose start time falls within the scene window."""
         matching_lyrics = []
         
         for lyric_start, lyric_end, lyric_text in lyric_segments:
-            # Check if lyric overlaps with scene time range
-            if lyric_start < scene_end_time and lyric_end > scene_start_time:
-                # Clean the lyric text to remove structural markers
+            # Only include lyrics that start within the scene window
+            if scene_start_time <= lyric_start < scene_end_time:
                 cleaned_text = self.clean_lyrics_text(lyric_text)
-                if cleaned_text:  # Only add if there's actual content after cleaning
+                if cleaned_text and not self.is_non_lyric_marker(cleaned_text):
                     matching_lyrics.append(cleaned_text)
         
         if matching_lyrics:
@@ -4345,24 +4392,34 @@ class SunoPersona(tk.Tk):
             lyric_segments = []
             if lyrics and song_duration > 0:
                 lyric_segments = self.parse_lyrics_with_timing(lyrics, song_duration)
+                # Drop isolated tiny fragments if they're separated by more than one scene length
+                lyric_segments = self.filter_sparse_trailing_lyrics(
+                    lyric_segments,
+                    gap_seconds=float(seconds_per_video),
+                    max_words=2
+                )
                 if lyric_segments:
                     self.log_debug('INFO', f'Parsed {len(lyric_segments)} lyric segments from song duration {song_duration:.1f}s')
-            
+            else:
+                self.log_debug('WARNING', 'No lyrics or invalid song duration; skipping lyric-based storyboard hints')
             # Calculate scenes needed
             num_scenes = int(song_duration / seconds_per_video) + (1 if song_duration % seconds_per_video > 0 else 0)
             
             # Build scene-by-scene lyrics information if available
             scene_lyrics_info = ""
             scene_lyrics_dict = {}
-            if lyric_segments and song_duration > 0:
+            if song_duration > 0:
                 scene_lyrics_info = "\n<LYRICS_TIMING>\n"
                 current_time = 0.0
                 for scene_idx in range(1, num_scenes + 1):
                     scene_start_time = current_time
                     scene_end_time = min(current_time + seconds_per_video, song_duration)
-                    scene_lyrics = self.sanitize_lyrics_for_prompt(self.get_lyrics_for_scene(scene_start_time, scene_end_time, lyric_segments))
+                    scene_lyrics = ""
+                    if lyric_segments:
+                        scene_lyrics = self.sanitize_lyrics_for_prompt(self.get_lyrics_for_scene(scene_start_time, scene_end_time, lyric_segments))
+                    ts_label = self.format_timestamp(scene_start_time)
+                    scene_lyrics_info += f"Scene {scene_idx} ({ts_label}): {scene_lyrics if scene_lyrics else '[NO LYRICS]'}\n"
                     if scene_lyrics:
-                        scene_lyrics_info += f"Scene {scene_idx} ({scene_start_time:.1f}s-{scene_end_time:.1f}s): {scene_lyrics}\n"
                         scene_lyrics_dict[scene_idx] = scene_lyrics
                     current_time = scene_end_time
                     if current_time >= song_duration:
@@ -4375,16 +4432,23 @@ class SunoPersona(tk.Tk):
                     lyrics_rule = """
    - Each scene MUST visualize its corresponding lyrics from LYRICS_TIMING
    - Embed lyrics INTO the environment (carved in walls, neon signs, formed by patterns)
-   - NEVER use text overlays, subtitles, or floating text"""
+   - NEVER use text overlays, subtitles, or floating text
+   - If a scene has no lyrics entry for its time range, DO NOT add any "Lyrics ..." text or placeholders; keep that scene text-free.
+     [NO LYRICS] marker should be used to indicate that the scene has no lyrics."""
                 else:
                     lyrics_rule = """
    - Each scene should reflect the mood/meaning of its lyrics from LYRICS_TIMING
    - Do NOT render or embed any visible text or lyrics in the scene
-   - Keep all scenes text-free (no overlays, no environmental text)"""
+   - Keep all scenes text-free (no overlays, no environmental text)
+   - [NO LYRICS] marker should be used to indicate that the scene has no lyrics."""
             else:
                 lyrics_rule = """
-   - Visualize song theme and mood in each scene"""
+   - Visualize song theme and mood in each scene
+   - [NO LYRICS] marker should be used to indicate that the scene has no lyrics."""
             
+            # Prepare lyrics block for prompt (scene-timestamped if available)
+            scene_lyrics_block = scene_lyrics_info.strip() if scene_lyrics_info and scene_lyrics_info.strip() else 'No timestamped lyrics available'
+
             # Build improved prompt with clear structure and best practices
             prompt = f"""Generate {num_scenes} music video scene prompts for a {song_duration:.1f} second song ({seconds_per_video}s per scene).
 
@@ -4402,9 +4466,8 @@ Vibe: {vibe if vibe else 'N/A'}
 </PERSONA_REFERENCE>
 
 <LYRICS>
-{lyrics if lyrics else 'No lyrics provided'}
+{scene_lyrics_block}
 </LYRICS>
-{scene_lyrics_info}
 <RULES priority="high-to-low">
 1. NARRATIVE ARC: Build a visual story following the song's emotional journey (intro-build-climax-resolution). Each scene advances the narrative.
 
@@ -4435,35 +4498,14 @@ Vibe: {vibe if vibe else 'N/A'}
 </RULES>
 
 <OUTPUT_FORMAT>
+IMPORTANT: SAMPLE FORMAT ONLY. DO NOT COPY ANY SAMPLE TEXT INTO THE ACTUAL OUTPUT.
 Start immediately with SCENE 1. No preamble or questions.
 
-SCENE 1: {seconds_per_video} seconds"""
-            
-            # Add one comprehensive example
-            example_lyrics = scene_lyrics_dict.get(1, 'sample lyrics here')
-            if scene_lyrics_info and example_lyrics:
-                if embed_lyrics:
-                    prompt += f"""
-LYRICS: "{example_lyrics}"
-[Detailed visual description matching the lyrics mood and imagery. Include shot type, lighting, colors, setting. End with: 'Lyrics "{example_lyrics}" integrated as [specific environment method - e.g., glowing neon on wet pavement, etched into stone, formed by smoke wisps]']
+SCENE 1: {seconds_per_video} seconds
+[NO CHARACTERS] [If LYRICS_TIMING shows [NO LYRICS] for this scene, leave it text-free and do NOT invent or embed any lyrics.]
 
 SCENE 2: {seconds_per_video} seconds
-[NO CHARACTERS] [Detailed abstract/environmental scene - atmospheric visuals, symbolic imagery, no human figures. Different shot type and palette from Scene 1.]"""
-                else:
-                    prompt += f"""
-LYRICS: "{example_lyrics}"
-[Detailed visual description matching the lyrics mood and imagery. Include shot type, lighting, colors, setting. Do NOT render lyrics as text anywhere; keep scene text-free.]
-
-SCENE 2: {seconds_per_video} seconds
-[NO CHARACTERS] [Detailed abstract/environmental scene - atmospheric visuals, symbolic imagery, no human figures. Different shot type and palette from Scene 1.]"""
-            else:
-                prompt += f"""
-[Detailed visual description. Include shot type, lighting, colors, setting, mood.]
-
-SCENE 2: {seconds_per_video} seconds
-[NO CHARACTERS] [Abstract/environmental scene - no human figures. Different composition from Scene 1.]"""
-            
-            prompt += f"""
+[NO CHARACTERS] [Detailed abstract/environmental scene - atmospheric visuals, symbolic imagery, no human figures. Different shot type and palette from Scene 1.]
 
 ...continue through SCENE {num_scenes}...
 </OUTPUT_FORMAT>
@@ -4498,6 +4540,16 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
             # Add generous buffer: estimated + 50% buffer, minimum 8000, maximum 64000
             max_tokens = min(max(int(estimated_tokens * 1.5), 8000), 64000)
             self.log_debug('INFO', f'Using max_tokens: {max_tokens} for {num_scenes} scenes (estimated: {estimated_tokens} tokens)')
+            self.log_debug('DEBUG', f'Storyboard prompt (about to send):\n{"="*80}\n{prompt}\n{"="*80}')
+            self.save_storyboard_prompt(
+                prompt,
+                seconds_per_video,
+                {
+                    'mode': 'single',
+                    'num_scenes': num_scenes,
+                    'seconds_per_video': seconds_per_video
+                }
+            )
             
             result = call_azure_ai(self.ai_config, prompt, system_message=system_message, profile='text', max_tokens=max_tokens, temperature=1)
             
@@ -4507,6 +4559,8 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
                 
                 # Always log full AI response for debugging
                 self.log_debug('DEBUG', f'Full AI response:\n{"="*80}\n{content}\n{"="*80}')
+                # Also surface the storyboard prompts in debug for quick review
+                self.log_debug('DEBUG', f'Storyboard prompts (latest response):\n{content}')
 
                 # Persist raw response for auditing
                 self.save_storyboard_raw_response(
@@ -4554,12 +4608,25 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
                             visual_aesthetic, base_image_prompt, vibe, lyric_segments,
                             song_duration, seconds_per_video, batch_start, batch_end, num_scenes
                         )
+                        self.log_debug('DEBUG', f'Storyboard prompt batch {batch_start}-{batch_end} (about to send):\n{"="*80}\n{batch_prompt[:4000]}\n{"="*80}')
+                        self.save_storyboard_prompt(
+                            batch_prompt,
+                            seconds_per_video,
+                            {
+                                'mode': 'batch',
+                                'batch_start': batch_start,
+                                'batch_end': batch_end,
+                                'num_scenes': num_scenes,
+                                'seconds_per_video': seconds_per_video
+                            }
+                        )
                         
                         batch_result = call_azure_ai(self.ai_config, batch_prompt, system_message=system_message, max_tokens=max_tokens, temperature=1)
                         
                         if batch_result['success']:
                             batch_content = batch_result['content'].strip()
                             self.log_debug('DEBUG', f'Batch {batch_start}-{batch_end} response (length: {len(batch_content)} chars)')
+                            self.log_debug('DEBUG', f'Storyboard prompts batch {batch_start}-{batch_end}:\n{batch_content}')
                             self.save_storyboard_raw_response(
                                 batch_content,
                                 seconds_per_video,
@@ -4851,6 +4918,7 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
         
         current_scene = None
         current_prompt = []
+        scene_lyrics = ''
         scene_num = 1
         scenes_found = 0
         
@@ -4866,17 +4934,21 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
                 # Save previous scene if exists
                 if current_scene is not None and current_prompt:
                     prompt_text = '\n'.join(current_prompt).strip()
+                    # If no lyrics for this scene, strip any "lyrics" lines from prompt
+                    if not scene_lyrics or scene_lyrics.strip().lower() == '[no lyrics]':
+                        prompt_text = self.sanitize_prompt_no_lyrics(prompt_text)
+                        scene_lyrics = ''
                     if prompt_text:
                         # Calculate lyrics for this scene
-                        scene_lyrics = ''
-                        if lyric_segments and song_duration > 0:
+                        scene_lyrics_calc = scene_lyrics
+                        if lyric_segments and song_duration > 0 and not scene_lyrics_calc:
                             scene_start_time = (current_scene - 1) * default_duration
                             scene_end_time = min(scene_start_time + default_duration, song_duration)
-                            scene_lyrics = self.get_lyrics_for_scene(scene_start_time, scene_end_time, lyric_segments)
+                            scene_lyrics_calc = self.get_lyrics_for_scene(scene_start_time, scene_end_time, lyric_segments)
                         scene_timestamp = self.format_timestamp((current_scene - 1) * default_duration)
-                        self.storyboard_tree.insert('', tk.END, values=(current_scene, scene_timestamp, f'{default_duration}s', scene_lyrics, prompt_text))
+                        self.storyboard_tree.insert('', tk.END, values=(current_scene, scene_timestamp, f'{default_duration}s', scene_lyrics_calc, prompt_text))
                         scenes_found += 1
-                        self.log_debug('DEBUG', f'Saved scene {current_scene} with prompt length {len(prompt_text)} chars, lyrics: {scene_lyrics[:50] if scene_lyrics else "none"}')
+                        self.log_debug('DEBUG', f'Saved scene {current_scene} with prompt length {len(prompt_text)} chars, lyrics: {scene_lyrics_calc[:50] if scene_lyrics_calc else "none"}')
                     else:
                         self.log_debug('WARNING', f'Scene {current_scene} has empty prompt, skipping')
                 
@@ -4905,6 +4977,7 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
                     current_prompt = []
                 else:
                     self.log_debug('WARNING', f'Scene marker format unexpected: {line}')
+                scene_lyrics = ''
             elif current_scene is not None:
                 # Add to current prompt
                 current_prompt.append(line)
@@ -4964,6 +5037,31 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
             self.log_debug('INFO', f'Storyboard raw response saved to {filename}')
         except Exception as exc:
             self.log_debug('WARNING', f'Failed to save storyboard raw response: {exc}')
+
+    def save_storyboard_prompt(self, prompt_text: str, seconds_per_video: int, metadata=None):
+        """Save the full storyboard prompt to a text file for debugging."""
+        if not prompt_text:
+            return
+        song_path = getattr(self, 'current_song_path', '')
+        if not song_path:
+            self.log_debug('WARNING', 'Cannot save storyboard prompt - song path is not set.')
+            return
+        try:
+            os.makedirs(song_path, exist_ok=True)
+            import datetime
+            timestamp = datetime.datetime.now()
+            filename = os.path.join(song_path, f'storyboard_prompt_{timestamp.strftime("%Y%m%d_%H%M%S")}.txt')
+            data = {
+                'timestamp': timestamp.isoformat(),
+                'seconds_per_video': seconds_per_video,
+                'metadata': metadata or {},
+                'prompt': prompt_text
+            }
+            with open(filename, 'w', encoding='utf-8') as f:
+                f.write(json.dumps(data, ensure_ascii=False, indent=2))
+            self.log_debug('INFO', f'Storyboard prompt saved to {filename}')
+        except Exception as exc:
+            self.log_debug('WARNING', f'Failed to save storyboard prompt: {exc}')
 
     def generate_storyboard_image_selected(self):
         """Generate images for the selected storyboard scenes (supports multiple selection)."""
