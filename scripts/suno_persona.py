@@ -3255,9 +3255,17 @@ class SunoPersona(tk.Tk):
         self.create_song_details_form(song_details_frame)
     
     def create_song_details_form(self, parent):
-        """Create the song details editing form."""
-        canvas = tk.Canvas(parent)
-        scrollbar = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
+        """Create the song details editing form with Song/Storyboard tabs."""
+        details_notebook = ttk.Notebook(parent)
+        details_notebook.pack(fill=tk.BOTH, expand=True)
+
+        song_details_tab = ttk.Frame(details_notebook)
+        storyboard_tab = ttk.Frame(details_notebook)
+        details_notebook.add(song_details_tab, text='Song Details')
+        details_notebook.add(storyboard_tab, text='Storyboard')
+
+        canvas = tk.Canvas(song_details_tab)
+        scrollbar = ttk.Scrollbar(song_details_tab, orient="vertical", command=canvas.yview)
         scrollable_frame = ttk.Frame(canvas)
         
         scrollable_frame.bind(
@@ -3320,14 +3328,11 @@ class SunoPersona(tk.Tk):
         self.merged_style_text.grid(row=5, column=1, columnspan=2, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
         ttk.Button(scrollable_frame, text='Merge', command=self.merge_song_style).grid(row=5, column=3, padx=5, pady=5, sticky=tk.N)
 
-        # Lyrics handling options
-        options_frame = ttk.LabelFrame(scrollable_frame, text='Lyrics Handling', padding=5)
-        options_frame.grid(row=6, column=0, columnspan=4, sticky=tk.W+tk.E, pady=(5, 10), padx=5)
-        self.overlay_lyrics_var = tk.BooleanVar(value=False)
-        self.embed_lyrics_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(options_frame, text='Overlay lyrics on image (bottom bar)', variable=self.overlay_lyrics_var).pack(anchor=tk.W, pady=2)
-        ttk.Checkbutton(options_frame, text='Embed lyrics into scene prompts', variable=self.embed_lyrics_var).pack(anchor=tk.W, pady=2)
-        
+        ttk.Label(scrollable_frame, text='Song Description (<=500 chars):', font=('TkDefaultFont', 9, 'bold')).grid(row=6, column=0, sticky=tk.NW, pady=5)
+        self.song_description_text = scrolledtext.ScrolledText(scrollable_frame, height=3, wrap=tk.WORD, width=60)
+        self.song_description_text.grid(row=6, column=1, columnspan=2, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
+        ttk.Button(scrollable_frame, text='Generate', command=self.generate_song_description).grid(row=6, column=3, padx=5, pady=5, sticky=tk.N)
+
         ai_results_notebook = ttk.Notebook(scrollable_frame)
         ai_results_notebook.grid(row=7, column=0, columnspan=4, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
         
@@ -3379,15 +3384,14 @@ class SunoPersona(tk.Tk):
         ai_results_notebook.add(extracted_lyrics_frame, text='Extracted Lyrics')
         self.create_extracted_lyrics_tab(extracted_lyrics_frame)
         
-        storyboard_frame = ttk.Frame(ai_results_notebook)
-        ai_results_notebook.add(storyboard_frame, text='Storyboard')
-        self.create_storyboard_tab(storyboard_frame)
-        
         scrollable_frame.columnconfigure(1, weight=1)
         scrollable_frame.rowconfigure(3, weight=1)
         scrollable_frame.rowconfigure(7, weight=1)
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
+
+        # Storyboard tab (full details) now lives beside Song Details
+        self.create_storyboard_tab(storyboard_tab)
     
     def create_extracted_lyrics_tab(self, parent):
         """Create the Extracted Lyrics tab for displaying lyrics extracted from MP3."""
@@ -3434,8 +3438,18 @@ class SunoPersona(tk.Tk):
                                                 '4:3 (1365x1024)', '9:16 (1024x1792)', '21:9 (2048x1024)'],
                                         state='readonly', width=18)
         image_size_combo.pack(side=tk.LEFT, padx=5)
-        
+
+        ttk.Button(controls_frame, text='Save Song', command=self.save_song).pack(side=tk.LEFT, padx=(10, 5))
+        ttk.Button(controls_frame, text='Export YouTube Description', command=self.export_youtube_description).pack(side=tk.LEFT, padx=5)
         ttk.Button(controls_frame, text='Generate Storyboard', command=self.generate_storyboard).pack(side=tk.LEFT, padx=10)
+
+        # Lyrics handling options (moved to storyboard)
+        options_frame = ttk.LabelFrame(main_frame, text='Lyrics Handling', padding=5)
+        options_frame.pack(fill=tk.X, pady=(0, 10))
+        self.overlay_lyrics_var = tk.BooleanVar(value=False)
+        self.embed_lyrics_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(options_frame, text='Overlay lyrics on image (bottom bar)', variable=self.overlay_lyrics_var).pack(anchor=tk.W, pady=2)
+        ttk.Checkbutton(options_frame, text='Embed lyrics into scene prompts', variable=self.embed_lyrics_var).pack(anchor=tk.W, pady=2)
         
         # Storyboard scenes list
         list_frame = ttk.LabelFrame(main_frame, text='Storyboard Scenes', padding=5)
@@ -3477,6 +3491,13 @@ class SunoPersona(tk.Tk):
         self.storyboard_tree.bind("<MouseWheel>", on_mousewheel_storyboard)
         self.storyboard_tree.bind("<Button-4>", on_mousewheel_storyboard)
         self.storyboard_tree.bind("<Button-5>", on_mousewheel_storyboard)
+
+        # Auto-preview full prompt for selected scene
+        self.storyboard_tree.bind('<<TreeviewSelect>>', self.on_storyboard_select)
+        preview_frame = ttk.LabelFrame(main_frame, text='Selected Scene Preview', padding=5)
+        preview_frame.pack(fill=tk.BOTH, expand=False, pady=(0, 8))
+        self.storyboard_preview_text = scrolledtext.ScrolledText(preview_frame, height=6, wrap=tk.WORD, state='disabled')
+        self.storyboard_preview_text.pack(fill=tk.BOTH, expand=True)
         
         # Action buttons
         action_frame = ttk.Frame(main_frame)
@@ -3485,8 +3506,6 @@ class SunoPersona(tk.Tk):
         ttk.Button(action_frame, text='Generate Image (Selected)', command=self.generate_storyboard_image_selected).pack(side=tk.LEFT, padx=5)
         ttk.Button(action_frame, text='Generate All Images', command=self.generate_storyboard_images_all).pack(side=tk.LEFT, padx=5)
         ttk.Button(action_frame, text='Copy Prompt (Selected)', command=self.copy_selected_scene_prompt).pack(side=tk.LEFT, padx=5)
-        ttk.Button(action_frame, text='Save Song', command=self.save_song).pack(side=tk.LEFT, padx=15)
-        ttk.Button(action_frame, text='Export YouTube Description', command=self.export_youtube_description).pack(side=tk.LEFT, padx=5)
         
         # Add right-click context menu for copying prompts
         self.storyboard_context_menu = tk.Menu(self, tearoff=0)
@@ -3602,6 +3621,31 @@ class SunoPersona(tk.Tk):
             self.clipboard_clear()
             self.clipboard_append(text_to_copy)
             self.update()
+
+    def on_storyboard_select(self, event=None):
+        """Show full prompt for the first selected storyboard scene."""
+        if not hasattr(self, 'storyboard_tree') or not hasattr(self, 'storyboard_preview_text'):
+            return
+        selection = self.storyboard_tree.selection()
+        if not selection:
+            self.storyboard_preview_text.config(state='normal')
+            self.storyboard_preview_text.delete('1.0', tk.END)
+            self.storyboard_preview_text.config(state='disabled')
+            return
+        item = selection[0]
+        values = self.storyboard_tree.item(item, 'values')
+        if len(values) < 5:
+            return
+        scene_num, timestamp, duration, lyrics, prompt = values[0], values[1], values[2], values[3], values[4]
+        final_prompt = self.scene_final_prompts.get(str(scene_num)) or self.build_scene_image_prompt(scene_num, prompt, lyrics)
+        text = f"Scene {scene_num} @ {timestamp} ({duration})\n"
+        if lyrics:
+            text += f"Lyrics: {lyrics}\n"
+        text += "\n" + self.sanitize_lyrics_for_prompt(final_prompt)
+        self.storyboard_preview_text.config(state='normal')
+        self.storyboard_preview_text.delete('1.0', tk.END)
+        self.storyboard_preview_text.insert('1.0', text)
+        self.storyboard_preview_text.config(state='disabled')
     
     def refresh_songs_list(self):
         """Refresh the songs list for the current persona."""
@@ -3705,6 +3749,7 @@ class SunoPersona(tk.Tk):
                 'lyrics': '',
                 'song_style': '',
                 'merged_style': '',
+                'song_description': '',
                 'album_cover': '',
                 'video_loop': '',
                 'storyboard': [],
@@ -3753,6 +3798,8 @@ class SunoPersona(tk.Tk):
         self.song_style_text.insert('1.0', self.current_song.get('song_style', ''))
         self.merged_style_text.delete('1.0', tk.END)
         self.merged_style_text.insert('1.0', self.current_song.get('merged_style', ''))
+        self.song_description_text.delete('1.0', tk.END)
+        self.song_description_text.insert('1.0', self.current_song.get('song_description', ''))
         self.album_cover_text.delete('1.0', tk.END)
         self.album_cover_text.insert('1.0', self.current_song.get('album_cover', ''))
         self.video_loop_text.delete('1.0', tk.END)
@@ -3795,6 +3842,8 @@ class SunoPersona(tk.Tk):
             self.extracted_lyrics_text.delete('1.0', tk.END)
         self.song_style_text.delete('1.0', tk.END)
         self.merged_style_text.delete('1.0', tk.END)
+        if hasattr(self, 'song_description_text'):
+            self.song_description_text.delete('1.0', tk.END)
         self.album_cover_text.delete('1.0', tk.END)
         self.video_loop_text.delete('1.0', tk.END)
         if hasattr(self, 'overlay_lyrics_var'):
@@ -3921,6 +3970,7 @@ class SunoPersona(tk.Tk):
             'extracted_lyrics': self.extracted_lyrics_text.get('1.0', tk.END).strip() if hasattr(self, 'extracted_lyrics_text') else self.current_song.get('extracted_lyrics', '') if self.current_song else '',
             'song_style': self.song_style_text.get('1.0', tk.END).strip(),
             'merged_style': self.merged_style_text.get('1.0', tk.END).strip(),
+            'song_description': self.song_description_text.get('1.0', tk.END).strip() if hasattr(self, 'song_description_text') else self.current_song.get('song_description', '') if self.current_song else '',
             'album_cover': self.album_cover_text.get('1.0', tk.END).strip(),
             'video_loop': self.video_loop_text.get('1.0', tk.END).strip(),
             'storyboard': self.get_storyboard_data() if hasattr(self, 'storyboard_tree') else [],
@@ -4026,6 +4076,58 @@ class SunoPersona(tk.Tk):
         except Exception as e:
             messagebox.showerror('Error', f'Error generating lyrics: {e}')
             self.log_debug('ERROR', f'Error generating lyrics: {e}')
+        finally:
+            self.config(cursor='')
+
+    def generate_song_description(self):
+        """Generate a concise song description (<=500 chars) using AI."""
+        if not self.current_persona:
+            messagebox.showwarning('Warning', 'Please select a persona first.')
+            return
+        
+        song_name = self.song_name_var.get().strip()
+        full_song_name = self.full_song_name_var.get().strip() or song_name
+        persona_name = self.current_persona.get('name', '')
+        style = self.merged_style_text.get('1.0', tk.END).strip() or self.song_style_text.get('1.0', tk.END).strip()
+        lyric_ideas = self.lyric_ideas_text.get('1.0', tk.END).strip()
+        lyrics = self.lyrics_text.get('1.0', tk.END).strip()
+        
+        if not song_name:
+            messagebox.showwarning('Warning', 'Please enter a song name.')
+            return
+        
+        prompt = (
+            f"Write a concise, engaging description for the song '{full_song_name}' "
+            f"by the AI persona '{persona_name}'. "
+            f"Keep it promotional and vivid, avoid hashtags and bullet points."
+        )
+        if style:
+            prompt += f"\nStyle / vibe hints: {style}"
+        if lyric_ideas:
+            prompt += f"\nLyric ideas or themes: {lyric_ideas[:400]}"
+        if lyrics:
+            prompt += f"\nUse the mood of these lyrics (optional, do not quote): {lyrics[:600]}"
+        prompt += "\nHard limit: 500 characters max. Aim for 400-500 chars. Return plain text, no quotes."
+        
+        self.log_debug('INFO', 'Generating song description...')
+        self.config(cursor='wait')
+        self.update()
+        
+        try:
+            result = call_azure_ai(self.ai_config, prompt, profile='text')
+            if result['success']:
+                desc = result['content'].strip().replace('\n', ' ')
+                if len(desc) > 500:
+                    desc = desc[:500].rstrip()
+                self.song_description_text.delete('1.0', tk.END)
+                self.song_description_text.insert('1.0', desc)
+                self.log_debug('INFO', f'Song description generated ({len(desc)} chars)')
+            else:
+                messagebox.showerror('Error', f'Failed to generate song description: {result["error"]}')
+                self.log_debug('ERROR', f'Failed to generate song description: {result["error"]}')
+        except Exception as e:
+            messagebox.showerror('Error', f'Error generating song description: {e}')
+            self.log_debug('ERROR', f'Error generating song description: {e}')
         finally:
             self.config(cursor='')
 
