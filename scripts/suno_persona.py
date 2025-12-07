@@ -12,6 +12,7 @@ import time
 import shutil
 import re
 import subprocess
+from difflib import SequenceMatcher
 from PIL import Image, ImageTk, ImageDraw, ImageFont
 
 # Try to import mutagen for MP3 duration and lyrics extraction
@@ -1745,6 +1746,7 @@ def load_song_config(song_path: str) -> dict:
         'extracted_lyrics': '',
         'song_style': '',
         'merged_style': '',
+        'storyboard_theme': '',
         'album_cover': '',
         'video_loop': '',
         'storyboard': [],
@@ -1754,7 +1756,8 @@ def load_song_config(song_path: str) -> dict:
         'album_cover_format': 'PNG',
         'video_loop_size': '9:16 (720x1280)',
         'overlay_lyrics_on_image': False,
-        'embed_lyrics_in_prompt': True
+        'embed_lyrics_in_prompt': True,
+        'persona_scene_percent': 35
     }
     
     if os.path.exists(config_file):
@@ -3256,6 +3259,12 @@ class SunoPersona(tk.Tk):
     
     def create_song_details_form(self, parent):
         """Create the song details editing form with Song/Storyboard tabs."""
+        # Action buttons above tabs
+        header_actions = ttk.Frame(parent)
+        header_actions.pack(fill=tk.X, pady=(0, 6))
+        ttk.Button(header_actions, text='Save Song', command=self.save_song).pack(side=tk.LEFT, padx=5)
+        ttk.Button(header_actions, text='Export YouTube Description', command=self.export_youtube_description).pack(side=tk.LEFT, padx=5)
+
         details_notebook = ttk.Notebook(parent)
         details_notebook.pack(fill=tk.BOTH, expand=True)
 
@@ -3328,13 +3337,18 @@ class SunoPersona(tk.Tk):
         self.merged_style_text.grid(row=5, column=1, columnspan=2, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
         ttk.Button(scrollable_frame, text='Merge', command=self.merge_song_style).grid(row=5, column=3, padx=5, pady=5, sticky=tk.N)
 
-        ttk.Label(scrollable_frame, text='Song Description (<=500 chars):', font=('TkDefaultFont', 9, 'bold')).grid(row=6, column=0, sticky=tk.NW, pady=5)
+        ttk.Label(scrollable_frame, text='Storyboard Theme / Global Image Style:', font=('TkDefaultFont', 9, 'bold')).grid(row=6, column=0, sticky=tk.NW, pady=5)
+        self.storyboard_theme_text = scrolledtext.ScrolledText(scrollable_frame, height=3, wrap=tk.WORD, width=60)
+        self.storyboard_theme_text.grid(row=6, column=1, columnspan=2, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
+        ttk.Button(scrollable_frame, text='Use Merged Style', command=self.set_storyboard_theme_from_merged_style).grid(row=6, column=3, padx=5, pady=5, sticky=tk.N)
+
+        ttk.Label(scrollable_frame, text='Song Description (<=500 chars):', font=('TkDefaultFont', 9, 'bold')).grid(row=7, column=0, sticky=tk.NW, pady=5)
         self.song_description_text = scrolledtext.ScrolledText(scrollable_frame, height=3, wrap=tk.WORD, width=60)
-        self.song_description_text.grid(row=6, column=1, columnspan=2, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
-        ttk.Button(scrollable_frame, text='Generate', command=self.generate_song_description).grid(row=6, column=3, padx=5, pady=5, sticky=tk.N)
+        self.song_description_text.grid(row=7, column=1, columnspan=2, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
+        ttk.Button(scrollable_frame, text='Generate', command=self.generate_song_description).grid(row=7, column=3, padx=5, pady=5, sticky=tk.N)
 
         ai_results_notebook = ttk.Notebook(scrollable_frame)
-        ai_results_notebook.grid(row=7, column=0, columnspan=4, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
+        ai_results_notebook.grid(row=8, column=0, columnspan=4, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
         
         album_cover_frame = ttk.Frame(ai_results_notebook)
         ai_results_notebook.add(album_cover_frame, text='Album Cover')
@@ -3386,7 +3400,7 @@ class SunoPersona(tk.Tk):
         
         scrollable_frame.columnconfigure(1, weight=1)
         scrollable_frame.rowconfigure(3, weight=1)
-        scrollable_frame.rowconfigure(7, weight=1)
+        scrollable_frame.rowconfigure(8, weight=1)
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
@@ -3439,8 +3453,10 @@ class SunoPersona(tk.Tk):
                                         state='readonly', width=18)
         image_size_combo.pack(side=tk.LEFT, padx=5)
 
-        ttk.Button(controls_frame, text='Save Song', command=self.save_song).pack(side=tk.LEFT, padx=(10, 5))
-        ttk.Button(controls_frame, text='Export YouTube Description', command=self.export_youtube_description).pack(side=tk.LEFT, padx=5)
+        ttk.Label(controls_frame, text='Persona Scenes %:', font=('TkDefaultFont', 9, 'bold')).pack(side=tk.LEFT, padx=(10, 5))
+        self.persona_scene_percent_var = tk.StringVar(value='35')
+        ttk.Spinbox(controls_frame, from_=0, to=100, textvariable=self.persona_scene_percent_var, width=4).pack(side=tk.LEFT, padx=2)
+
         ttk.Button(controls_frame, text='Generate Storyboard', command=self.generate_storyboard).pack(side=tk.LEFT, padx=10)
 
         # Lyrics handling options (moved to storyboard)
@@ -3798,6 +3814,11 @@ class SunoPersona(tk.Tk):
         self.song_style_text.insert('1.0', self.current_song.get('song_style', ''))
         self.merged_style_text.delete('1.0', tk.END)
         self.merged_style_text.insert('1.0', self.current_song.get('merged_style', ''))
+        if hasattr(self, 'storyboard_theme_text'):
+            self.storyboard_theme_text.delete('1.0', tk.END)
+            self.storyboard_theme_text.insert('1.0', self.current_song.get('storyboard_theme', ''))
+        if hasattr(self, 'persona_scene_percent_var'):
+            self.persona_scene_percent_var.set(str(self.current_song.get('persona_scene_percent', 35)))
         self.song_description_text.delete('1.0', tk.END)
         self.song_description_text.insert('1.0', self.current_song.get('song_description', ''))
         self.album_cover_text.delete('1.0', tk.END)
@@ -3842,6 +3863,10 @@ class SunoPersona(tk.Tk):
             self.extracted_lyrics_text.delete('1.0', tk.END)
         self.song_style_text.delete('1.0', tk.END)
         self.merged_style_text.delete('1.0', tk.END)
+        if hasattr(self, 'storyboard_theme_text'):
+            self.storyboard_theme_text.delete('1.0', tk.END)
+        if hasattr(self, 'persona_scene_percent_var'):
+            self.persona_scene_percent_var.set('35')
         if hasattr(self, 'song_description_text'):
             self.song_description_text.delete('1.0', tk.END)
         self.album_cover_text.delete('1.0', tk.END)
@@ -3869,6 +3894,26 @@ class SunoPersona(tk.Tk):
         
         mp3_filename = get_mp3_filename(full_song_name)
         return os.path.join(self.current_song_path, mp3_filename)
+
+    def get_album_cover_filepath(self) -> str:
+        """Get the album cover image file path for the current song if it exists."""
+        if not self.current_song_path:
+            return ''
+
+        full_song_name = self.full_song_name_var.get().strip()
+        if not full_song_name:
+            full_song_name = self.song_name_var.get().strip() or 'album_cover'
+
+        safe_basename = full_song_name.replace(':', '_').replace('/', '_').replace('\\', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace("'", "'").replace('<', '_').replace('>', '_').replace('|', '_')
+        candidates = [
+            os.path.join(self.current_song_path, f'{safe_basename}-Cover.png'),
+            os.path.join(self.current_song_path, f'{safe_basename}-Cover.jpg'),
+            os.path.join(self.current_song_path, f'{safe_basename}-Cover.jpeg'),
+        ]
+        for path in candidates:
+            if os.path.exists(path):
+                return path
+        return ''
     
     def update_play_button(self):
         """Update play button state based on MP3 file existence."""
@@ -3970,6 +4015,8 @@ class SunoPersona(tk.Tk):
             'extracted_lyrics': self.extracted_lyrics_text.get('1.0', tk.END).strip() if hasattr(self, 'extracted_lyrics_text') else self.current_song.get('extracted_lyrics', '') if self.current_song else '',
             'song_style': self.song_style_text.get('1.0', tk.END).strip(),
             'merged_style': self.merged_style_text.get('1.0', tk.END).strip(),
+            'storyboard_theme': self.storyboard_theme_text.get('1.0', tk.END).strip() if hasattr(self, 'storyboard_theme_text') else '',
+            'persona_scene_percent': int(self.persona_scene_percent_var.get() or 35) if hasattr(self, 'persona_scene_percent_var') else 35,
             'song_description': self.song_description_text.get('1.0', tk.END).strip() if hasattr(self, 'song_description_text') else self.current_song.get('song_description', '') if self.current_song else '',
             'album_cover': self.album_cover_text.get('1.0', tk.END).strip(),
             'video_loop': self.video_loop_text.get('1.0', tk.END).strip(),
@@ -4221,6 +4268,18 @@ class SunoPersona(tk.Tk):
             self.log_debug('ERROR', f'Error merging styles: {e}')
         finally:
             self.config(cursor='')
+
+    def set_storyboard_theme_from_merged_style(self):
+        """Copy merged style (or song style) into the storyboard theme field."""
+        theme_text = self.merged_style_text.get('1.0', tk.END).strip()
+        if not theme_text:
+            theme_text = self.song_style_text.get('1.0', tk.END).strip()
+        if hasattr(self, 'storyboard_theme_text'):
+            self.storyboard_theme_text.delete('1.0', tk.END)
+            if theme_text:
+                self.storyboard_theme_text.insert('1.0', theme_text)
+        if theme_text:
+            self.log_debug('INFO', 'Storyboard theme updated from merged style')
     
     def generate_album_cover(self):
         """Generate album cover prompt."""
@@ -4424,7 +4483,7 @@ class SunoPersona(tk.Tk):
                 duration = scene.get('duration', '')
                 timestamp = scene.get('timestamp', '')
                 lyrics = scene.get('lyrics', '')
-                prompt = scene.get('prompt', '')
+                prompt = self.apply_storyboard_theme_prefix(scene.get('prompt', ''))
                 # Compute timestamp if missing
                 if not timestamp:
                     try:
@@ -4687,11 +4746,20 @@ class SunoPersona(tk.Tk):
         self.log_debug('DEBUG', f'Transcription request: file="{mp3_path}", response_format="verbose_json" (preferred), profile="transcribe"')
         
         # Guidance prompt for transcription (helps retain lyrical structure and punctuation)
-        transcription_prompt = (
-            "Transcribe the song lyrics with clear line breaks. Preserve repetitions, fillers, and non-verbal cues if present. "
-            "Include chorus/verse lines as heard. Do not summarize; produce the full text."
-        )
+        #transcription_prompt = (
+        #    "Transcribe the song lyrics with clear line breaks. Preserve repetitions, fillers, and non-verbal cues if present. "
+        #    "Include chorus/verse lines as heard. Do not summarize; produce the full text."
+        #)
         
+        transcription_prompt = (
+            "Transcribe the attached audio file with word-level timestamps."
+            "Preserve repetitions, fillers, and non-verbal cues if present"
+            "Output the result strictly as a vertical list where every single word is on a new line."
+            "Use the format mm:ss=Word (with no spaces around the equals sign)."
+            "Do not group phrases together; assign a specific start time to every individual word."
+            "Do not include any other text or formatting."
+        )
+
         self.config(cursor='wait')
         self.update()
         
@@ -5026,6 +5094,139 @@ class SunoPersona(tk.Tk):
             # Use spaces to avoid unwanted separator characters in prompts
             return ' '.join(matching_lyrics)
         return ''
+
+    def apply_storyboard_theme_prefix(self, prompt_text: str) -> str:
+        """Prepend the storyboard theme to a prompt if provided."""
+        if not prompt_text:
+            return prompt_text
+        theme_text = ''
+        if hasattr(self, 'storyboard_theme_text'):
+            theme_text = self.storyboard_theme_text.get('1.0', tk.END).strip()
+        if theme_text:
+            cleaned_prompt = prompt_text.strip()
+            if not cleaned_prompt.lower().startswith(theme_text.lower()):
+                return f"{theme_text}\n{cleaned_prompt}"
+            return cleaned_prompt
+        return prompt_text
+
+    def _are_prompts_similar(self, prompt_a: str, prompt_b: str, threshold: float = 0.55, min_len: int = 40) -> bool:
+        """Determine if two prompts are similar using a simple ratio."""
+        if not prompt_a or not prompt_b:
+            return False
+        a = prompt_a.strip().lower()
+        b = prompt_b.strip().lower()
+        if len(a) < min_len or len(b) < min_len:
+            return False
+        return SequenceMatcher(None, a, b).ratio() >= threshold
+
+    def _get_scene_prompt_from_tree(self, scene_num: int) -> str:
+        """Fetch prompt text for a given scene from the storyboard tree."""
+        if not hasattr(self, 'storyboard_tree'):
+            return ''
+        for item in self.storyboard_tree.get_children():
+            values = self.storyboard_tree.item(item, 'values')
+            if len(values) >= 5:
+                try:
+                    if int(values[0]) == scene_num:
+                        return str(values[4])
+                except Exception:
+                    continue
+        return ''
+
+    def _prepare_previous_scene_reference(self, scene_num: int, current_prompt: str) -> str:
+        """If the previous scene is similar, analyze its image and return a reference blurb."""
+        try:
+            prev_scene_num = int(scene_num) - 1
+        except Exception:
+            return ''
+        if prev_scene_num < 1 or not self.current_song_path:
+            return ''
+
+        prev_prompt = self._get_scene_prompt_from_tree(prev_scene_num)
+        prev_prompt = self.apply_storyboard_theme_prefix(prev_prompt)
+
+        if not self._are_prompts_similar(current_prompt, prev_prompt):
+            return ''
+
+        safe_prev = str(prev_scene_num).replace(':', '_').replace('/', '_').replace('\\', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace("'", '_').replace('<', '_').replace('>', '_').replace('|', '_')
+        prev_image_path = os.path.join(self.current_song_path, f'storyboard_scene_{safe_prev}.png')
+        if not os.path.exists(prev_image_path):
+            return ''
+
+        try:
+            downscale_dir = os.path.join(self.current_song_path, 'temp')
+            os.makedirs(downscale_dir, exist_ok=True)
+            downscaled_path = os.path.join(downscale_dir, f'storyboard_scene_{safe_prev}_ref.png')
+
+            with Image.open(prev_image_path) as img:
+                new_w = max(1, img.width // 2)
+                new_h = max(1, img.height // 2)
+                resized = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+                resized.save(downscaled_path, 'PNG')
+
+            vision_prompt = (
+                "Analyze this reference image (previous scene) and describe its key visual traits: composition, palette, lighting, mood, texture, and main elements. "
+                "Keep it concise (<120 words)."
+            )
+            vision_system = (
+                "You are an image analysis assistant. Provide a concise, objective description of the reference image focusing on visual traits only."
+            )
+            result = call_azure_vision(self.ai_config, [downscaled_path], vision_prompt, system_message=vision_system, profile='text')
+            if not result.get('success'):
+                return ''
+            reference_desc = result.get('content', '').strip()
+            if not reference_desc:
+                return ''
+
+            return (
+                "REFERENCE IMAGE (previous scene, downscaled 50%): "
+                f"{reference_desc} "
+                "Use this only for continuity (lighting, palette, composition). Keep the new scene distinct while preserving continuity cues."
+            )
+        except Exception as exc:
+            self.log_debug('WARNING', f'Failed to use previous scene reference: {exc}')
+            return ''
+
+    def _prepare_album_cover_reference(self) -> str:
+        """Use album cover image as reference for the first scene if available."""
+        cover_path = self.get_album_cover_filepath()
+        if not cover_path:
+            return ''
+        try:
+            downscale_dir = os.path.join(self.current_song_path, 'temp') if self.current_song_path else None
+            if not downscale_dir:
+                return ''
+            os.makedirs(downscale_dir, exist_ok=True)
+            downscaled_path = os.path.join(downscale_dir, 'album_cover_ref.png')
+
+            with Image.open(cover_path) as img:
+                new_w = max(1, img.width // 2)
+                new_h = max(1, img.height // 2)
+                resized = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+                resized.save(downscaled_path, 'PNG')
+
+            vision_prompt = (
+                "Analyze this album cover reference image and summarize key visual traits: palette, lighting, mood, composition, "
+                "dominant motifs, textures, and overall vibe. Keep it concise (<120 words)."
+            )
+            vision_system = (
+                "You are an image analysis assistant. Provide a concise, objective visual description of the album cover."
+            )
+            result = call_azure_vision(self.ai_config, [downscaled_path], vision_prompt, system_message=vision_system, profile='text')
+            if not result.get('success'):
+                return ''
+            desc = result.get('content', '').strip()
+            if not desc:
+                return ''
+
+            return (
+                "REFERENCE IMAGE (album cover, downscaled 50%): "
+                f"{desc} "
+                "Use this cover as the starting visual tone for Scene 1; keep continuity but make the scene a moving shot."
+            )
+        except Exception as exc:
+            self.log_debug('WARNING', f'Failed to use album cover reference: {exc}')
+            return ''
     
     def generate_storyboard(self):
         """Analyze MP3 and generate storyboard prompts."""
@@ -5072,10 +5273,42 @@ class SunoPersona(tk.Tk):
         song_name = self.song_name_var.get().strip()
         full_song_name = self.full_song_name_var.get().strip()
         merged_style = self.merged_style_text.get('1.0', tk.END).strip()
+        storyboard_theme = self.storyboard_theme_text.get('1.0', tk.END).strip() if hasattr(self, 'storyboard_theme_text') else ''
+        try:
+            persona_scene_percent = int(self.persona_scene_percent_var.get() or 35) if hasattr(self, 'persona_scene_percent_var') else 35
+        except Exception:
+            persona_scene_percent = 35
+        persona_scene_percent = max(0, min(100, persona_scene_percent))
+        no_persona_percent = max(0, 100 - persona_scene_percent)
         persona_name = self.current_persona.get('name', '')
         visual_aesthetic = self.current_persona.get('visual_aesthetic', '')
         base_image_prompt = self.current_persona.get('base_image_prompt', '')
         vibe = self.current_persona.get('vibe', '')
+
+        # Auto-generate a global storyboard theme if missing
+        if hasattr(self, 'storyboard_theme_text') and not storyboard_theme:
+            try:
+                theme_prompt = (
+                    "Generate a concise global image/story style to be used as a prefix for all storyboard scenes.\n"
+                    "Keep it under 80 words, focus on visual aesthetic (palette, lighting, texture, mood, camera vibe).\n"
+                    "Inputs:\n"
+                    f"- Song Title: {full_song_name if full_song_name else song_name}\n"
+                    f"- Merged Style: {merged_style if merged_style else 'N/A'}\n"
+                    f"- Persona Visual Aesthetic: {visual_aesthetic if visual_aesthetic else 'N/A'}\n"
+                    f"- Persona Base Image Prompt: {base_image_prompt if base_image_prompt else 'N/A'}\n"
+                    f"- Persona Vibe: {vibe if vibe else 'N/A'}\n"
+                    "Output ONLY the style text, no labels."
+                )
+                theme_result = call_azure_ai(self.ai_config, theme_prompt, system_message="You are a visual style summarizer.", profile='text')
+                if theme_result.get('success'):
+                    generated_theme = theme_result.get('content', '').strip()
+                    if generated_theme:
+                        storyboard_theme = generated_theme
+                        self.storyboard_theme_text.delete('1.0', tk.END)
+                        self.storyboard_theme_text.insert('1.0', generated_theme)
+                        self.log_debug('INFO', 'Auto-generated storyboard theme from merged style/persona.')
+            except Exception as exc:
+                self.log_debug('WARNING', f'Failed to auto-generate storyboard theme: {exc}')
         
         # Reset cached prompts for fresh generation
         self.scene_final_prompts = {}
@@ -5178,9 +5411,19 @@ Title: {full_song_name if full_song_name else song_name}
 Artist: {persona_name}
 Style: {merged_style if merged_style else 'Not specified'}
 </SONG_INFO>
+"""
+            if storyboard_theme:
+                prompt += f"""
+<STORY_THEME>
+This is the global image/story style that must be prepended to EVERY scene prompt.
+THEME PREFIX: {storyboard_theme}
+Start every scene with this prefix as the general image aesthetic, then add the scene-specific description so all scenes share the same tone.
+</STORY_THEME>
+"""
 
+            prompt += f"""
 <PERSONA_REFERENCE>
-Use ONLY when persona appears (30-40% of scenes). Keep references brief - just "{persona_name}" or "the artist".
+Use ONLY when persona appears (~{persona_scene_percent}% of scenes). Keep references brief - just "{persona_name}" or "the artist".
 Visual: {visual_aesthetic if visual_aesthetic else 'N/A'}
 Look: {base_image_prompt if base_image_prompt else 'N/A'}
 Vibe: {vibe if vibe else 'N/A'}
@@ -5193,8 +5436,8 @@ Vibe: {vibe if vibe else 'N/A'}
 1. NARRATIVE ARC: Build a visual story following the song's emotional journey (intro-build-climax-resolution). Each scene advances the narrative.
 
 2. SCENE DISTRIBUTION:
-   - 60-70% abstract/environmental scenes (mark with "[NO CHARACTERS]" at start)
-   - 30-40% persona scenes (never consecutive)
+   - ~{no_persona_percent}% abstract/environmental scenes (mark with "[NO CHARACTERS]" at start)
+   - ~{persona_scene_percent}% persona scenes (never consecutive)
    - Abstract scenes: purely environmental, symbolic, atmospheric - zero human figures
 
 3. VISUAL VARIETY: Every scene must differ significantly:
@@ -5209,9 +5452,13 @@ Vibe: {vibe if vibe else 'N/A'}
 5. LYRICS INTEGRATION:"""
             prompt += lyrics_rule
             
-            prompt += """
+            prompt += f"""
 
-6. CONTENT SAFETY (use these alternatives):
+6. GLOBAL THEME:
+   - Begin EVERY scene description with the theme prefix: {storyboard_theme if storyboard_theme else '[If no theme is set, skip this prefix]'}
+   - Treat this as the overall image aesthetic; keep visuals aligned with it across all scenes
+
+7. CONTENT SAFETY (use these alternatives):
    - "black" -> "dark", "shadowy", "charcoal"
    - "void" -> "vast emptiness", "expansive darkness"  
    - "praying" -> "pleading", "hoping", "seeking"
@@ -5248,6 +5495,11 @@ ABSOLUTE RULES:
 3. 60-70% of scenes must be [NO CHARACTERS] - purely environmental/abstract
 4. Every scene must be visually distinct from all others
 5. If hitting response limits, batch output (scenes 1-14, then 15-28, etc.)
+"""
+            if storyboard_theme:
+                system_message += f"6. Every scene prompt must START with this theme prefix before anything else: {storyboard_theme}\n"
+            system_message += f"7. Target persona presence: about {persona_scene_percent}% of scenes (non-consecutive). Maintain variety.\n"
+            system_message += """
 
 Start immediately with "SCENE 1:" - no introduction or commentary."""
             
@@ -5325,7 +5577,7 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
                         
                         # Create batch-specific prompt
                         batch_prompt = self._create_batch_storyboard_prompt(
-                            song_name, full_song_name, lyrics, merged_style, persona_name,
+                            song_name, full_song_name, lyrics, merged_style, storyboard_theme, persona_name,
                             visual_aesthetic, base_image_prompt, vibe, lyric_segments,
                             song_duration, seconds_per_video, batch_start, batch_end, num_scenes
                         )
@@ -5391,7 +5643,7 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
                     return
                 
                 combined_content = self.ensure_complete_storyboard_response(
-                    content, song_name, full_song_name, lyrics, merged_style, persona_name,
+                    content, song_name, full_song_name, lyrics, merged_style, storyboard_theme, persona_scene_percent, persona_name,
                     visual_aesthetic, base_image_prompt, vibe, lyric_segments,
                     song_duration, seconds_per_video, num_scenes, system_message, max_tokens
                 )
@@ -5409,7 +5661,7 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
         finally:
             self.config(cursor='')
     
-    def _create_batch_storyboard_prompt(self, song_name, full_song_name, lyrics, merged_style, persona_name,
+    def _create_batch_storyboard_prompt(self, song_name, full_song_name, lyrics, merged_style, storyboard_theme, persona_scene_percent, persona_name,
                                         visual_aesthetic, base_image_prompt, vibe, lyric_segments,
                                         song_duration, seconds_per_video, batch_start, batch_end, total_scenes):
         """Create a prompt for generating a specific batch of scenes."""
@@ -5420,6 +5672,10 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
             prompt += f"Lyrics:\n{lyrics}\n\n"
         if merged_style:
             prompt += f"Style: {merged_style}\n\n"
+        if storyboard_theme:
+            prompt += f"GLOBAL STORY THEME (prepend to every scene): {storyboard_theme}\n"
+            prompt += "Every scene description must start with this theme text, then add scene specifics.\n\n"
+        prompt += f"Target persona presence: about {persona_scene_percent}% of scenes (non-consecutive). Keep plenty of non-persona scenes for variety.\n\n"
         
         # Include persona visual description only as reference (not for every scene)
         prompt += "\nPERSONA REFERENCE (only use when persona appears in scenes - see requirements below):\n"
@@ -5452,7 +5708,7 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
         
         prompt += f"STORYBOARD THEME: '{full_song_name if full_song_name else song_name}'\n"
         prompt += "FOCUS ON THE SONG THEME, LYRICS, AND MOOD - not the persona. Use the song title and lyrics as the primary inspiration.\n"
-        prompt += f"The persona ({persona_name}) should only appear in about 30-40% of scenes. When the persona appears, keep descriptions brief - just mention '{persona_name}' or 'the artist'. Do NOT repeat full persona descriptions.\n"
+        prompt += f"The persona ({persona_name}) should only appear in about {persona_scene_percent}% of scenes. When the persona appears, keep descriptions brief - just mention '{persona_name}' or 'the artist'. Do NOT repeat full persona descriptions.\n"
         prompt += "CRITICAL: When a prompt says 'No persona present', 'No characters', or 'No human figures', the generated image MUST NOT include ANY human figures. These scenes should be purely environmental, abstract, symbolic, or atmospheric visuals.\n"
         prompt += "CONTENT SAFETY: All scene prompts MUST be safe for content moderation. Use creative alternatives: 'dark' instead of 'black', 'empty space' instead of 'void', 'curving' instead of 'bending under force', 'pleading' instead of 'praying'. Focus on visual poetry and atmosphere.\n\n"
         if scene_lyrics_info:
@@ -5520,7 +5776,7 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
         return max(int(m) for m in matches)
     
     def ensure_complete_storyboard_response(self, initial_content: str, song_name: str, full_song_name: str,
-                                            lyrics: str, merged_style: str, persona_name: str,
+                                            lyrics: str, merged_style: str, storyboard_theme: str, persona_scene_percent: int, persona_name: str,
                                             visual_aesthetic: str, base_image_prompt: str, vibe: str,
                                             lyric_segments: list, song_duration: float, seconds_per_video: int,
                                             total_scenes: int, system_message: str, max_tokens: int) -> str | None:
@@ -5543,7 +5799,7 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
             self.log_debug('INFO', f'Requesting additional scenes {batch_start}-{batch_end}')
             
             batch_prompt = self._create_batch_storyboard_prompt(
-                song_name, full_song_name, lyrics, merged_style, persona_name,
+                song_name, full_song_name, lyrics, merged_style, storyboard_theme, persona_scene_percent, persona_name,
                 visual_aesthetic, base_image_prompt, vibe, lyric_segments,
                 song_duration, seconds_per_video, batch_start, batch_end, total_scenes
             )
@@ -5661,6 +5917,7 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
                         scene_lyrics = ''
                     if prompt_text:
                         # Calculate lyrics for this scene
+                        prompt_text = self.apply_storyboard_theme_prefix(prompt_text)
                         scene_lyrics_calc = scene_lyrics
                         if lyric_segments and song_duration > 0 and not scene_lyrics_calc:
                             scene_start_time = (current_scene - 1) * default_duration
@@ -5710,6 +5967,7 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
             prompt_text = '\n'.join(current_prompt).strip()
             if prompt_text:
                 # Calculate lyrics for last scene
+                prompt_text = self.apply_storyboard_theme_prefix(prompt_text)
                 scene_lyrics = ''
                 if lyric_segments and song_duration > 0:
                     scene_start_time = (current_scene - 1) * default_duration
@@ -6077,6 +6335,18 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
             return self.scene_final_prompts[cache_key]
 
         prompt = self.sanitize_lyrics_for_prompt(base_prompt)
+        prompt = self.apply_storyboard_theme_prefix(prompt)
+
+        # If current scene is similar to the previous one, include a reference description from the previous scene's image
+        reference_note = self._prepare_previous_scene_reference(int(scene_num) if str(scene_num).isdigit() else scene_num, prompt)
+        if str(scene_num).isdigit() and int(scene_num) == 1:
+            cover_note = self._prepare_album_cover_reference()
+            if cover_note:
+                reference_note = f"{cover_note}\n\n{reference_note}" if reference_note else cover_note
+
+        if reference_note:
+            prompt = f"{reference_note}\n\n{prompt}"
+
         persona_in_scene = False
         prompt_lower = prompt.lower()
 
