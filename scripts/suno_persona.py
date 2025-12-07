@@ -6336,6 +6336,8 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
 
         prompt = self.sanitize_lyrics_for_prompt(base_prompt)
         prompt = self.apply_storyboard_theme_prefix(prompt)
+        lyrics_text = self.sanitize_lyrics_for_prompt(lyrics) if lyrics else ''
+        embed_lyrics_enabled = bool(self.embed_lyrics_var.get()) if hasattr(self, 'embed_lyrics_var') else True
 
         # If current scene is similar to the previous one, include a reference description from the previous scene's image
         reference_note = self._prepare_previous_scene_reference(int(scene_num) if str(scene_num).isdigit() else scene_num, prompt)
@@ -6445,6 +6447,21 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
                     self.log_debug('WARNING', f'Failed to prepare persona reference for scene {scene_num}: {e}')
                 finally:
                     self.config(cursor='')
+
+        if lyrics_text and '[NO LYRICS]' not in lyrics_text.upper():
+            if embed_lyrics_enabled:
+                prompt += (
+                    "\n\nLYRICS INTEGRATION (environment only, no overlays): "
+                    f"\"{lyrics_text}\". Embed the words physically into the scene using materials like neon, etched metal, floor seams, glass reflections, or carved wood. "
+                    "Do not float text or use subtitles; make the lyrics feel part of the environment."
+                )
+            else:
+                prompt += (
+                    "\n\nLyrics for mood only (keep scene text-free): "
+                    f"\"{lyrics_text}\". Use the feeling of these words to shape lighting, color, and symbolism, but render no visible text."
+                )
+        elif not lyrics_text:
+            prompt += "\n\nNo lyrics for this scene; keep visuals text-free."
 
         self.scene_final_prompts[cache_key] = prompt
         return prompt
