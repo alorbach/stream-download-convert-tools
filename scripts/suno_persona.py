@@ -10,6 +10,7 @@ import glob
 import time
 import shutil
 import re
+import subprocess
 from PIL import Image, ImageTk, ImageDraw, ImageFont
 
 # Try to import mutagen for MP3 duration and lyrics extraction
@@ -1677,6 +1678,10 @@ class SunoPersona(tk.Tk):
         images_tab = ttk.Frame(self.notebook)
         self.notebook.add(images_tab, text='Persona Images')
         self.create_images_tab(images_tab)
+
+        profile_images_tab = ttk.Frame(self.notebook)
+        self.notebook.add(profile_images_tab, text='Profile Images')
+        self.create_profile_images_tab(profile_images_tab)
         
         songs_tab = ttk.Frame(self.notebook)
         self.notebook.add(songs_tab, text='AI Songs')
@@ -1768,6 +1773,8 @@ class SunoPersona(tk.Tk):
         self.load_persona_info()
         self.refresh_songs_list()
         self.refresh_persona_images()
+        self.refresh_profile_images_gallery()
+        self.update_profile_prompt_from_persona()
         
         self.log_debug('INFO', f'Selected persona: {self.current_persona.get("name", folder_name)}')
     
@@ -1853,6 +1860,7 @@ class SunoPersona(tk.Tk):
                 self.refresh_personas_list()
                 self.clear_persona_info()
                 self.clear_songs_list()
+                self.refresh_profile_images_gallery()
                 self.log_debug('INFO', f'Deleted persona: {persona_name}')
             except Exception as e:
                 messagebox.showerror('Error', f'Failed to delete persona: {e}')
@@ -1994,6 +2002,41 @@ class SunoPersona(tk.Tk):
         btn_frame = ttk.Frame(main_frame)
         btn_frame.pack(fill=tk.X, pady=(10, 0))
         ttk.Button(btn_frame, text='Refresh Images', command=self.refresh_persona_images).pack(side=tk.LEFT, padx=5)
+        
+        # Profile image generator
+        profile_frame = ttk.LabelFrame(main_frame, text='Profile Image Generator', padding=8)
+        profile_frame.pack(fill=tk.BOTH, expand=False, pady=(12, 0))
+        
+        ttk.Label(
+            profile_frame,
+            text='Create profile portraits that match the persona reference shots and theme. Customize the scene prompt and generate multiple variations.',
+            wraplength=1200
+        ).pack(fill=tk.X, pady=(0, 6))
+        
+        prompt_toolbar = ttk.Frame(profile_frame)
+        prompt_toolbar.pack(fill=tk.X, pady=(0, 4))
+        ttk.Button(prompt_toolbar, text='Reset From Persona', command=self.update_profile_prompt_from_persona).pack(side=tk.LEFT, padx=(0, 6))
+        
+        ttk.Label(prompt_toolbar, text='Images to create:').pack(side=tk.LEFT, padx=(12, 4))
+        self.profile_image_count_var = tk.IntVar(value=2)
+        tk.Spinbox(prompt_toolbar, from_=1, to=10, width=5, textvariable=self.profile_image_count_var).pack(side=tk.LEFT)
+        ttk.Label(prompt_toolbar, text='(1-10)').pack(side=tk.LEFT, padx=(4, 0))
+        
+        ttk.Button(prompt_toolbar, text='Generate Profile Images', command=self.generate_profile_images).pack(side=tk.RIGHT, padx=(6, 0))
+        
+        ttk.Label(profile_frame, text='Base/profile prompt:').pack(anchor=tk.W)
+        self.profile_prompt_text = scrolledtext.ScrolledText(profile_frame, height=4, wrap=tk.WORD)
+        self.profile_prompt_text.pack(fill=tk.BOTH, expand=True, pady=(2, 8))
+        
+        ttk.Label(profile_frame, text='Custom scene / add-on prompt:').pack(anchor=tk.W)
+        self.profile_custom_prompt_text = scrolledtext.ScrolledText(profile_frame, height=3, wrap=tk.WORD)
+        self.profile_custom_prompt_text.pack(fill=tk.BOTH, expand=True, pady=(2, 6))
+        
+        self.profile_status_var = tk.StringVar(value='Ready to create profile images.')
+        ttk.Label(profile_frame, textvariable=self.profile_status_var, foreground='gray').pack(anchor=tk.W, pady=(0, 2))
+        
+        # Initialize prompt content
+        self.update_profile_prompt_from_persona()
     
     def refresh_persona_images(self):
         """Refresh the persona images preview."""
@@ -2113,6 +2156,175 @@ class SunoPersona(tk.Tk):
                 self.image_photos[view] = None
                 if view in self.image_pil_cache:
                     del self.image_pil_cache[view]
+
+    def create_profile_images_tab(self, parent):
+        """Create the persona profile images gallery tab."""
+        main_frame = ttk.Frame(parent, padding=10)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+
+        header = ttk.Frame(main_frame)
+        header.pack(fill=tk.X, pady=(0, 8))
+        ttk.Label(header, text='Profile Images', font=('TkDefaultFont', 10, 'bold')).pack(side=tk.LEFT)
+        ttk.Button(header, text='Refresh', command=self.refresh_profile_images_gallery).pack(side=tk.LEFT, padx=6)
+
+        canvas = tk.Canvas(main_frame)
+        scrollbar = ttk.Scrollbar(main_frame, orient="vertical", command=canvas.yview)
+        gallery_frame = ttk.Frame(canvas)
+
+        gallery_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+
+        canvas.create_window((0, 0), window=gallery_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        def on_mousewheel_profile(event):
+            if event.num == 4 or (hasattr(event, 'delta') and event.delta > 0):
+                canvas.yview_scroll(-1, "units")
+            elif event.num == 5 or (hasattr(event, 'delta') and event.delta < 0):
+                canvas.yview_scroll(1, "units")
+
+        canvas.bind("<MouseWheel>", on_mousewheel_profile)
+        canvas.bind("<Button-4>", on_mousewheel_profile)
+        canvas.bind("<Button-5>", on_mousewheel_profile)
+        gallery_frame.bind("<MouseWheel>", on_mousewheel_profile)
+        gallery_frame.bind("<Button-4>", on_mousewheel_profile)
+        gallery_frame.bind("<Button-5>", on_mousewheel_profile)
+
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        self.profile_gallery_canvas = canvas
+        self.profile_gallery_frame = gallery_frame
+        self.profile_image_thumbs = []
+
+        self.refresh_profile_images_gallery()
+
+    def refresh_profile_images_gallery(self):
+        """Refresh thumbnails for persona profile images."""
+        if not hasattr(self, 'profile_gallery_frame'):
+            return
+
+        for child in self.profile_gallery_frame.winfo_children():
+            child.destroy()
+        self.profile_image_thumbs = []
+
+        if not self.current_persona_path:
+            ttk.Label(
+                self.profile_gallery_frame,
+                text='Select a persona to view profile images.',
+                foreground='gray'
+            ).grid(row=0, column=0, padx=10, pady=10, sticky=tk.W)
+            return
+
+        persona_name = self.current_persona.get('name', 'persona') if self.current_persona else 'persona'
+        safe_name = persona_name.replace(' ', '-').replace(':', '_').replace('/', '_').replace('\\', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace("'", '_').replace('<', '_').replace('>', '_').replace('|', '_')
+        pattern = os.path.join(self.current_persona_path, f'{safe_name}-Profile-*.png')
+        image_files = glob.glob(pattern)
+
+        def sort_key(path):
+            match = re.search(r'Profile-(\d+)\.png', os.path.basename(path))
+            if match:
+                try:
+                    return int(match.group(1))
+                except ValueError:
+                    return path.lower()
+            return path.lower()
+
+        image_files.sort(key=sort_key)
+
+        if not image_files:
+            ttk.Label(
+                self.profile_gallery_frame,
+                text='No profile images found.\nUse Generate Profile Images in the Persona Images tab.',
+                foreground='gray',
+                wraplength=480
+            ).grid(row=0, column=0, padx=10, pady=10, sticky=tk.W)
+            return
+
+        max_cols = 3
+        thumb_size = 320
+
+        for idx, image_path in enumerate(image_files):
+            row = idx // max_cols
+            col = idx % max_cols
+            frame = ttk.LabelFrame(self.profile_gallery_frame, text=os.path.basename(image_path), padding=6)
+            frame.grid(row=row, column=col, padx=6, pady=6, sticky=tk.NW)
+
+            try:
+                pil_image = Image.open(image_path)
+                pil_image.thumbnail((thumb_size, thumb_size), Image.Resampling.LANCZOS)
+                photo = ImageTk.PhotoImage(pil_image)
+                self.profile_image_thumbs.append(photo)
+                ttk.Label(frame, image=photo).pack()
+            except Exception as e:
+                ttk.Label(frame, text=f'Error loading image:\n{e}', width=42, wraplength=280).pack()
+
+            ttk.Button(frame, text='Open', command=lambda p=image_path: self.open_image_file(p)).pack(fill=tk.X, pady=(4, 0))
+
+    def open_image_file(self, image_path: str):
+        """Open an image with the default system viewer."""
+        try:
+            if sys.platform.startswith('win'):
+                os.startfile(image_path)
+            elif sys.platform == 'darwin':
+                subprocess.run(['open', image_path], check=False)
+            else:
+                subprocess.run(['xdg-open', image_path], check=False)
+        except Exception as e:
+            messagebox.showerror('Error', f'Could not open image: {e}')
+            self.log_debug('ERROR', f'Failed to open image {image_path}: {e}')
+    
+    def update_profile_prompt_from_persona(self):
+        """Build the profile image prompt from the current persona details."""
+        if not hasattr(self, 'profile_prompt_text'):
+            return
+        
+        try:
+            self.profile_prompt_text.delete('1.0', tk.END)
+        except Exception:
+            return
+        
+        if hasattr(self, 'profile_custom_prompt_text'):
+            try:
+                self.profile_custom_prompt_text.delete('1.0', tk.END)
+            except Exception:
+                pass
+        
+        if not self.current_persona:
+            self.profile_prompt_text.insert('1.0', 'Select a persona to seed the profile prompt from its theme and reference images.')
+            if hasattr(self, 'profile_status_var'):
+                self.profile_status_var.set('Waiting for persona selection.')
+            return
+        
+        name = self.current_persona.get('name', 'the persona')
+        tagline = (self.current_persona.get('tagline') or '').strip()
+        vibe = (self.current_persona.get('vibe') or '').strip()
+        visual = (self.current_persona.get('visual_aesthetic') or '').strip()
+        base_prompt = (self.current_persona.get('base_image_prompt') or '').strip()
+        
+        theme_bits = []
+        if tagline:
+            theme_bits.append(f"tagline: {tagline}")
+        if vibe:
+            theme_bits.append(f"vibe: {vibe}")
+        if visual:
+            theme_bits.append(f"visual aesthetic: {visual}")
+        
+        prompt_sections = []
+        if base_prompt:
+            prompt_sections.append(base_prompt)
+        if theme_bits:
+            prompt_sections.append("Persona theme cues: " + "; ".join(theme_bits))
+        
+        prompt_sections.append(
+            f"Create a polished head-and-shoulders profile portrait of {name}. Keep the exact same character as the reference Front/Side/Back images with matching facial features, hair, clothing, and colors. Cinematic but clean composition, natural expression, soft directional lighting, shallow depth of field, no text or watermarks."
+        )
+        
+        self.profile_prompt_text.insert('1.0', '\n\n'.join(prompt_sections))
+        if hasattr(self, 'profile_status_var'):
+            self.profile_status_var.set('Profile prompt seeded from persona.')
     
     def load_persona_info(self):
         """Load persona info into the form."""
@@ -2512,6 +2724,155 @@ class SunoPersona(tk.Tk):
             self.log_debug('ERROR', f'Error enhancing {field_key}: {e}')
         finally:
             self.config(cursor='')
+    
+    def generate_profile_images(self):
+        """Generate profile images using persona references and a custom prompt."""
+        if not self.current_persona:
+            messagebox.showwarning('Warning', 'Please select a persona first.')
+            if hasattr(self, 'profile_status_var'):
+                self.profile_status_var.set('Select a persona to generate profile images.')
+            return
+        
+        base_prompt = (self.current_persona.get('base_image_prompt') or '').strip()
+        profile_prompt = self.profile_prompt_text.get('1.0', tk.END).strip() if hasattr(self, 'profile_prompt_text') else ''
+        custom_prompt = self.profile_custom_prompt_text.get('1.0', tk.END).strip() if hasattr(self, 'profile_custom_prompt_text') else ''
+        
+        if not profile_prompt and base_prompt:
+            profile_prompt = base_prompt
+        if not profile_prompt:
+            messagebox.showwarning('Warning', 'Provide a profile prompt or set a Base Image Prompt first.')
+            if hasattr(self, 'profile_status_var'):
+                self.profile_status_var.set('Add a prompt before generating profile images.')
+            return
+        
+        persona_name = self.current_persona.get('name', 'persona')
+        vibe = (self.current_persona.get('vibe') or '').strip()
+        visual = (self.current_persona.get('visual_aesthetic') or '').strip()
+        tagline = (self.current_persona.get('tagline') or '').strip()
+        
+        final_prompt = profile_prompt
+        theme_bits = []
+        if tagline:
+            theme_bits.append(f"tagline: {tagline}")
+        if vibe:
+            theme_bits.append(f"vibe: {vibe}")
+        if visual:
+            theme_bits.append(f"visual aesthetic: {visual}")
+        if theme_bits:
+            final_prompt += "\n\nPersona theme cues: " + "; ".join(theme_bits)
+        
+        final_prompt += "\n\nPROFILE IMAGE REQUIREMENTS: head-and-shoulders or chest-up framing, clean backdrop, flattering cinematic lighting, eye contact, crisp focus, no text, no watermarks."
+        
+        if custom_prompt:
+            final_prompt += f"\n\nCUSTOM SCENE / DETAILS: {custom_prompt}"
+        
+        # Add reference image description if Front image exists
+        safe_name = persona_name.replace(' ', '-').replace(':', '_').replace('/', '_').replace('\\', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace("'", '_').replace('<', '_').replace('>', '_').replace('|', '_')
+        front_image_path = os.path.join(self.current_persona_path, f'{safe_name}-Front.png') if self.current_persona_path else None
+        
+        if front_image_path and os.path.exists(front_image_path):
+            try:
+                from PIL import Image
+                original_img = Image.open(front_image_path)
+                new_width = max(1, original_img.width // 2)
+                new_height = max(1, original_img.height // 2)
+                downscaled_img = original_img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                
+                temp_dir = os.path.join(self.current_persona_path, 'temp')
+                os.makedirs(temp_dir, exist_ok=True)
+                reference_image_path = os.path.join(temp_dir, f'{safe_name}-Front-downscaled.png')
+                downscaled_img.save(reference_image_path, 'PNG')
+                
+                self.config(cursor='wait')
+                self.update()
+                vision_prompt = (
+                    "Analyze this persona reference image in extreme detail. Provide a comprehensive description of the character's appearance, "
+                    "including facial features, hair, clothing, colors, accessories, and all visual characteristics. "
+                    "This description will be used to ensure the profile image matches the exact same character."
+                )
+                vision_system = (
+                    "You are an image analysis assistant. Provide a highly detailed, objective description of the character's visual appearance "
+                    "from the reference image. Focus on all visual characteristics that must stay consistent in the generated profile image."
+                )
+                vision_result = call_azure_vision(self.ai_config, [reference_image_path], vision_prompt, system_message=vision_system, profile='text')
+                
+                if vision_result['success']:
+                    character_description = vision_result['content'].strip()
+                    final_prompt = (
+                        f"REFERENCE CHARACTER DESCRIPTION (from Front Persona Image - MUST MATCH EXACTLY):\n{character_description}\n\n"
+                        f"{final_prompt}\n\n"
+                        "CRITICAL REQUIREMENT: The profile image MUST feature this exact character with matching facial features, hair, clothing, styling, colors, and overall appearance."
+                    )
+                    self.log_debug('INFO', 'Added character description from Front Persona Image to profile prompt')
+                else:
+                    final_prompt += "\n\nIMPORTANT: Use the Front Persona Image as reference. The profile image must match the same character."
+                    self.log_debug('WARNING', f'Failed to analyze Front reference image: {vision_result.get("error", "Unknown error")}')
+            except Exception as e:
+                self.log_debug('WARNING', f'Failed to prepare reference image for profile generation: {e}')
+            finally:
+                self.config(cursor='')
+        
+        try:
+            count = int(self.profile_image_count_var.get()) if hasattr(self, 'profile_image_count_var') else 1
+        except Exception:
+            count = 1
+        count = max(1, min(count, 10))
+        
+        if hasattr(self, 'profile_status_var'):
+            self.profile_status_var.set(f'Generating {count} profile image(s)...')
+        self.log_debug('INFO', f'Generating {count} profile image(s) for persona "{persona_name}"')
+        self.config(cursor='wait')
+        self.update()
+        
+        # Find first available index to avoid overwriting existing profile images
+        next_index = 1
+        while os.path.exists(os.path.join(self.current_persona_path, f'{safe_name}-Profile-{next_index}.png')):
+            next_index += 1
+        
+        successes = 0
+        errors = 0
+        last_filename = None
+        
+        for i in range(count):
+            target_index = next_index + i
+            filename = os.path.join(self.current_persona_path, f'{safe_name}-Profile-{target_index}.png')
+            variation_prompt = f"{final_prompt}\n\nPROFILE VARIATION {i+1}: keep the same character identity while varying camera angle, lighting, and subtle expression."
+            
+            try:
+                result = call_azure_image(self.ai_config, variation_prompt, size='1024x1024', profile='image_gen')
+                if result['success']:
+                    img_bytes = result.get('image_bytes', b'')
+                    if img_bytes:
+                        with open(filename, 'wb') as f:
+                            f.write(img_bytes)
+                        successes += 1
+                        last_filename = filename
+                        self.log_debug('INFO', f'Profile image saved: {filename}')
+                    else:
+                        errors += 1
+                        self.log_debug('ERROR', f'No image bytes received for profile image #{target_index}')
+                else:
+                    errors += 1
+                    self.log_debug('ERROR', f'Failed to generate profile image #{target_index}: {result.get("error", "Unknown error")}')
+            except Exception as e:
+                errors += 1
+                self.log_debug('ERROR', f'Error generating profile image #{target_index}: {e}')
+        
+        self.config(cursor='')
+        
+        if successes:
+            messagebox.showinfo('Success', f'Generated {successes} profile image(s). Last saved:\n{last_filename}')
+            if hasattr(self, 'profile_status_var'):
+                self.profile_status_var.set(f'Generated {successes} profile image(s).')
+        else:
+            messagebox.showerror('Error', 'Failed to generate any profile images. Check the debug log for details.')
+            if hasattr(self, 'profile_status_var'):
+                self.profile_status_var.set('Profile image generation failed.')
+        
+        if errors and successes:
+            self.log_debug('WARNING', f'{errors} profile image(s) failed during generation.')
+        
+        self.refresh_profile_images_gallery()
     
     def generate_reference_images(self):
         """Generate reference images (Front, Side, Back) for the persona."""
@@ -5770,6 +6131,9 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
         album_cover = self.album_cover_text.get('1.0', tk.END).strip()
         video_loop = self.video_loop_text.get('1.0', tk.END).strip()
         
+        style_source = merged_style if merged_style else song_style
+        hashtags = self.generate_youtube_hashtags(song_name, persona_name, style_source)
+        
         title = f"{merged_style} - {persona_name} _{song_name}_"
         
         desc = f"TITLE: {title}\n\n"
@@ -5791,6 +6155,17 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
         desc += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         desc += "This is an AI-generated song created by an AI persona. "
         desc += "All content is original and created using AI technology.\n"
+        desc += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        desc += "🏷️ HASHTAGS\n"
+        desc += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        desc += f"{hashtags}\n\n"
+        
+        # Derive simple tag list from song style (use merged style if available)
+        if style_source:
+            # Build a short, comma-separated tag list from style keywords
+            style_tags = [t.strip() for t in style_source.replace('|', ',').split(',') if t.strip()]
+            if style_tags:
+                desc += "Derived tags: " + ", ".join(style_tags[:10]) + "\n\n"
         
         content = "=" * 70 + "\n"
         content += "YOUTUBE TITLE\n"
@@ -5826,10 +6201,119 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
                 with open(filename, 'w', encoding='utf-8') as f:
                     f.write(content)
                 self.log_debug('INFO', f'YouTube description exported to {filename}')
-                messagebox.showinfo('Success', f'YouTube description exported to {filename}')
             except Exception as e:
                 messagebox.showerror('Error', f'Failed to export: {e}')
                 self.log_debug('ERROR', f'Failed to export: {e}')
+    
+    def generate_youtube_hashtags(self, song_name: str, persona_name: str, style_description: str):
+        """Generate optimized YouTube hashtags with style-first emphasis, cap 500 words."""
+        style_name = style_description if style_description else persona_name
+        if style_name and ',' in style_name:
+            style_name = style_name.split(',')[0].strip()
+        
+        template = get_prompt_template('youtube_hashtags')
+        if not template:
+            self.log_debug('ERROR', 'Failed to load youtube_hashtags template')
+            return self._generate_fallback_hashtags(song_name, persona_name, style_name)
+        
+        prompt = template.replace('{SONG_NAME}', song_name)
+        prompt = prompt.replace('{ARTIST}', persona_name)
+        prompt = prompt.replace('{STYLE_NAME}', style_name if style_name else '')
+        prompt += (
+            "\nOrder the hashtags by highest viral potential and SEO relevance. "
+            "Prioritize style/genre keywords first, then song name and persona name. "
+            "Output only comma-separated hashtags starting with #, no numbering or bullets."
+        )
+        
+        self.log_debug('INFO', 'Generating optimized hashtags with AI...')
+        self.config(cursor='wait')
+        self.update()
+        try:
+            result = call_azure_ai(self.ai_config, prompt, profile='text')
+        finally:
+            self.config(cursor='')
+        
+        if result['success']:
+            ai_raw = result['content'].strip()
+            ai_raw = ai_raw.replace('Hashtags:', '').replace('hashtags:', '').strip()
+            style_tags = self._derive_style_tags(style_description, max_tags=12)
+            ai_tags = self._normalize_hashtag_list(ai_raw)
+            combined_tags = style_tags + [tag for tag in ai_tags if tag not in style_tags]
+            hashtags = ', '.join(combined_tags)
+            return self._limit_hashtags_words(hashtags, 500)
+        
+        self.log_debug('WARNING', 'AI hashtag generation failed, using fallback')
+        return self._generate_fallback_hashtags(song_name, persona_name, style_name)
+    
+    def _generate_fallback_hashtags(self, song_name: str, persona_name: str, style_name: str):
+        """Generate basic hashtags as fallback."""
+        tags = []
+        # Style tags first
+        tags.extend(self._derive_style_tags(style_name, max_tags=12))
+        # Core identifiers
+        tags.append(f"#{song_name.replace(' ', '')}")
+        if persona_name:
+            tags.append(f"#{persona_name.replace(' ', '')}")
+        # Light generic music tags (non-AI)
+        tags.extend(["#Music", "#Cover", "#Song"])
+        # Deduplicate while preserving order
+        seen = set()
+        deduped = []
+        for tag in tags:
+            if tag and tag not in seen:
+                deduped.append(tag)
+                seen.add(tag)
+        return self._limit_hashtags_words(', '.join(deduped), 500)
+    
+    def _derive_style_tags(self, style_text: str, max_tags: int = 12) -> list[str]:
+        """Create a list of hashtags derived from style/genre phrases."""
+        if not style_text:
+            return []
+        clean_text = style_text.replace('|', ',')
+        parts = []
+        for chunk in clean_text.replace(',', ' ').split():
+            token = ''.join(ch for ch in chunk if ch.isalnum())
+            if token:
+                parts.append(f"#{token}")
+        tags = []
+        seen = set()
+        for tag in parts:
+            if tag not in seen:
+                tags.append(tag)
+                seen.add(tag)
+            if len(tags) >= max_tags:
+                break
+        return tags
+    
+    def _normalize_hashtag_list(self, raw_tags: str) -> list[str]:
+        """Normalize AI returned hashtags into a unique #tag list."""
+        if not raw_tags:
+            return []
+        separators = [',', '\n', '\t']
+        normalized = raw_tags
+        for sep in separators:
+            normalized = normalized.replace(sep, ' ')
+        tokens = normalized.split()
+        tags = []
+        seen = set()
+        for tok in tokens:
+            token = tok.lstrip('#').strip()
+            token = ''.join(ch for ch in token if ch.isalnum())
+            if not token:
+                continue
+            tag = f"#{token}"
+            if tag not in seen:
+                tags.append(tag)
+                seen.add(tag)
+        return tags
+    
+    def _limit_hashtags_words(self, hashtags: str, max_words: int) -> str:
+        """Limit a hashtag string to a maximum word count."""
+        words = hashtags.replace(',', ' ').split()
+        if len(words) <= max_words:
+            return hashtags
+        limited = ' '.join(words[:max_words])
+        return limited
     
     def open_settings(self):
         """Open settings dialog."""
