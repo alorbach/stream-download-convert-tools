@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+import csv
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, scrolledtext
 import requests
@@ -102,13 +103,57 @@ def resolve_prompts_path() -> str:
     return default_path
 
 
+def resolve_styles_csv_path() -> str:
+    """Resolve default styles CSV path in AI/suno/suno_sound_styles.csv relative to project root."""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.abspath(os.path.join(script_dir, os.pardir))
+    return os.path.join(project_root, 'AI', 'suno', 'suno_sound_styles.csv')
+
+
+def get_styles_csv_path(config: dict) -> str:
+    """
+    Get the styles CSV path from config, resolving relative paths to project root.
+    Falls back to default if config value is empty or file not found.
+    """
+    csv_path = config.get('general', {}).get('styles_csv_path', 'AI/suno/suno_sound_styles.csv')
+
+    # If it's an absolute path and exists, use it
+    if os.path.isabs(csv_path) and os.path.exists(csv_path):
+        return csv_path
+
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.abspath(os.path.join(script_dir, os.pardir))
+    candidate = os.path.join(project_root, csv_path)
+
+    if os.path.exists(candidate):
+        return candidate
+
+    return resolve_styles_csv_path()
+
+
+def load_styles_from_csv(csv_path: str) -> list[dict]:
+    """Load styles from CSV into a list of dicts."""
+    styles = []
+    try:
+        with open(csv_path, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                styles.append(row)
+    except FileNotFoundError:
+        print(f'Error: Styles CSV not found at {csv_path}')
+    except Exception as exc:
+        print(f'Error: Failed to read styles CSV:\n{exc}')
+    return styles
+
+
 def load_config() -> dict:
     """Load configuration from JSON file, create default if it doesn't exist."""
     config_path = get_config_path()
     default_config = {
         "general": {
             "personas_path": "AI/Personas",
-            "default_save_path": ""
+            "default_save_path": "",
+            "styles_csv_path": "AI/suno/suno_sound_styles.csv"
         },
         "profiles": {
             "text": {
@@ -736,6 +781,132 @@ class AIPromptDialog(tk.Toplevel):
         self.destroy()
 
 
+class StyleSelectionDialog(tk.Toplevel):
+    """Popup to select one or more styles from the style library."""
+
+    def __init__(self, parent, styles: list[dict], initial_text: str = ''):
+        super().__init__(parent)
+        self.title('Select Styles')
+        self.geometry('620x520')
+        self.transient(parent)
+        self.grab_set()
+
+        # Always keep styles sorted by style name (case-insensitive)
+        self.styles = self._sort_styles(styles or [])
+        self.filtered_styles = self.styles
+        self.current_items = []
+        self.selected_style = None
+        self.status_var = tk.StringVar(value=f'{len(self.styles)} styles available')
+        self.search_var = tk.StringVar()
+
+        self.initial_selected = {
+            s.strip().lower()
+            for s in re.split(r'[,\n]+', initial_text)
+            if s.strip()
+        }
+
+        self.create_widgets()
+        self.apply_filter()
+
+        self.update_idletasks()
+        x = parent.winfo_x() + (parent.winfo_width() // 2) - (self.winfo_width() // 2)
+        y = parent.winfo_y() + (parent.winfo_height() // 2) - (self.winfo_height() // 2)
+        self.geometry(f"+{x}+{y}")
+
+    def create_widgets(self):
+        main_frame = ttk.Frame(self, padding=10)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+
+        search_frame = ttk.Frame(main_frame)
+        search_frame.pack(fill=tk.X, pady=(0, 8))
+        ttk.Label(search_frame, text='Search styles (style/artist/decade):').pack(side=tk.LEFT)
+        search_entry = ttk.Entry(search_frame, textvariable=self.search_var, width=40)
+        search_entry.pack(side=tk.LEFT, padx=6, fill=tk.X, expand=True)
+        self.search_var.trace_add('write', lambda *_: self.apply_filter())
+
+        list_frame = ttk.Frame(main_frame)
+        list_frame.pack(fill=tk.BOTH, expand=True)
+
+        self.listbox = tk.Listbox(list_frame, selectmode=tk.SINGLE, exportselection=False)
+        self.listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self.listbox.yview)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.listbox.configure(yscrollcommand=scrollbar.set)
+        self.listbox.bind('<Double-Button-1>', lambda _evt: self.on_ok())
+
+        status_frame = ttk.Frame(main_frame)
+        status_frame.pack(fill=tk.X, pady=(6, 0))
+        ttk.Label(status_frame, textvariable=self.status_var, foreground='gray').pack(anchor=tk.W)
+
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(pady=(10, 0))
+        ttk.Button(btn_frame, text='OK', command=self.on_ok).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text='Cancel', command=self.on_cancel).pack(side=tk.LEFT, padx=5)
+
+    def apply_filter(self):
+        query = self.search_var.get().strip().lower()
+        if query:
+            self.filtered_styles = [
+                row for row in self.styles
+                if query in (row.get('style', '').lower())
+                or query in (row.get('artists', '').lower())
+                or query in (row.get('decade', '').lower())
+            ]
+        else:
+            self.filtered_styles = self.styles
+
+        self.filtered_styles = self._sort_styles(self.filtered_styles)
+        self.populate_list()
+
+    def _sort_styles(self, styles: list[dict]) -> list[dict]:
+        """Sort styles by name (case-insensitive) for consistent display."""
+        return sorted(
+            styles,
+            key=lambda r: (r.get('style', '') or '').lower()
+        )
+
+    def populate_list(self):
+        self.listbox.delete(0, tk.END)
+        self.current_items = []
+
+        for row in self.filtered_styles:
+            style_name = (row.get('style') or '').strip()
+            if not style_name:
+                continue
+
+            extras = []
+            artists = (row.get('artists') or row.get('artist') or '').strip()
+            if artists:
+                extras.append(artists)
+            decade = (row.get('decade') or '').strip()
+            if decade:
+                extras.append(decade)
+
+            display = style_name
+            if extras:
+                display += f"  ({' | '.join(extras)})"
+
+            self.listbox.insert(tk.END, display)
+            self.current_items.append(style_name)
+
+            if style_name.lower() in self.initial_selected:
+                self.listbox.selection_set(tk.END)
+
+        self.status_var.set(f'{len(self.filtered_styles)} styles available')
+
+    def on_ok(self):
+        indices = self.listbox.curselection()
+        if indices:
+            idx = indices[0]
+            if 0 <= idx < len(self.current_items):
+                self.selected_style = self.current_items[idx]
+        self.destroy()
+
+    def on_cancel(self):
+        self.selected_style = None
+        self.destroy()
+
+
 class ImagePreviewDialog(tk.Toplevel):
     """Dialog to preview a newly generated image and ask if user wants to overwrite existing one."""
     def __init__(self, parent, new_image_path: str, existing_image_path: str, scene_num: str):
@@ -917,6 +1088,13 @@ class SettingsDialog(tk.Toplevel):
         path_entry = ttk.Entry(general_frame, textvariable=self.general_vars['personas_path'], width=40)
         path_entry.grid(row=1, column=1, pady=5, padx=5, sticky=tk.W)
         ttk.Button(general_frame, text='Browse...', command=self.browse_personas_path).grid(row=1, column=2, pady=5, padx=5)
+
+        ttk.Label(general_frame, text='Styles CSV (for style picker):', font=('TkDefaultFont', 9, 'bold')).grid(row=2, column=0, sticky=tk.W, pady=(10, 2), columnspan=3)
+        ttk.Label(general_frame, text='Path:', font=('TkDefaultFont', 8)).grid(row=3, column=0, sticky=tk.W, pady=5, padx=(10, 0))
+        self.general_vars['styles_csv_path'] = tk.StringVar(value=general_data.get('styles_csv_path', 'AI/suno/suno_sound_styles.csv'))
+        styles_entry = ttk.Entry(general_frame, textvariable=self.general_vars['styles_csv_path'], width=40)
+        styles_entry.grid(row=3, column=1, pady=5, padx=5, sticky=tk.W)
+        ttk.Button(general_frame, text='Browse...', command=self.browse_styles_csv).grid(row=3, column=2, pady=5, padx=5)
         
         profiles = self.config.get('profiles', {})
         
@@ -975,11 +1153,35 @@ class SettingsDialog(tk.Toplevel):
                     self.general_vars['personas_path'].set(path)
             except:
                 self.general_vars['personas_path'].set(path)
+
+    def browse_styles_csv(self):
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.abspath(os.path.join(script_dir, os.pardir))
+        initial_dir = os.path.join(project_root, 'AI', 'suno')
+
+        if not os.path.exists(initial_dir):
+            initial_dir = project_root
+
+        path = filedialog.askopenfilename(
+            title='Select styles CSV',
+            initialdir=initial_dir,
+            filetypes=[('CSV Files', '*.csv'), ('All Files', '*.*')]
+        )
+        if path:
+            try:
+                rel_path = os.path.relpath(path, project_root)
+                if not rel_path.startswith('..'):
+                    self.general_vars['styles_csv_path'].set(rel_path.replace('\\', '/'))
+                else:
+                    self.general_vars['styles_csv_path'].set(path)
+            except:
+                self.general_vars['styles_csv_path'].set(path)
     
     def save_settings(self):
         general = {
             'personas_path': self.general_vars['personas_path'].get(),
-            'default_save_path': self.config.get('general', {}).get('default_save_path', '')
+            'default_save_path': self.config.get('general', {}).get('default_save_path', ''),
+            'styles_csv_path': self.general_vars['styles_csv_path'].get()
         }
         
         profiles = {}
@@ -3107,6 +3309,11 @@ class SunoPersona(tk.Tk):
         ttk.Label(scrollable_frame, text='Song Style:', font=('TkDefaultFont', 9, 'bold')).grid(row=4, column=0, sticky=tk.NW, pady=5)
         self.song_style_text = scrolledtext.ScrolledText(scrollable_frame, height=3, wrap=tk.WORD, width=60)
         self.song_style_text.grid(row=4, column=1, columnspan=2, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
+
+        style_btn_frame = ttk.Frame(scrollable_frame)
+        style_btn_frame.grid(row=4, column=3, padx=5, pady=5, sticky=tk.N)
+        ttk.Button(style_btn_frame, text='Select Styles...', command=lambda: self.open_style_selector(False)).pack(fill=tk.X, pady=(0, 4))
+        ttk.Button(style_btn_frame, text='Select + Merge', command=lambda: self.open_style_selector(True)).pack(fill=tk.X)
         
         ttk.Label(scrollable_frame, text='Merged Style:', font=('TkDefaultFont', 9, 'bold')).grid(row=5, column=0, sticky=tk.NW, pady=5)
         self.merged_style_text = scrolledtext.ScrolledText(scrollable_frame, height=3, wrap=tk.WORD, width=60)
@@ -3821,7 +4028,43 @@ class SunoPersona(tk.Tk):
             self.log_debug('ERROR', f'Error generating lyrics: {e}')
         finally:
             self.config(cursor='')
-    
+
+    def open_style_selector(self, auto_merge: bool = False):
+        """Open the style picker popup and optionally auto-merge after selection."""
+        csv_path = get_styles_csv_path(self.ai_config)
+        styles = load_styles_from_csv(csv_path)
+        if not styles:
+            messagebox.showerror('Error', f'Styles CSV not found or empty:\n{csv_path}')
+            self.log_debug('ERROR', f'Styles CSV missing or empty: {csv_path}')
+            return []
+
+        current_text = self.song_style_text.get('1.0', tk.END).strip()
+        dialog = StyleSelectionDialog(self, styles, initial_text=current_text)
+        self.wait_window(dialog)
+
+        if dialog.selected_style is None:
+            return []
+
+        selected_name = dialog.selected_style
+        selected_row = next((r for r in styles if (r.get('style', '').strip() == selected_name)), None)
+        keywords = ''
+        if selected_row:
+            keywords = (selected_row.get('prompt') or '').strip()
+            if not keywords:
+                keywords = (selected_row.get('style') or '').strip()
+        if not keywords:
+            keywords = selected_name
+
+        # Replace song style with the selected style keywords
+        self.song_style_text.delete('1.0', tk.END)
+        self.song_style_text.insert('1.0', keywords)
+        self.log_debug('INFO', f'Selected style applied: {selected_name}')
+
+        if auto_merge:
+            self.merge_song_style()
+
+        return [selected_name]
+
     def merge_song_style(self):
         """Merge song style with persona voice style."""
         if not self.current_persona:
@@ -3830,6 +4073,7 @@ class SunoPersona(tk.Tk):
         
         song_style = self.song_style_text.get('1.0', tk.END).strip()
         voice_style = self.current_persona.get('voice_style', '')
+        genre_tags = self.current_persona.get('genre_tags', '')
         
         if not song_style:
             messagebox.showwarning('Warning', 'Please enter a song style.')
@@ -3838,10 +4082,24 @@ class SunoPersona(tk.Tk):
         if not voice_style:
             messagebox.showwarning('Warning', 'Persona voice style is not set.')
             return
+
+        persona_style_context = voice_style
+        if genre_tags:
+            persona_style_context = f"{voice_style}\nGenre Tags: {genre_tags}"
+
+        template = get_prompt_template('merge_styles')
+        if template:
+            prompt = template.replace('{STYLES_TO_MERGE}', song_style)
+            prompt = prompt.replace('{ORIGINAL_STYLE}', persona_style_context if persona_style_context else 'Persona style not set')
+            self.log_debug('INFO', 'Merging styles with template merge_styles')
+        else:
+            prompt = (
+                "Merge the following song style with the persona's voice style:\n\n"
+                f"Song Style: {song_style}\n\nPersona Voice Style: {voice_style}\n"
+                f"{'Genre Tags: ' + genre_tags if genre_tags else ''}\n\nCreate a merged style description that combines both."
+            )
+            self.log_debug('INFO', 'Merging styles with fallback prompt')
         
-        prompt = f"Merge the following song style with the persona's voice style:\n\nSong Style: {song_style}\n\nPersona Voice Style: {voice_style}\n\nCreate a merged style description that combines both."
-        
-        self.log_debug('INFO', 'Merging styles...')
         self.config(cursor='wait')
         self.update()
         
