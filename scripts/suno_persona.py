@@ -3269,8 +3269,10 @@ class SunoPersona(tk.Tk):
         details_notebook.pack(fill=tk.BOTH, expand=True)
 
         song_details_tab = ttk.Frame(details_notebook)
+        descriptions_tab = ttk.Frame(details_notebook)
         storyboard_tab = ttk.Frame(details_notebook)
         details_notebook.add(song_details_tab, text='Song Details')
+        details_notebook.add(descriptions_tab, text='Song Description')
         details_notebook.add(storyboard_tab, text='Storyboard')
 
         canvas = tk.Canvas(song_details_tab)
@@ -3342,13 +3344,8 @@ class SunoPersona(tk.Tk):
         self.storyboard_theme_text.grid(row=6, column=1, columnspan=2, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
         ttk.Button(scrollable_frame, text='Use Merged Style', command=self.set_storyboard_theme_from_merged_style).grid(row=6, column=3, padx=5, pady=5, sticky=tk.N)
 
-        ttk.Label(scrollable_frame, text='Song Description (<=500 chars):', font=('TkDefaultFont', 9, 'bold')).grid(row=7, column=0, sticky=tk.NW, pady=5)
-        self.song_description_text = scrolledtext.ScrolledText(scrollable_frame, height=3, wrap=tk.WORD, width=60)
-        self.song_description_text.grid(row=7, column=1, columnspan=2, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
-        ttk.Button(scrollable_frame, text='Generate', command=self.generate_song_description).grid(row=7, column=3, padx=5, pady=5, sticky=tk.N)
-
         ai_results_notebook = ttk.Notebook(scrollable_frame)
-        ai_results_notebook.grid(row=8, column=0, columnspan=4, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
+        ai_results_notebook.grid(row=7, column=0, columnspan=4, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
         
         album_cover_frame = ttk.Frame(ai_results_notebook)
         ai_results_notebook.add(album_cover_frame, text='Album Cover')
@@ -3400,9 +3397,49 @@ class SunoPersona(tk.Tk):
         
         scrollable_frame.columnconfigure(1, weight=1)
         scrollable_frame.rowconfigure(3, weight=1)
-        scrollable_frame.rowconfigure(8, weight=1)
+        scrollable_frame.rowconfigure(7, weight=1)
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
+
+        desc_canvas = tk.Canvas(descriptions_tab)
+        desc_scrollbar = ttk.Scrollbar(descriptions_tab, orient="vertical", command=desc_canvas.yview)
+        desc_frame = ttk.Frame(desc_canvas)
+
+        desc_frame.bind(
+            "<Configure>",
+            lambda e: desc_canvas.configure(scrollregion=desc_canvas.bbox("all"))
+        )
+
+        desc_canvas.create_window((0, 0), window=desc_frame, anchor="nw")
+        desc_canvas.configure(yscrollcommand=desc_scrollbar.set)
+
+        def on_mousewheel_descriptions(event):
+            if event.num == 4 or (hasattr(event, 'delta') and event.delta > 0):
+                desc_canvas.yview_scroll(-1, "units")
+            elif event.num == 5 or (hasattr(event, 'delta') and event.delta < 0):
+                desc_canvas.yview_scroll(1, "units")
+        desc_canvas.bind("<MouseWheel>", on_mousewheel_descriptions)
+        desc_canvas.bind("<Button-4>", on_mousewheel_descriptions)
+        desc_canvas.bind("<Button-5>", on_mousewheel_descriptions)
+        desc_frame.bind("<MouseWheel>", on_mousewheel_descriptions)
+        desc_frame.bind("<Button-4>", on_mousewheel_descriptions)
+        desc_frame.bind("<Button-5>", on_mousewheel_descriptions)
+
+        ttk.Label(desc_frame, text='Song Description:', font=('TkDefaultFont', 9, 'bold')).grid(row=0, column=0, sticky=tk.NW, pady=5)
+        self.song_description_text = scrolledtext.ScrolledText(desc_frame, height=4, wrap=tk.WORD, width=60)
+        self.song_description_text.grid(row=0, column=1, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
+        ttk.Button(desc_frame, text='Generate (EN)', command=self.generate_song_description).grid(row=0, column=2, padx=5, pady=5, sticky=tk.N)
+
+        ttk.Label(desc_frame, text='Song Description (German):', font=('TkDefaultFont', 9, 'bold')).grid(row=1, column=0, sticky=tk.NW, pady=5)
+        self.song_description_de_text = scrolledtext.ScrolledText(desc_frame, height=5, wrap=tk.WORD, width=60)
+        self.song_description_de_text.grid(row=1, column=1, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
+        ttk.Button(desc_frame, text='Generate (DE)', command=self.generate_song_description_de).grid(row=1, column=2, padx=5, pady=5, sticky=tk.N)
+
+        desc_frame.columnconfigure(1, weight=1)
+        desc_frame.rowconfigure(0, weight=1)
+        desc_frame.rowconfigure(1, weight=1)
+        desc_canvas.pack(side="left", fill="both", expand=True)
+        desc_scrollbar.pack(side="right", fill="y")
 
         # Storyboard tab (full details) now lives beside Song Details
         self.create_storyboard_tab(storyboard_tab)
@@ -3766,6 +3803,7 @@ class SunoPersona(tk.Tk):
                 'song_style': '',
                 'merged_style': '',
                 'song_description': '',
+                'song_description_de': '',
                 'album_cover': '',
                 'video_loop': '',
                 'storyboard': [],
@@ -3821,6 +3859,9 @@ class SunoPersona(tk.Tk):
             self.persona_scene_percent_var.set(str(self.current_song.get('persona_scene_percent', 35)))
         self.song_description_text.delete('1.0', tk.END)
         self.song_description_text.insert('1.0', self.current_song.get('song_description', ''))
+        if hasattr(self, 'song_description_de_text'):
+            self.song_description_de_text.delete('1.0', tk.END)
+            self.song_description_de_text.insert('1.0', self.current_song.get('song_description_de', ''))
         self.album_cover_text.delete('1.0', tk.END)
         self.album_cover_text.insert('1.0', self.current_song.get('album_cover', ''))
         self.video_loop_text.delete('1.0', tk.END)
@@ -3869,6 +3910,8 @@ class SunoPersona(tk.Tk):
             self.persona_scene_percent_var.set('35')
         if hasattr(self, 'song_description_text'):
             self.song_description_text.delete('1.0', tk.END)
+        if hasattr(self, 'song_description_de_text'):
+            self.song_description_de_text.delete('1.0', tk.END)
         self.album_cover_text.delete('1.0', tk.END)
         self.video_loop_text.delete('1.0', tk.END)
         if hasattr(self, 'overlay_lyrics_var'):
@@ -4018,6 +4061,7 @@ class SunoPersona(tk.Tk):
             'storyboard_theme': self.storyboard_theme_text.get('1.0', tk.END).strip() if hasattr(self, 'storyboard_theme_text') else '',
             'persona_scene_percent': int(self.persona_scene_percent_var.get() or 35) if hasattr(self, 'persona_scene_percent_var') else 35,
             'song_description': self.song_description_text.get('1.0', tk.END).strip() if hasattr(self, 'song_description_text') else self.current_song.get('song_description', '') if self.current_song else '',
+            'song_description_de': self.song_description_de_text.get('1.0', tk.END).strip() if hasattr(self, 'song_description_de_text') else self.current_song.get('song_description_de', '') if self.current_song else '',
             'album_cover': self.album_cover_text.get('1.0', tk.END).strip(),
             'video_loop': self.video_loop_text.get('1.0', tk.END).strip(),
             'storyboard': self.get_storyboard_data() if hasattr(self, 'storyboard_tree') else [],
@@ -4175,6 +4219,62 @@ class SunoPersona(tk.Tk):
         except Exception as e:
             messagebox.showerror('Error', f'Error generating song description: {e}')
             self.log_debug('ERROR', f'Error generating song description: {e}')
+        finally:
+            self.config(cursor='')
+
+    def generate_song_description_de(self):
+        """Generate a structured German song description using AI."""
+        if not self.current_persona:
+            messagebox.showwarning('Warning', 'Please select a persona first.')
+            return
+        
+        song_name = self.song_name_var.get().strip()
+        full_song_name = self.full_song_name_var.get().strip() or song_name
+        persona_name = self.current_persona.get('name', '')
+        style = self.merged_style_text.get('1.0', tk.END).strip() or self.song_style_text.get('1.0', tk.END).strip()
+        lyric_ideas = self.lyric_ideas_text.get('1.0', tk.END).strip()
+        lyrics = self.lyrics_text.get('1.0', tk.END).strip()
+        
+        if not song_name:
+            messagebox.showwarning('Warning', 'Please enter a song name.')
+            return
+        
+        prompt = (
+            f"Erstelle einen kompakten, strukturierten deutschen Beschreibungstext fuer den Song '{full_song_name}' "
+            f"von der KI-Persona '{persona_name}'. "
+            "Zu jedem geposteten Song muss eine kurze Beschreibung hinzugefuegt werden. "
+            "Beantworte knapp: Worum geht es im Song? Was macht ihn besonders? Welche Stimmung hat er? "
+            "Was war die Idee hinter dem Prompt? Warum? "
+            "Binde explizit Stil/Vibe und Persona-Infos ein. "
+            "Stilbegriffe muessen nicht uebersetzt werden; englische Style-Woerter duerfen unveraendert bleiben. "
+            "Nutze kurze Abschnitte mit Labels, je Abschnitt ein Satz (z. B. Kurzbeschreibung:, Stil/Vibe:, Persona:, Idee/Prompt:, Stimmung:, Besonderes:). "
+            "Keine Bullet-Symbole oder Hashtags. Zeilenumbrueche zwischen Abschnitten sind ok."
+        )
+        if style:
+            prompt += f"\nStil/Vibe: {style}"
+        if lyric_ideas:
+            prompt += f"\nIdeen oder Themen: {lyric_ideas[:400]}"
+        if lyrics:
+            prompt += f"\nStimmung aus diesen Lyrics (optional, nicht zitieren): {lyrics[:600]}"
+        prompt += "\nLiefere nur den strukturierten Text mit Labels, keine weiteren Hinweise."
+        
+        self.log_debug('INFO', 'Generating German song description...')
+        self.config(cursor='wait')
+        self.update()
+        
+        try:
+            result = call_azure_ai(self.ai_config, prompt, profile='text')
+            if result['success']:
+                desc = result['content'].strip()
+                self.song_description_de_text.delete('1.0', tk.END)
+                self.song_description_de_text.insert('1.0', desc)
+                self.log_debug('INFO', f'German song description generated ({len(desc)} chars)')
+            else:
+                messagebox.showerror('Error', f'Failed to generate German song description: {result["error"]}')
+                self.log_debug('ERROR', f'Failed to generate German song description: {result["error"]}')
+        except Exception as e:
+            messagebox.showerror('Error', f'Error generating German song description: {e}')
+            self.log_debug('ERROR', f'Error generating German song description: {e}')
         finally:
             self.config(cursor='')
 
