@@ -1757,7 +1757,8 @@ def load_song_config(song_path: str) -> dict:
         'video_loop_size': '9:16 (720x1280)',
         'overlay_lyrics_on_image': False,
         'embed_lyrics_in_prompt': True,
-        'persona_scene_percent': 35
+        'persona_scene_percent': 35,
+        'storyboard_setup_count': 4
     }
     
     if os.path.exists(config_file):
@@ -1943,7 +1944,28 @@ class SunoPersona(tk.Tk):
     def azure_vision(self, image_paths: list, prompt: str, system_message: str | None = None, profile: str = 'text') -> dict:
         """Wrapper to call Azure Vision and log the prompt/system message."""
         self.log_prompt_debug('Azure Vision prompt', prompt, system_message)
-        return call_azure_vision(self.ai_config, image_paths, prompt, system_message=system_message, profile=profile)
+        processed_paths = []
+        for idx, path in enumerate(image_paths or []):
+            try:
+                with Image.open(path) as img:
+                    # Skip if already small or explicitly downscaled
+                    if max(img.width, img.height) <= 1536 or 'downscaled' in os.path.basename(path).lower():
+                        processed_paths.append(path)
+                        continue
+                    new_w = max(1, img.width // 2)
+                    new_h = max(1, img.height // 2)
+                    downscaled = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+                    temp_dir = os.path.join(self.current_song_path or os.path.dirname(path) or os.getcwd(), 'temp')
+                    os.makedirs(temp_dir, exist_ok=True)
+                    base, ext = os.path.splitext(os.path.basename(path))
+                    out_path = os.path.join(temp_dir, f"{base}_downscaled{ext if ext else '.png'}")
+                    downscaled.save(out_path, 'PNG')
+                    processed_paths.append(out_path)
+                    self.log_debug('DEBUG', f'Downscaled {path} to {out_path} ({img.width}x{img.height} -> {new_w}x{new_h}) before Azure Vision')
+            except Exception as exc:
+                self.log_debug('WARNING', f'Failed to downscale image {path}: {exc}')
+                processed_paths.append(path)
+        return call_azure_vision(self.ai_config, processed_paths if processed_paths else image_paths, prompt, system_message=system_message, profile=profile)
     
     def azure_image(self, prompt: str, size: str = '1024x1024', profile: str = 'image_gen', quality: str = 'medium', output_format: str = 'png', output_compression: int = 100) -> dict:
         """Wrapper to call Azure Image generation and log the prompt."""
@@ -3535,6 +3557,10 @@ class SunoPersona(tk.Tk):
         self.persona_scene_percent_var = tk.StringVar(value='35')
         ttk.Spinbox(controls_frame, from_=0, to=100, textvariable=self.persona_scene_percent_var, width=4).pack(side=tk.LEFT, padx=2)
 
+        ttk.Label(controls_frame, text='Distinct setups:', font=('TkDefaultFont', 9, 'bold')).pack(side=tk.LEFT, padx=(10, 5))
+        self.storyboard_setup_count_var = tk.StringVar(value='4')
+        ttk.Spinbox(controls_frame, from_=1, to=12, textvariable=self.storyboard_setup_count_var, width=4).pack(side=tk.LEFT, padx=2)
+
         ttk.Button(controls_frame, text='Generate Storyboard', command=self.generate_storyboard).pack(side=tk.LEFT, padx=10)
 
         # Lyrics handling options (moved to storyboard)
@@ -3848,7 +3874,8 @@ class SunoPersona(tk.Tk):
                 'album_cover': '',
                 'video_loop': '',
                 'storyboard': [],
-                'storyboard_seconds_per_video': 8
+                'storyboard_seconds_per_video': 8,
+                'storyboard_setup_count': 4
             }
             
             save_song_config(new_song_path, config)
@@ -3898,6 +3925,8 @@ class SunoPersona(tk.Tk):
             self.storyboard_theme_text.insert('1.0', self.current_song.get('storyboard_theme', ''))
         if hasattr(self, 'persona_scene_percent_var'):
             self.persona_scene_percent_var.set(str(self.current_song.get('persona_scene_percent', 35)))
+        if hasattr(self, 'storyboard_setup_count_var'):
+            self.storyboard_setup_count_var.set(str(self.current_song.get('storyboard_setup_count', 4)))
         self.song_description_text.delete('1.0', tk.END)
         self.song_description_text.insert('1.0', self.current_song.get('song_description', ''))
         if hasattr(self, 'song_description_de_text'):
@@ -4112,7 +4141,8 @@ class SunoPersona(tk.Tk):
             'album_cover_format': self.album_cover_format_var.get() if hasattr(self, 'album_cover_format_var') else 'PNG',
             'video_loop_size': self.video_loop_size_var.get() if hasattr(self, 'video_loop_size_var') else '9:16 (720x1280)',
             'overlay_lyrics_on_image': bool(self.overlay_lyrics_var.get()) if hasattr(self, 'overlay_lyrics_var') else False,
-            'embed_lyrics_in_prompt': bool(self.embed_lyrics_var.get()) if hasattr(self, 'embed_lyrics_var') else True
+            'embed_lyrics_in_prompt': bool(self.embed_lyrics_var.get()) if hasattr(self, 'embed_lyrics_var') else True,
+            'storyboard_setup_count': int(self.storyboard_setup_count_var.get() or 4) if hasattr(self, 'storyboard_setup_count_var') else 4
         }
         
         if save_song_config(self.current_song_path, config):
@@ -5420,6 +5450,11 @@ class SunoPersona(tk.Tk):
             persona_scene_percent = 35
         persona_scene_percent = max(0, min(100, persona_scene_percent))
         no_persona_percent = max(0, 100 - persona_scene_percent)
+        try:
+            storyboard_setup_count = int(self.storyboard_setup_count_var.get() or 4) if hasattr(self, 'storyboard_setup_count_var') else 4
+        except Exception:
+            storyboard_setup_count = 4
+        storyboard_setup_count = max(1, min(12, storyboard_setup_count))
         persona_name = self.current_persona.get('name', '')
         visual_aesthetic = self.current_persona.get('visual_aesthetic', '')
         base_image_prompt = self.current_persona.get('base_image_prompt', '')
@@ -5580,25 +5615,30 @@ Vibe: {vibe if vibe else 'N/A'}
    - ~{persona_scene_percent}% persona scenes (never consecutive)
    - Abstract scenes: purely environmental, symbolic, atmospheric - zero human figures
 
-3. VISUAL VARIETY: Every scene must differ significantly:
+3. DISTINCT SETUPS: Use only {storyboard_setup_count} unique visual setups (industry sweet spot is 3-4).
+   - A setup = location + lighting + base composition. You may "cheat" by re-lighting a corner to create multiple looks.
+   - Reuse these setups by changing shot type, angle, lens, blocking, props, and motion. Do NOT introduce new locations beyond the {storyboard_setup_count} setups.
+   - Highlight high-energy sections (hooks/chorus) by swapping to the most striking setup; return to calmer setups for verses/outro.
+
+4. VISUAL VARIETY: Every scene must differ significantly:
    - Rotate shot types: extreme close-up, medium, wide, aerial, macro
    - Alternate: dark/light, warm/cool, organic/geometric, static/dynamic
    - Vary: angles, lighting, textures, settings, color palettes
 
-4. PERSONA VARIETY: When persona appears, change everything:
+5. PERSONA VARIETY: When persona appears, change everything:
    - Different pose, expression, camera angle, lighting, setting each time
    - Brief mention only - focus on scene, not persona details
 
-5. LYRICS INTEGRATION:"""
+6. LYRICS INTEGRATION:"""
             prompt += lyrics_rule
             
             prompt += f"""
 
-6. GLOBAL THEME:
+7. GLOBAL THEME:
    - Begin EVERY scene description with the theme prefix: {storyboard_theme if storyboard_theme else '[If no theme is set, skip this prefix]'}
    - Treat this as the overall image aesthetic; keep visuals aligned with it across all scenes
 
-7. CONTENT SAFETY (use these alternatives):
+8. CONTENT SAFETY (use these alternatives):
    - "black" -> "dark", "shadowy", "charcoal"
    - "void" -> "vast emptiness", "expansive darkness"  
    - "praying" -> "pleading", "hoping", "seeking"
@@ -5633,12 +5673,16 @@ ABSOLUTE RULES:
 1. Output ONLY scene prompts in format: "SCENE X: [duration] seconds\\n[prompt]"
 2. Generate ALL {num_scenes} scenes - no stopping, no questions
 3. 60-70% of scenes must be [NO CHARACTERS] - purely environmental/abstract
-4. Every scene must be visually distinct from all others
-5. If hitting response limits, batch output (scenes 1-14, then 15-28, etc.)
+4. Use only {storyboard_setup_count} distinct setups (location + lighting). Rotate through them; do NOT introduce new setups beyond this count. Sweet spot is 3-4 setups; default is 4.
+5. Every scene must be visually distinct from all others (change shot type/angle/light/palette)
+6. Keep modern pacing: think 2-4 second shots; refresh visuals on section changes (verse/chorus/bridge) using the strongest setups for hooks.
+7. If hitting response limits, batch output (scenes 1-14, then 15-28, etc.)
 """
+            next_rule_num = 8
             if storyboard_theme:
-                system_message += f"6. Every scene prompt must START with this theme prefix before anything else: {storyboard_theme}\n"
-            system_message += f"7. Target persona presence: about {persona_scene_percent}% of scenes (non-consecutive). Maintain variety.\n"
+                system_message += f"{next_rule_num}. Every scene prompt must START with this theme prefix before anything else: {storyboard_theme}\n"
+                next_rule_num += 1
+            system_message += f"{next_rule_num}. Target persona presence: about {persona_scene_percent}% of scenes (non-consecutive). Maintain variety.\n"
             system_message += """
 
 Start immediately with "SCENE 1:" - no introduction or commentary."""
@@ -5717,7 +5761,7 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
                         
                         # Create batch-specific prompt
                         batch_prompt = self._create_batch_storyboard_prompt(
-                            song_name, full_song_name, lyrics, merged_style, storyboard_theme, persona_name,
+                            song_name, full_song_name, lyrics, merged_style, storyboard_theme, persona_scene_percent, storyboard_setup_count, persona_name,
                             visual_aesthetic, base_image_prompt, vibe, lyric_segments,
                             song_duration, seconds_per_video, batch_start, batch_end, num_scenes
                         )
@@ -5783,7 +5827,7 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
                     return
                 
                 combined_content = self.ensure_complete_storyboard_response(
-                    content, song_name, full_song_name, lyrics, merged_style, storyboard_theme, persona_scene_percent, persona_name,
+                    content, song_name, full_song_name, lyrics, merged_style, storyboard_theme, persona_scene_percent, storyboard_setup_count, persona_name,
                     visual_aesthetic, base_image_prompt, vibe, lyric_segments,
                     song_duration, seconds_per_video, num_scenes, system_message, max_tokens
                 )
@@ -5801,7 +5845,7 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
         finally:
             self.config(cursor='')
     
-    def _create_batch_storyboard_prompt(self, song_name, full_song_name, lyrics, merged_style, storyboard_theme, persona_scene_percent, persona_name,
+    def _create_batch_storyboard_prompt(self, song_name, full_song_name, lyrics, merged_style, storyboard_theme, persona_scene_percent, storyboard_setup_count, persona_name,
                                         visual_aesthetic, base_image_prompt, vibe, lyric_segments,
                                         song_duration, seconds_per_video, batch_start, batch_end, total_scenes):
         """Create a prompt for generating a specific batch of scenes."""
@@ -5816,6 +5860,8 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
             prompt += f"GLOBAL STORY THEME (prepend to every scene): {storyboard_theme}\n"
             prompt += "Every scene description must start with this theme text, then add scene specifics.\n\n"
         prompt += f"Target persona presence: about {persona_scene_percent}% of scenes (non-consecutive). Keep plenty of non-persona scenes for variety.\n\n"
+        prompt += f"Use only {storyboard_setup_count} distinct visual setups (location + lighting). Rotate through them; do NOT add more setups. Sweet spot is 3-4; default is 4. You may 'cheat' by relighting a corner to make multiple looks. Use the most striking setup for hooks/chorus; calmer setups for verses/outro.\n"
+        prompt += "Keep modern pacing: imagine 2-4 second shots and refresh visuals on section changes.\n\n"
         
         # Include persona visual description only as reference (not for every scene)
         prompt += "\nPERSONA REFERENCE (only use when persona appears in scenes - see requirements below):\n"
@@ -5916,7 +5962,7 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
         return max(int(m) for m in matches)
     
     def ensure_complete_storyboard_response(self, initial_content: str, song_name: str, full_song_name: str,
-                                            lyrics: str, merged_style: str, storyboard_theme: str, persona_scene_percent: int, persona_name: str,
+                                            lyrics: str, merged_style: str, storyboard_theme: str, persona_scene_percent: int, storyboard_setup_count: int, persona_name: str,
                                             visual_aesthetic: str, base_image_prompt: str, vibe: str,
                                             lyric_segments: list, song_duration: float, seconds_per_video: int,
                                             total_scenes: int, system_message: str, max_tokens: int) -> str | None:
@@ -5939,7 +5985,7 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
             self.log_debug('INFO', f'Requesting additional scenes {batch_start}-{batch_end}')
             
             batch_prompt = self._create_batch_storyboard_prompt(
-                song_name, full_song_name, lyrics, merged_style, storyboard_theme, persona_scene_percent, persona_name,
+                song_name, full_song_name, lyrics, merged_style, storyboard_theme, persona_scene_percent, storyboard_setup_count, persona_name,
                 visual_aesthetic, base_image_prompt, vibe, lyric_segments,
                 song_duration, seconds_per_video, batch_start, batch_end, total_scenes
             )
