@@ -3162,16 +3162,20 @@ class SunoPersona(tk.Tk):
         self.update()
         
         try:
-            view_specific = "full-body portrait, facing camera, standing upright"
+            view_specific = (
+                "full-body portrait, facing camera, standing upright, long shot, "
+                "camera distance set to capture entire height, subject centered"
+            )
             prompt = f"{base_prompt}, {view_specific}, pure white background, "
-            prompt += "FULL BODY VISIBLE from head to toe, complete character visible, entire figure in frame, "
-            prompt += "full-length portrait, no cropping, no cut-off body parts, complete person visible, "
+            prompt += "FULL BODY VISIBLE from head to toe, feet and hands visible, entire figure in frame, "
+            prompt += "full-length portrait, no cropping, no cut-off body parts, no close-up, no zoom-in, "
             prompt += "professional reference photo, studio photography, clean minimalist composition, "
             prompt += "even studio lighting with subtle dramatic shadows, high quality professional photography, "
             prompt += "no background elements, no props except those described in the base prompt, "
             prompt += "sharp focus, professional portrait photography style, reference sheet style, full-body shot"
             
-            result = self.azure_image(prompt, size='1024x1024', profile='image_gen')
+            # Use a supported tall aspect ratio to reduce cropping
+            result = self.azure_image(prompt, size='1024x1536', profile='image_gen')
             
             if result['success']:
                 img_bytes = result.get('image_bytes', b'')
@@ -3235,9 +3239,15 @@ class SunoPersona(tk.Tk):
             try:
                 # Build view-specific description
                 if view.lower() == 'side':
-                    view_specific = "full-body side profile, facing right, standing upright"
+                    view_specific = (
+                        "full-body side profile, facing right, standing upright, long shot, "
+                        "camera distance set to capture entire height, subject centered"
+                    )
                 elif view.lower() == 'back':
-                    view_specific = "full-body view from behind, standing upright"
+                    view_specific = (
+                        "full-body view from behind, standing upright, long shot, "
+                        "camera distance set to capture entire height, subject centered"
+                    )
                 
                 # Create prompt that uses the character description from Front image
                 if character_description:
@@ -3247,14 +3257,15 @@ class SunoPersona(tk.Tk):
                     # Fallback to base prompt if analysis failed
                     image_prompt = f"{base_prompt}, {view_specific}, pure white background, "
                 
-                image_prompt += "FULL BODY VISIBLE from head to toe, complete character visible, entire figure in frame, "
-                image_prompt += "full-length portrait, no cropping, no cut-off body parts, complete person visible, "
+                image_prompt += "FULL BODY VISIBLE from head to toe, feet and hands visible, entire figure in frame, "
+                image_prompt += "full-length portrait, no cropping, no cut-off body parts, no close-up, no zoom-in, "
                 image_prompt += "Match the exact same character appearance, clothing, styling, and visual details from the Front reference image, "
                 image_prompt += "professional reference photo, studio photography, clean minimalist composition, "
                 image_prompt += "even studio lighting with subtle dramatic shadows, high quality professional photography, "
                 image_prompt += "no background elements, sharp focus, professional portrait photography style, reference sheet style, full-body shot"
                 
-                result_img = self.azure_image(image_prompt, size='1024x1024', profile='image_gen')
+                # Use a supported tall aspect ratio to reduce cropping
+                result_img = self.azure_image(image_prompt, size='1024x1536', profile='image_gen')
                 
                 if result_img['success']:
                     img_bytes = result_img.get('image_bytes', b'')
