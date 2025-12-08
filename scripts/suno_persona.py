@@ -1922,6 +1922,47 @@ class SunoPersona(tk.Tk):
         except Exception:
             pass
     
+    def log_prompt_debug(self, title: str, prompt: str | None, system_message: str | None = None):
+        """Log AI prompts (and optional system messages) to the debug panel with truncation."""
+        prompt_text = prompt or ''
+        limit = 2000
+        total_len = len(prompt_text)
+        preview = prompt_text if total_len <= limit else f"{prompt_text[:limit]}... [truncated, {total_len} chars]"
+        self.log_debug('PROMPT', f'{title} ({total_len} chars):\n{preview}')
+        
+        if system_message is not None:
+            sys_len = len(system_message)
+            sys_preview = system_message if sys_len <= limit else f"{system_message[:limit]}... [truncated, {sys_len} chars]"
+            self.log_debug('PROMPT', f'{title} system ({sys_len} chars):\n{sys_preview}')
+    
+    def azure_ai(self, prompt: str, system_message: str | None = None, profile: str = 'text', max_tokens: int = 8000, temperature: float | None = 0.7) -> dict:
+        """Wrapper to call Azure AI and log the prompt/system message."""
+        self.log_prompt_debug('Azure AI prompt', prompt, system_message)
+        return call_azure_ai(self.ai_config, prompt, system_message=system_message, profile=profile, max_tokens=max_tokens, temperature=temperature)
+    
+    def azure_vision(self, image_paths: list, prompt: str, system_message: str | None = None, profile: str = 'text') -> dict:
+        """Wrapper to call Azure Vision and log the prompt/system message."""
+        self.log_prompt_debug('Azure Vision prompt', prompt, system_message)
+        return call_azure_vision(self.ai_config, image_paths, prompt, system_message=system_message, profile=profile)
+    
+    def azure_image(self, prompt: str, size: str = '1024x1024', profile: str = 'image_gen', quality: str = 'medium', output_format: str = 'png', output_compression: int = 100) -> dict:
+        """Wrapper to call Azure Image generation and log the prompt."""
+        self.log_prompt_debug('Azure Image prompt', prompt, None)
+        return call_azure_image(self.ai_config, prompt, size=size, profile=profile, quality=quality, output_format=output_format, output_compression=output_compression)
+    
+    def azure_video(self, prompt: str, size: str = '720x1280', seconds: str = '4', profile: str = 'video_gen') -> dict:
+        """Wrapper to call Azure Video generation and log the prompt."""
+        self.log_prompt_debug('Azure Video prompt', prompt, None)
+        return call_azure_video(self.ai_config, prompt, size=size, seconds=seconds, profile=profile)
+    
+    def azure_transcription(self, audio_file_path: str, profile: str = 'text', language: str | None = None, response_format: str = 'verbose_json', prompt: str | None = None) -> dict:
+        """Wrapper to call Azure transcription and log any guidance prompt."""
+        if prompt:
+            self.log_prompt_debug('Azure Transcription prompt', prompt, None)
+        else:
+            self.log_debug('PROMPT', 'Azure Transcription prompt: (none provided)')
+        return call_azure_audio_transcription(self.ai_config, audio_file_path, profile=profile, language=language, response_format=response_format, prompt=prompt)
+    
     def refresh_personas_list(self):
         """Refresh the personas list from the personas directory."""
         for item in self.personas_tree.get_children():
@@ -2659,7 +2700,7 @@ class SunoPersona(tk.Tk):
             
             system_message = "You are a visual analysis assistant specializing in creating detailed image generation prompts. Analyze images with extreme attention to detail and extract ALL visual elements, characteristics, colors, textures, styling, and aesthetic details. For the Base Image Prompt, create a comprehensive, highly detailed description that captures every visual aspect of the character. Output ONLY the field values in the requested format, with no additional text."
             
-            result = call_azure_vision(self.ai_config, list(image_paths), prompt, system_message=system_message, profile='text')
+            result = self.azure_vision(list(image_paths), prompt, system_message=system_message, profile='text')
             
             if result['success']:
                 content = result['content'].strip()
@@ -2872,7 +2913,7 @@ class SunoPersona(tk.Tk):
         self.update()
         
         try:
-            result = call_azure_ai(self.ai_config, prompt, system_message=system_message, profile='text')
+            result = self.azure_ai(prompt, system_message=system_message, profile='text')
             
             if result['success']:
                 enhanced_value = result['content'].strip()
@@ -2999,7 +3040,7 @@ class SunoPersona(tk.Tk):
                     "You are an image analysis assistant. Provide a highly detailed, objective description of the character's visual appearance "
                     "from the reference image. Focus on all visual characteristics that must stay consistent in the generated profile image."
                 )
-                vision_result = call_azure_vision(self.ai_config, [reference_image_path], vision_prompt, system_message=vision_system, profile='text')
+                vision_result = self.azure_vision([reference_image_path], vision_prompt, system_message=vision_system, profile='text')
                 
                 if vision_result['success']:
                     character_description = vision_result['content'].strip()
@@ -3044,7 +3085,7 @@ class SunoPersona(tk.Tk):
             variation_prompt = f"{final_prompt}\n\nPROFILE VARIATION {i+1}: keep the same character identity while varying camera angle, lighting, and subtle expression."
             
             try:
-                result = call_azure_image(self.ai_config, variation_prompt, size='1024x1024', profile='image_gen')
+                result = self.azure_image(variation_prompt, size='1024x1024', profile='image_gen')
                 if result['success']:
                     img_bytes = result.get('image_bytes', b'')
                     if img_bytes:
@@ -3108,7 +3149,7 @@ class SunoPersona(tk.Tk):
             prompt += "no background elements, no props except those described in the base prompt, "
             prompt += "sharp focus, professional portrait photography style, reference sheet style, full-body shot"
             
-            result = call_azure_image(self.ai_config, prompt, size='1024x1024', profile='image_gen')
+            result = self.azure_image(prompt, size='1024x1024', profile='image_gen')
             
             if result['success']:
                 img_bytes = result.get('image_bytes', b'')
@@ -3149,7 +3190,7 @@ class SunoPersona(tk.Tk):
             analyze_prompt += "exact clothing details, colors, textures, styling, hair, accessories, pose, lighting style, and all visual characteristics. "
             analyze_prompt += "Output ONLY a detailed character description that can be used to generate matching Side and Back views with the same appearance."
             
-            analyze_result = call_azure_vision(self.ai_config, [front_image_path], analyze_prompt, profile='text')
+            analyze_result = self.azure_vision([front_image_path], analyze_prompt, profile='text')
             
             if analyze_result['success']:
                 character_description = analyze_result['content'].strip()
@@ -3191,7 +3232,7 @@ class SunoPersona(tk.Tk):
                 image_prompt += "even studio lighting with subtle dramatic shadows, high quality professional photography, "
                 image_prompt += "no background elements, sharp focus, professional portrait photography style, reference sheet style, full-body shot"
                 
-                result_img = call_azure_image(self.ai_config, image_prompt, size='1024x1024', profile='image_gen')
+                result_img = self.azure_image(image_prompt, size='1024x1024', profile='image_gen')
                 
                 if result_img['success']:
                     img_bytes = result_img.get('image_bytes', b'')
@@ -4154,7 +4195,7 @@ class SunoPersona(tk.Tk):
         self.update()
         
         try:
-            result = call_azure_ai(self.ai_config, prompt, profile='text')
+            result = self.azure_ai(prompt, profile='text')
             
             if result['success']:
                 lyrics = result['content'].strip()
@@ -4205,7 +4246,7 @@ class SunoPersona(tk.Tk):
         self.update()
         
         try:
-            result = call_azure_ai(self.ai_config, prompt, profile='text')
+            result = self.azure_ai(prompt, profile='text')
             if result['success']:
                 desc = result['content'].strip().replace('\n', ' ')
                 if len(desc) > 500:
@@ -4263,7 +4304,7 @@ class SunoPersona(tk.Tk):
         self.update()
         
         try:
-            result = call_azure_ai(self.ai_config, prompt, profile='text')
+            result = self.azure_ai(prompt, profile='text')
             if result['success']:
                 desc = result['content'].strip()
                 self.song_description_de_text.delete('1.0', tk.END)
@@ -4353,7 +4394,7 @@ class SunoPersona(tk.Tk):
         self.update()
         
         try:
-            result = call_azure_ai(self.ai_config, prompt, profile='text')
+            result = self.azure_ai(prompt, profile='text')
             
             if result['success']:
                 merged = result['content'].strip()
@@ -4439,7 +4480,7 @@ class SunoPersona(tk.Tk):
             
             try:
                 system_message = 'You are an image prompt generator. Analyze the reference images and create an album cover prompt that matches the character\'s visual appearance. Output ONLY the image prompt text, nothing else.'
-                result = call_azure_vision(self.ai_config, reference_images, prompt, system_message=system_message, profile='text')
+                result = self.azure_vision(reference_images, prompt, system_message=system_message, profile='text')
             except Exception as e:
                 messagebox.showerror('Error', f'Error generating album cover prompt: {e}')
                 self.log_debug('ERROR', f'Error generating album cover prompt: {e}')
@@ -4454,7 +4495,7 @@ class SunoPersona(tk.Tk):
             
             try:
                 system_message = 'You are an image prompt generator. Output ONLY the image prompt text, nothing else.'
-                result = call_azure_ai(self.ai_config, prompt, system_message, profile='text')
+                result = self.azure_ai(prompt, system_message, profile='text')
             except Exception as e:
                 messagebox.showerror('Error', f'Error generating album cover prompt: {e}')
                 self.log_debug('ERROR', f'Error generating album cover prompt: {e}')
@@ -4530,7 +4571,7 @@ class SunoPersona(tk.Tk):
             
             try:
                 system_message = 'You are a professional video prompt generator for music visualizers. Analyze the reference images and create a video loop prompt that matches the character\'s visual appearance. Generate clean, artistic, SFW video prompts suitable for music content. Output ONLY the final video prompt text with no explanations.'
-                result = call_azure_vision(self.ai_config, reference_images, prompt, system_message=system_message, profile='text')
+                result = self.azure_vision(reference_images, prompt, system_message=system_message, profile='text')
             except Exception as e:
                 messagebox.showerror('Error', f'Error generating video loop prompt: {e}')
                 self.log_debug('ERROR', f'Error generating video loop prompt: {e}')
@@ -4545,7 +4586,7 @@ class SunoPersona(tk.Tk):
             
             try:
                 system_message = 'You are a professional video prompt generator for music visualizers. Generate clean, artistic, SFW video prompts suitable for music content. Output ONLY the final video prompt text with no explanations.'
-                result = call_azure_ai(self.ai_config, prompt, system_message, profile='text')
+                result = self.azure_ai(prompt, system_message, profile='text')
             except Exception as e:
                 messagebox.showerror('Error', f'Error generating video loop prompt: {e}')
                 self.log_debug('ERROR', f'Error generating video loop prompt: {e}')
@@ -4865,8 +4906,7 @@ class SunoPersona(tk.Tk):
         
         try:
             # Call Azure Whisper API for transcription
-            result = call_azure_audio_transcription(
-                self.ai_config, 
+            result = self.azure_transcription(
                 mp3_path, 
                 profile='transcribe', 
                 response_format='verbose_json',
@@ -5271,7 +5311,7 @@ class SunoPersona(tk.Tk):
             vision_system = (
                 "You are an image analysis assistant. Provide a concise, objective description of the reference image focusing on visual traits only."
             )
-            result = call_azure_vision(self.ai_config, [downscaled_path], vision_prompt, system_message=vision_system, profile='text')
+            result = self.azure_vision([downscaled_path], vision_prompt, system_message=vision_system, profile='text')
             if not result.get('success'):
                 return ''
             reference_desc = result.get('content', '').strip()
@@ -5312,7 +5352,7 @@ class SunoPersona(tk.Tk):
             vision_system = (
                 "You are an image analysis assistant. Provide a concise, objective visual description of the album cover."
             )
-            result = call_azure_vision(self.ai_config, [downscaled_path], vision_prompt, system_message=vision_system, profile='text')
+            result = self.azure_vision([downscaled_path], vision_prompt, system_message=vision_system, profile='text')
             if not result.get('success'):
                 return ''
             desc = result.get('content', '').strip()
@@ -5399,7 +5439,7 @@ class SunoPersona(tk.Tk):
                     f"- Persona Vibe: {vibe if vibe else 'N/A'}\n"
                     "Output ONLY the style text, no labels."
                 )
-                theme_result = call_azure_ai(self.ai_config, theme_prompt, system_message="You are a visual style summarizer.", profile='text')
+                theme_result = self.azure_ai(theme_prompt, system_message="You are a visual style summarizer.", profile='text')
                 if theme_result.get('success'):
                     generated_theme = theme_result.get('content', '').strip()
                     if generated_theme:
@@ -5624,7 +5664,7 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
                 }
             )
             
-            result = call_azure_ai(self.ai_config, prompt, system_message=system_message, profile='text', max_tokens=max_tokens, temperature=1)
+            result = self.azure_ai(prompt, system_message=system_message, profile='text', max_tokens=max_tokens, temperature=1)
             
             if result['success']:
                 content = result['content'].strip()
@@ -5694,7 +5734,7 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
                             }
                         )
                         
-                        batch_result = call_azure_ai(self.ai_config, batch_prompt, system_message=system_message, max_tokens=max_tokens, temperature=1)
+                        batch_result = self.azure_ai(batch_prompt, system_message=system_message, max_tokens=max_tokens, temperature=1)
                         
                         if batch_result['success']:
                             batch_content = batch_result['content'].strip()
@@ -5904,7 +5944,7 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
                 song_duration, seconds_per_video, batch_start, batch_end, total_scenes
             )
             
-            batch_result = call_azure_ai(self.ai_config, batch_prompt, system_message=system_message, max_tokens=max_tokens, temperature=1)
+            batch_result = self.azure_ai(batch_prompt, system_message=system_message, max_tokens=max_tokens, temperature=1)
             if not batch_result['success']:
                 error_msg = f'Failed to generate scenes {batch_start}-{batch_end}: {batch_result["error"]}'
                 self.log_debug('ERROR', error_msg)
@@ -6486,8 +6526,7 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
                     analysis_prompt += (
                         "\nRespond with ONLY 'YES' if the persona should be featured, or 'NO' if not."
                     )
-                    analysis_result = call_azure_ai(
-                        self.ai_config,
+                    analysis_result = self.azure_ai(
                         analysis_prompt,
                         system_message="You are a music video analysis assistant. Respond with only YES or NO.",
                         profile='text'
@@ -6531,7 +6570,7 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
                         "You are an image analysis assistant. Provide a highly detailed, objective description of the character's visual appearance "
                         "from the reference image. Focus on all visual characteristics that should be preserved in the scene image."
                     )
-                    vision_result = call_azure_vision(self.ai_config, [reference_image_path], vision_prompt, system_message=vision_system, profile='text')
+                    vision_result = self.azure_vision([reference_image_path], vision_prompt, system_message=vision_system, profile='text')
                     if vision_result['success']:
                         character_description = vision_result['content'].strip()
                         prompt = (
@@ -6599,7 +6638,7 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
         image_size = self.get_storyboard_image_size()
 
         try:
-            result = call_azure_image(self.ai_config, final_prompt, size=image_size, profile='image_gen')
+            result = self.azure_image(final_prompt, size=image_size, profile='image_gen')
 
             if result['success']:
                 img_bytes = result.get('image_bytes', b'')
@@ -6709,7 +6748,7 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
                     vision_prompt = "Analyze this persona reference image in extreme detail. Provide a comprehensive description of the character's appearance, including: physical features, clothing, styling, colors, accessories, pose, and all visual characteristics. This description will be used to ensure the album cover features the exact same character."
                     vision_system = "You are an image analysis assistant. Provide a highly detailed, objective description of the character's visual appearance from the reference image. Focus on all visual characteristics that should be preserved in the album cover."
                     
-                    vision_result = call_azure_vision(self.ai_config, [reference_image_path], vision_prompt, system_message=vision_system, profile='text')
+                    vision_result = self.azure_vision([reference_image_path], vision_prompt, system_message=vision_system, profile='text')
                     
                     if vision_result['success']:
                         character_description = vision_result['content'].strip()
@@ -6737,7 +6776,7 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
         image_format = self.get_album_cover_format()
         
         try:
-            result = call_azure_image(self.ai_config, prompt, size=image_size, profile='image_gen', output_format=image_format)
+            result = self.azure_image(prompt, size=image_size, profile='image_gen', output_format=image_format)
         finally:
             self.config(cursor='')
         
@@ -6815,7 +6854,7 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
         self.update()
         
         try:
-            result = call_azure_video(self.ai_config, prompt, size=video_size, seconds='4', profile='video_gen')
+            result = self.azure_video(prompt, size=video_size, seconds='4', profile='video_gen')
         finally:
             self.config(cursor='')
         
@@ -6976,7 +7015,7 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
         self.config(cursor='wait')
         self.update()
         try:
-            result = call_azure_ai(self.ai_config, prompt, profile='text')
+            result = self.azure_ai(prompt, profile='text')
         finally:
             self.config(cursor='')
         
