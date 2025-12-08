@@ -1924,17 +1924,14 @@ class SunoPersona(tk.Tk):
             pass
     
     def log_prompt_debug(self, title: str, prompt: str | None, system_message: str | None = None):
-        """Log AI prompts (and optional system messages) to the debug panel with truncation."""
+        """Log AI prompts (and optional system messages) without truncation."""
         prompt_text = prompt or ''
-        limit = 2000
         total_len = len(prompt_text)
-        preview = prompt_text if total_len <= limit else f"{prompt_text[:limit]}... [truncated, {total_len} chars]"
-        self.log_debug('PROMPT', f'{title} ({total_len} chars):\n{preview}')
+        self.log_debug('PROMPT', f'{title} ({total_len} chars):\n{prompt_text}')
         
         if system_message is not None:
             sys_len = len(system_message)
-            sys_preview = system_message if sys_len <= limit else f"{system_message[:limit]}... [truncated, {sys_len} chars]"
-            self.log_debug('PROMPT', f'{title} system ({sys_len} chars):\n{sys_preview}')
+            self.log_debug('PROMPT', f'{title} system ({sys_len} chars):\n{system_message}')
     
     def azure_ai(self, prompt: str, system_message: str | None = None, profile: str = 'text', max_tokens: int = 8000, temperature: float | None = 0.7) -> dict:
         """Wrapper to call Azure AI and log the prompt/system message."""
