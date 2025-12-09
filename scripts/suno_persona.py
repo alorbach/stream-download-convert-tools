@@ -1822,6 +1822,7 @@ class SunoPersona(tk.Tk):
         self.maxsize(width=9999, height=1400)
         
         self.ai_config = load_config()
+        self.known_band_names = self._load_known_band_names()
         self.personas_path = get_personas_path(self.ai_config)
         self.current_persona = None
         self.current_persona_path = None
@@ -1932,6 +1933,45 @@ class SunoPersona(tk.Tk):
         if system_message is not None:
             sys_len = len(system_message)
             self.log_debug('PROMPT', f'{title} system ({sys_len} chars):\n{system_message}')
+    
+    def _load_known_band_names(self) -> set[str]:
+        """Collect artist/band names from the styles CSV for later sanitizing."""
+        names: set[str] = set()
+        try:
+            csv_path = get_styles_csv_path(self.ai_config)
+            for row in load_styles_from_csv(csv_path):
+                artists_raw = (row.get('sample_artists') or '').replace('/', ';')
+                if not artists_raw:
+                    continue
+                for name in re.split(r'[;,]', artists_raw):
+                    clean = name.strip()
+                    if not clean:
+                        continue
+                    if len(clean) <= 3 and not (clean.isupper() or re.search(r'\d', clean)):
+                        continue
+                    names.add(clean)
+        except Exception as exc:
+            self.log_debug('WARNING', f'Could not load band names from styles: {exc}')
+        return names
+    
+    def _sanitize_style_keywords(self, text: str) -> str:
+        """Remove known band/artist names from style text."""
+        if not text:
+            return text
+        cleaned = text
+        for name in sorted(self.known_band_names, key=len, reverse=True):
+            pattern = r'\b' + re.escape(name) + r'\b'
+            cleaned = re.sub(pattern, '', cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r'\s{2,}', ' ', cleaned)
+        cleaned = re.sub(r'\s+([,;])', r'\1', cleaned)
+        return cleaned.strip(' ,;')
+    
+    def _get_sanitized_style_text(self) -> str:
+        """Return merged/song style with band names stripped."""
+        merged_style = self.merged_style_text.get('1.0', tk.END).strip() if hasattr(self, 'merged_style_text') else ''
+        song_style = self.song_style_text.get('1.0', tk.END).strip() if hasattr(self, 'song_style_text') else ''
+        style_text = merged_style or song_style
+        return self._sanitize_style_keywords(style_text)
     
     def azure_ai(self, prompt: str, system_message: str | None = None, profile: str = 'text', max_tokens: int = 8000, temperature: float | None = 0.7) -> dict:
         """Wrapper to call Azure AI and log the prompt/system message."""
@@ -3413,7 +3453,10 @@ class SunoPersona(tk.Tk):
         ttk.Label(scrollable_frame, text='Storyboard Theme / Global Image Style:', font=('TkDefaultFont', 9, 'bold')).grid(row=6, column=0, sticky=tk.NW, pady=5)
         self.storyboard_theme_text = scrolledtext.ScrolledText(scrollable_frame, height=3, wrap=tk.WORD, width=60)
         self.storyboard_theme_text.grid(row=6, column=1, columnspan=2, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
-        ttk.Button(scrollable_frame, text='Use Merged Style', command=self.set_storyboard_theme_from_merged_style).grid(row=6, column=3, padx=5, pady=5, sticky=tk.N)
+        theme_btn_frame = ttk.Frame(scrollable_frame)
+        theme_btn_frame.grid(row=6, column=3, padx=5, pady=5, sticky=tk.N)
+        ttk.Button(theme_btn_frame, text='Use Merged Style', command=self.set_storyboard_theme_from_merged_style).pack(fill=tk.X, pady=(0, 4))
+        ttk.Button(theme_btn_frame, text='Improve', command=self.improve_storyboard_theme).pack(fill=tk.X)
 
         ai_results_notebook = ttk.Notebook(scrollable_frame)
         ai_results_notebook.grid(row=7, column=0, columnspan=4, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
@@ -4171,7 +4214,12 @@ class SunoPersona(tk.Tk):
         
         song_name = self.song_name_var.get().strip()
         persona_name = self.current_persona.get('name', '')
-        song_style = self.song_style_text.get('1.0', tk.END).strip()
+        raw_song_style = self.song_style_text.get('1.0', tk.END).strip()
+        song_style = self._sanitize_style_keywords(raw_song_style)
+        if song_style != raw_song_style:
+            self.song_style_text.delete('1.0', tk.END)
+            self.song_style_text.insert('1.0', song_style)
+            self.log_debug('INFO', 'Removed band names from song style for full song name')
         
         if not song_name:
             messagebox.showwarning('Warning', 'Please enter a song name.')
@@ -4258,7 +4306,7 @@ class SunoPersona(tk.Tk):
         song_name = self.song_name_var.get().strip()
         full_song_name = self.full_song_name_var.get().strip() or song_name
         persona_name = self.current_persona.get('name', '')
-        style = self.merged_style_text.get('1.0', tk.END).strip() or self.song_style_text.get('1.0', tk.END).strip()
+        style = self._get_sanitized_style_text()
         lyric_ideas = self.lyric_ideas_text.get('1.0', tk.END).strip()
         lyrics = self.lyrics_text.get('1.0', tk.END).strip()
         
@@ -4286,7 +4334,8 @@ class SunoPersona(tk.Tk):
         try:
             result = self.azure_ai(prompt, profile='text')
             if result['success']:
-                desc = result['content'].strip().replace('\n', ' ')
+                desc_raw = result['content'].strip().replace('\n', ' ')
+                desc = self._sanitize_style_keywords(desc_raw)
                 if len(desc) > 500:
                     desc = desc[:500].rstrip()
                 self.song_description_text.delete('1.0', tk.END)
@@ -4310,7 +4359,7 @@ class SunoPersona(tk.Tk):
         song_name = self.song_name_var.get().strip()
         full_song_name = self.full_song_name_var.get().strip() or song_name
         persona_name = self.current_persona.get('name', '')
-        style = self.merged_style_text.get('1.0', tk.END).strip() or self.song_style_text.get('1.0', tk.END).strip()
+        style = self._get_sanitized_style_text()
         lyric_ideas = self.lyric_ideas_text.get('1.0', tk.END).strip()
         lyrics = self.lyrics_text.get('1.0', tk.END).strip()
         
@@ -4344,7 +4393,8 @@ class SunoPersona(tk.Tk):
         try:
             result = self.azure_ai(prompt, profile='text')
             if result['success']:
-                desc = result['content'].strip()
+                desc_raw = result['content'].strip()
+                desc = self._sanitize_style_keywords(desc_raw)
                 self.song_description_de_text.delete('1.0', tk.END)
                 self.song_description_de_text.insert('1.0', desc)
                 self.log_debug('INFO', f'German song description generated ({len(desc)} chars)')
@@ -4382,6 +4432,10 @@ class SunoPersona(tk.Tk):
                 keywords = (selected_row.get('style') or '').strip()
         if not keywords:
             keywords = selected_name
+        sanitized_keywords = self._sanitize_style_keywords(keywords)
+        if sanitized_keywords != keywords:
+            self.log_debug('INFO', 'Removed band names from selected style keywords')
+        keywords = sanitized_keywords
 
         # Replace song style with the selected style keywords
         self.song_style_text.delete('1.0', tk.END)
@@ -4399,7 +4453,12 @@ class SunoPersona(tk.Tk):
             messagebox.showwarning('Warning', 'Please select a persona first.')
             return
         
-        song_style = self.song_style_text.get('1.0', tk.END).strip()
+        raw_song_style = self.song_style_text.get('1.0', tk.END).strip()
+        song_style = self._sanitize_style_keywords(raw_song_style)
+        if song_style != raw_song_style:
+            self.song_style_text.delete('1.0', tk.END)
+            self.song_style_text.insert('1.0', song_style)
+            self.log_debug('INFO', 'Removed band names from song style before merging')
         voice_style = self.current_persona.get('voice_style', '')
         genre_tags = self.current_persona.get('genre_tags', '')
         
@@ -4435,7 +4494,8 @@ class SunoPersona(tk.Tk):
             result = self.azure_ai(prompt, profile='text')
             
             if result['success']:
-                merged = result['content'].strip()
+                merged_raw = result['content'].strip()
+                merged = self._sanitize_style_keywords(merged_raw)
                 self.merged_style_text.delete('1.0', tk.END)
                 self.merged_style_text.insert('1.0', merged)
                 self.log_debug('INFO', 'Styles merged successfully')
@@ -4460,6 +4520,60 @@ class SunoPersona(tk.Tk):
         if theme_text:
             self.log_debug('INFO', 'Storyboard theme updated from merged style')
     
+    def improve_storyboard_theme(self):
+        """AI-expand the storyboard theme from seed keywords into a concise global style."""
+        if not self.current_persona:
+            messagebox.showwarning('Warning', 'Please select a persona first.')
+            return
+        
+        seed_theme = self.storyboard_theme_text.get('1.0', tk.END).strip()
+        merged_style = self._get_sanitized_style_text()
+        song_name = self.song_name_var.get().strip()
+        full_song_name = self.full_song_name_var.get().strip() or song_name
+        persona_name = self.current_persona.get('name', '')
+        visual_aesthetic = self.current_persona.get('visual_aesthetic', '')
+        base_image_prompt = self.current_persona.get('base_image_prompt', '')
+        vibe = self.current_persona.get('vibe', '')
+        
+        if not seed_theme and not merged_style:
+            messagebox.showwarning('Warning', 'Please enter storyboard theme keywords or set a merged style first.')
+            return
+        
+        prompt = (
+            "Improve and expand these storyboard theme keywords into a concise global visual style for all scenes.\n"
+            "Keep it SFW and under 90 words. Focus on palette, lighting, camera mood, texture, and atmosphere.\n"
+            "Avoid brand names and band/artist names. No bullet points. Return only the theme text.\n\n"
+            f"Song: {full_song_name if full_song_name else song_name}\n"
+            f"Persona: {persona_name}\n"
+            f"Merged Style: {merged_style if merged_style else 'N/A'}\n"
+            f"Persona Visual Aesthetic: {visual_aesthetic if visual_aesthetic else 'N/A'}\n"
+            f"Persona Base Image Prompt: {base_image_prompt if base_image_prompt else 'N/A'}\n"
+            f"Persona Vibe: {vibe if vibe else 'N/A'}\n"
+            "Seed Theme Keywords:\n"
+            f"{seed_theme if seed_theme else merged_style}"
+        )
+        
+        self.log_debug('INFO', 'Improving storyboard theme...')
+        self.config(cursor='wait')
+        self.update()
+        try:
+            result = self.azure_ai(prompt, profile='text')
+            if result.get('success'):
+                improved_raw = result.get('content', '').strip()
+                improved = self._sanitize_style_keywords(improved_raw)
+                if hasattr(self, 'storyboard_theme_text'):
+                    self.storyboard_theme_text.delete('1.0', tk.END)
+                    self.storyboard_theme_text.insert('1.0', improved)
+                self.log_debug('INFO', 'Storyboard theme improved with AI')
+            else:
+                messagebox.showerror('Error', f'Failed to improve storyboard theme: {result.get("error")}')
+                self.log_debug('ERROR', f'Failed to improve storyboard theme: {result.get("error")}')
+        except Exception as exc:
+            messagebox.showerror('Error', f'Error improving storyboard theme: {exc}')
+            self.log_debug('ERROR', f'Error improving storyboard theme: {exc}')
+        finally:
+            self.config(cursor='')
+    
     def generate_album_cover(self):
         """Generate album cover prompt."""
         if not self.current_persona:
@@ -4468,7 +4582,7 @@ class SunoPersona(tk.Tk):
         
         song_name = self.song_name_var.get().strip()
         full_song_name = self.full_song_name_var.get().strip()
-        merged_style = self.merged_style_text.get('1.0', tk.END).strip()
+        merged_style = self._get_sanitized_style_text()
         visual_aesthetic = self.current_persona.get('visual_aesthetic', '')
         
         if not song_name:
@@ -4541,7 +4655,8 @@ class SunoPersona(tk.Tk):
         
         try:
             if result['success']:
-                cover_prompt = result['content'].strip()
+                cover_prompt_raw = result['content'].strip()
+                cover_prompt = self._sanitize_style_keywords(cover_prompt_raw)
                 self.album_cover_text.delete('1.0', tk.END)
                 self.album_cover_text.insert('1.0', cover_prompt)
                 self.log_debug('INFO', 'Album cover prompt generated successfully')
@@ -4561,7 +4676,7 @@ class SunoPersona(tk.Tk):
             return
         
         album_cover = self.album_cover_text.get('1.0', tk.END).strip()
-        merged_style = self.merged_style_text.get('1.0', tk.END).strip()
+        merged_style = self._get_sanitized_style_text()
         
         if not album_cover:
             messagebox.showwarning('Warning', 'Please generate an album cover prompt first.')
@@ -4633,7 +4748,8 @@ class SunoPersona(tk.Tk):
         try:
             
             if result['success']:
-                video_prompt = result['content'].strip()
+                video_prompt_raw = result['content'].strip()
+                video_prompt = self._sanitize_style_keywords(video_prompt_raw)
                 self.video_loop_text.delete('1.0', tk.END)
                 self.video_loop_text.insert('1.0', video_prompt)
                 self.log_debug('INFO', 'Video loop prompt generated successfully')
