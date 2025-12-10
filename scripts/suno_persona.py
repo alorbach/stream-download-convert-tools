@@ -1842,6 +1842,7 @@ class SunoPersona(tk.Tk):
         self.current_song = None
         self.current_song_path = None
         self.scene_final_prompts = {}
+        self.merge_song_weight = 50
         
         self.create_widgets()
         self.refresh_image_preset_controls()
@@ -5039,6 +5040,58 @@ class SunoPersona(tk.Tk):
 
         return [selected_name]
 
+    def _prompt_merge_style_weights(self):
+        """Ask user how to weight song vs persona style during merging."""
+        dialog = tk.Toplevel(self)
+        dialog.title('Merge Style Weights')
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.resizable(False, False)
+
+        ttk.Label(dialog, text='Set how much each style should influence the merge:').pack(padx=12, pady=(10, 6))
+
+        song_var = tk.IntVar(value=getattr(self, 'merge_song_weight', 50))
+        song_label = ttk.Label(dialog, text=f'Song Style: {song_var.get()}%')
+        song_label.pack(padx=12)
+        persona_label = ttk.Label(dialog, text=f'Persona Style: {100 - song_var.get()}%')
+        persona_label.pack(padx=12, pady=(0, 6))
+
+        def update_labels(value=None):
+            val = int(float(value)) if value is not None else song_var.get()
+            val = max(0, min(100, val))
+            song_var.set(val)
+            song_label.config(text=f'Song Style: {val}%')
+            persona_label.config(text=f'Persona Style: {100 - val}%')
+
+        scale = ttk.Scale(dialog, from_=0, to=100, orient=tk.HORIZONTAL, variable=song_var, command=update_labels)
+        scale.pack(fill=tk.X, padx=12, pady=(0, 10))
+        update_labels()
+
+        result = {'value': None}
+
+        def on_ok():
+            result['value'] = max(0, min(100, int(song_var.get())))
+            dialog.destroy()
+
+        def on_cancel():
+            dialog.destroy()
+
+        btn_frame = ttk.Frame(dialog)
+        btn_frame.pack(fill=tk.X, padx=12, pady=(0, 12))
+        ttk.Button(btn_frame, text='OK', command=on_ok).pack(side=tk.LEFT, expand=True, padx=6)
+        ttk.Button(btn_frame, text='Cancel', command=on_cancel).pack(side=tk.RIGHT, expand=True, padx=6)
+
+        dialog.bind('<Return>', lambda e: on_ok())
+        dialog.bind('<Escape>', lambda e: on_cancel())
+
+        dialog.wait_window()
+
+        if result['value'] is None:
+            return None
+
+        self.merge_song_weight = result['value']
+        return result['value'], 100 - result['value']
+
     def merge_song_style(self):
         """Merge song style with persona voice style."""
         if not self.current_persona:
@@ -5062,14 +5115,28 @@ class SunoPersona(tk.Tk):
             messagebox.showwarning('Warning', 'Persona voice style is not set.')
             return
 
+        weights = self._prompt_merge_style_weights()
+        if weights is None:
+            self.log_debug('INFO', 'Merge cancelled: weights dialog closed')
+            return
+        song_weight, persona_weight = weights
+
         persona_style_context = voice_style
         if genre_tags:
             persona_style_context = f"{voice_style}\nGenre Tags: {genre_tags}"
+
+        weighting_text = (
+            "\n\nWeighting preference:\n"
+            f"- Song Style importance: {song_weight}%\n"
+            f"- Persona Voice Style importance: {persona_weight}%\n"
+            "Blend the merged style to respect this weighting."
+        )
 
         template = get_prompt_template('merge_styles')
         if template:
             prompt = template.replace('{STYLES_TO_MERGE}', song_style)
             prompt = prompt.replace('{ORIGINAL_STYLE}', persona_style_context if persona_style_context else 'Persona style not set')
+            prompt += weighting_text
             self.log_debug('INFO', 'Merging styles with template merge_styles')
         else:
             prompt = (
@@ -5077,6 +5144,7 @@ class SunoPersona(tk.Tk):
                 f"Song Style: {song_style}\n\nPersona Voice Style: {voice_style}\n"
                 f"{'Genre Tags: ' + genre_tags if genre_tags else ''}\n\nCreate a merged style description that combines both."
             )
+            prompt += weighting_text
             self.log_debug('INFO', 'Merging styles with fallback prompt')
         
         self.config(cursor='wait')
