@@ -3,7 +3,7 @@ import os
 import sys
 import csv
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog, scrolledtext
+from tkinter import ttk, messagebox, filedialog, scrolledtext, simpledialog
 import requests
 import base64
 import urllib.parse
@@ -1704,7 +1704,11 @@ def load_persona_config(persona_path: str) -> dict:
         'bio': '',
         'genre_tags': [],
         'voice_style': '',
-        'lyrics_style': ''
+        'lyrics_style': '',
+        'image_presets': [
+            {'key': 'default', 'label': 'Main', 'is_default': True, 'profile_prompt': '', 'profile_custom_prompt': ''}
+        ],
+        'current_image_preset': 'default'
     }
     
     if os.path.exists(config_file):
@@ -1715,6 +1719,13 @@ def load_persona_config(persona_path: str) -> dict:
                 for key in default_config:
                     if key not in config:
                         config[key] = default_config[key]
+                # Guarantee at least one preset exists
+                presets = config.get('image_presets') or default_config['image_presets']
+                if not isinstance(presets, list) or not presets:
+                    presets = default_config['image_presets']
+                config['image_presets'] = presets
+                if not config.get('current_image_preset'):
+                    config['current_image_preset'] = presets[0].get('key', 'default')
                 return config
         except Exception as e:
             print(f'Error loading persona config: {e}')
@@ -1757,8 +1768,10 @@ def load_song_config(song_path: str) -> dict:
         'video_loop_size': '9:16 (720x1280)',
         'overlay_lyrics_on_image': False,
         'embed_lyrics_in_prompt': True,
+        'embed_keywords_in_prompt': False,
         'persona_scene_percent': 35,
-        'storyboard_setup_count': 4
+        'storyboard_setup_count': 4,
+        'persona_image_preset': 'default'
     }
     
     if os.path.exists(config_file):
@@ -1831,6 +1844,7 @@ class SunoPersona(tk.Tk):
         self.scene_final_prompts = {}
         
         self.create_widgets()
+        self.refresh_image_preset_controls()
         self.refresh_personas_list()
     
     def create_widgets(self):
@@ -1965,6 +1979,171 @@ class SunoPersona(tk.Tk):
         cleaned = re.sub(r'\s{2,}', ' ', cleaned)
         cleaned = re.sub(r'\s+([,;])', r'\1', cleaned)
         return cleaned.strip(' ,;')
+
+    def _safe_filename(self, name: str) -> str:
+        """Return a filesystem-safe string for filenames."""
+        return name.replace(' ', '-').replace(':', '_').replace('/', '_').replace('\\', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace("'", '_').replace('<', '_').replace('>', '_').replace('|', '_')
+
+    def _safe_persona_basename(self) -> str:
+        """Safe base filename for current persona."""
+        if self.current_persona:
+            return self._safe_filename(self.current_persona.get('name', 'persona'))
+        return 'persona'
+
+    def _default_image_presets(self) -> list[dict]:
+        """Return the default image preset structure."""
+        return [{'key': 'default', 'label': 'Main', 'is_default': True, 'profile_prompt': '', 'profile_custom_prompt': ''}]
+
+    def _get_persona_image_presets(self) -> list[dict]:
+        """Return persona image presets ensuring at least one exists."""
+        if not self.current_persona:
+            return self._default_image_presets()
+        presets = self.current_persona.get('image_presets') or []
+        if not isinstance(presets, list) or not presets:
+            presets = self._default_image_presets()
+            self.current_persona['image_presets'] = presets
+        # Ensure each preset has prompt fields
+        for preset in presets:
+            if 'profile_prompt' not in preset:
+                preset['profile_prompt'] = ''
+            if 'profile_custom_prompt' not in preset:
+                preset['profile_custom_prompt'] = ''
+        return presets
+
+    def _get_default_image_preset_key(self) -> str:
+        """Get the default preset key for current persona."""
+        presets = self._get_persona_image_presets()
+        for preset in presets:
+            if preset.get('is_default'):
+                return preset.get('key', 'default')
+        return presets[0].get('key', 'default')
+
+    def _get_preset_record(self, key: str) -> dict:
+        """Return a preset record, ensuring it exists."""
+        presets = self._get_persona_image_presets()
+        for preset in presets:
+            if preset.get('key') == key:
+                return preset
+        # If missing, create one
+        new_preset = {'key': key, 'label': key, 'is_default': False, 'profile_prompt': '', 'profile_custom_prompt': ''}
+        presets.append(new_preset)
+        self.current_persona['image_presets'] = presets
+        return new_preset
+
+    def _get_active_preset_key(self) -> str:
+        """Return currently selected preset key."""
+        if hasattr(self, 'image_preset_var') and self.image_preset_var.get():
+            return self.image_preset_var.get()
+        if self.current_persona and self.current_persona.get('current_image_preset'):
+            return self.current_persona['current_image_preset']
+        return self._get_default_image_preset_key()
+
+    def _get_active_preset_prompts(self) -> tuple[str, str]:
+        """Return (base_prompt, custom_prompt) for the active preset, falling back to persona."""
+        key = self._get_active_preset_key()
+        preset = self._get_preset_record(key)
+        base_prompt = ''
+        custom_prompt = ''
+        if hasattr(self, 'profile_prompt_text'):
+            try:
+                base_prompt = self.profile_prompt_text.get('1.0', tk.END).strip()
+            except Exception:
+                base_prompt = ''
+        if not base_prompt:
+            base_prompt = preset.get('profile_prompt', '')
+        if hasattr(self, 'profile_custom_prompt_text'):
+            try:
+                custom_prompt = self.profile_custom_prompt_text.get('1.0', tk.END).strip()
+            except Exception:
+                custom_prompt = ''
+        if not custom_prompt:
+            custom_prompt = preset.get('profile_custom_prompt', '')
+        # Persona-level fallback
+        if not base_prompt and self.current_persona:
+            base_prompt = self.current_persona.get('base_image_prompt', '')
+        return base_prompt, custom_prompt
+
+    def _save_preset_prompts_from_ui(self, preset_key: str | None = None):
+        """Persist profile/base prompts into the preset record."""
+        if not self.current_persona:
+            return
+        key = preset_key or (self.image_preset_var.get() if hasattr(self, 'image_preset_var') else self.current_persona.get('current_image_preset', 'default'))
+        preset = self._get_preset_record(key)
+        if hasattr(self, 'profile_prompt_text'):
+            try:
+                preset['profile_prompt'] = self.profile_prompt_text.get('1.0', tk.END).strip()
+            except Exception:
+                pass
+        if hasattr(self, 'profile_custom_prompt_text'):
+            try:
+                preset['profile_custom_prompt'] = self.profile_custom_prompt_text.get('1.0', tk.END).strip()
+            except Exception:
+                pass
+        save_persona_config(self.current_persona_path, self.current_persona)
+
+    def _load_preset_prompts_into_ui(self, preset_key: str | None = None):
+        """Load stored profile/base prompts from the preset into UI."""
+        key = preset_key or (self.image_preset_var.get() if hasattr(self, 'image_preset_var') else None)
+        if not key:
+            key = self._get_default_image_preset_key()
+        preset = self._get_preset_record(key)
+        if hasattr(self, 'profile_prompt_text'):
+            try:
+                self.profile_prompt_text.delete('1.0', tk.END)
+                self.profile_prompt_text.insert('1.0', preset.get('profile_prompt', ''))
+            except Exception:
+                pass
+        if hasattr(self, 'profile_custom_prompt_text'):
+            try:
+                self.profile_custom_prompt_text.delete('1.0', tk.END)
+                self.profile_custom_prompt_text.insert('1.0', preset.get('profile_custom_prompt', ''))
+            except Exception:
+                pass
+
+    def _get_preset_label(self, key: str) -> str:
+        """Friendly label for a preset key."""
+        for preset in self._get_persona_image_presets():
+            if preset.get('key') == key:
+                return preset.get('label') or key
+        return key or 'default'
+
+    def get_persona_image_base_path(self, preset_key: str | None = None) -> str:
+        """Resolve the base path where reference/profile images live for a preset."""
+        base = self.current_persona_path or ''
+        key = preset_key or (self.current_persona.get('current_image_preset') if self.current_persona else 'default') or 'default'
+        if key == 'default':
+            return base
+        return os.path.join(base, 'image_presets', key)
+
+    def _ensure_persona_image_preset_state(self):
+        """Ensure preset selection state is initialized for the current persona."""
+        if not self.current_persona:
+            return
+        presets = self._get_persona_image_presets()
+        current_key = self.current_persona.get('current_image_preset')
+        if (not current_key) or (not any(p.get('key') == current_key for p in presets)):
+            current_key = self._get_default_image_preset_key()
+            self.current_persona['current_image_preset'] = current_key
+        if hasattr(self, 'image_preset_var'):
+            self.image_preset_var.set(current_key)
+        if hasattr(self, 'image_preset_caption_var'):
+            default_label = self._get_preset_label(self._get_default_image_preset_key())
+            caption = f"Using preset: {self._get_preset_label(current_key)}"
+            if current_key == self._get_default_image_preset_key():
+                caption += " (default)"
+            elif default_label:
+                caption += f" | Default: {default_label}"
+            self.image_preset_caption_var.set(caption)
+
+    def _get_song_persona_preset_key(self) -> str:
+        """Get the active preset key for the current song."""
+        if hasattr(self, 'song_persona_preset_var') and self.song_persona_preset_var.get():
+            return self.song_persona_preset_var.get()
+        if self.current_song and self.current_song.get('persona_image_preset'):
+            return self.current_song.get('persona_image_preset')
+        if self.current_persona:
+            return self.current_persona.get('current_image_preset', self._get_default_image_preset_key())
+        return 'default'
     
     def _get_sanitized_style_text(self) -> str:
         """Return merged/song style with band names stripped."""
@@ -1972,6 +2151,20 @@ class SunoPersona(tk.Tk):
         song_style = self.song_style_text.get('1.0', tk.END).strip() if hasattr(self, 'song_style_text') else ''
         style_text = merged_style or song_style
         return self._sanitize_style_keywords(style_text)
+
+    def _extract_major_keyword(self, text: str) -> str:
+        """Extract a simple major keyword from text (lyrics or prompt)."""
+        if not text:
+            return ''
+        clean = re.sub(r'[^a-zA-Z0-9\s]', ' ', text)
+        words = [w.lower() for w in clean.split() if len(w) > 3]
+        stop = {'this', 'that', 'with', 'from', 'into', 'over', 'under', 'about', 'above', 'below', 'there', 'here', 'they', 'them', 'were', 'your', 'yours', 'their', 'the', 'and', 'for', 'into', 'onto', 'upon', 'have', 'will', 'shall', 'would', 'could', 'should', 'ever', 'never'}
+        words = [w for w in words if w not in stop]
+        if not words:
+            return ''
+        # Pick the longest meaningful word as a crude "major keyword"
+        words.sort(key=lambda w: (-len(w), w))
+        return words[0]
     
     def azure_ai(self, prompt: str, system_message: str | None = None, profile: str = 'text', max_tokens: int = 8000, temperature: float | None = 0.7) -> dict:
         """Wrapper to call Azure AI and log the prompt/system message."""
@@ -2075,11 +2268,15 @@ class SunoPersona(tk.Tk):
         self.current_persona_path = os.path.join(self.personas_path, folder_name)
         self.current_persona = load_persona_config(self.current_persona_path)
         
+        self._ensure_persona_image_preset_state()
+        self.refresh_image_preset_controls()
         self.load_persona_info()
+        self._load_preset_prompts_into_ui()
         self.refresh_songs_list()
         self.refresh_persona_images()
         self.refresh_profile_images_gallery()
         self.update_profile_prompt_from_persona()
+        self.refresh_song_preset_options()
         
         self.log_debug('INFO', f'Selected persona: {self.current_persona.get("name", folder_name)}')
     
@@ -2139,7 +2336,11 @@ class SunoPersona(tk.Tk):
                 'bio': '',
                 'genre_tags': [],
                 'voice_style': '',
-                'lyrics_style': ''
+                'lyrics_style': '',
+                'image_presets': [
+                    {'key': 'default', 'label': 'Main', 'is_default': True}
+                ],
+                'current_image_preset': 'default'
             }
             
             save_persona_config(new_persona_path, config)
@@ -2259,8 +2460,6 @@ class SunoPersona(tk.Tk):
         
         ttk.Button(btn_frame, text='Save Persona', command=self.save_persona).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_frame, text='Reset Persona', command=self.reset_persona).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text='Generate Reference Images', command=self.generate_reference_images).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text='Generate From Reference Images', command=self.generate_from_reference_images).pack(side=tk.LEFT, padx=5)
         
         scrollable_frame.columnconfigure(1, weight=1)
         canvas.pack(side="left", fill="both", expand=True)
@@ -2270,6 +2469,18 @@ class SunoPersona(tk.Tk):
         """Create the persona images preview tab."""
         main_frame = ttk.Frame(parent, padding=10)
         main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        preset_bar = ttk.Frame(main_frame)
+        preset_bar.pack(fill=tk.X, pady=(0, 8))
+        ttk.Label(preset_bar, text='Persona image preset:', font=('TkDefaultFont', 9, 'bold')).pack(side=tk.LEFT, padx=(0, 6))
+        self.image_preset_var = tk.StringVar(value='default')
+        self.image_preset_combo = ttk.Combobox(preset_bar, textvariable=self.image_preset_var, state='readonly', width=18)
+        self.image_preset_combo.pack(side=tk.LEFT, padx=(0, 6))
+        self.image_preset_combo.bind('<<ComboboxSelected>>', self.on_image_preset_change)
+        ttk.Button(preset_bar, text='New Preset', command=self.add_image_preset).pack(side=tk.LEFT, padx=4)
+        ttk.Button(preset_bar, text='Set Default', command=self.set_default_image_preset).pack(side=tk.LEFT, padx=4)
+        self.image_preset_caption_var = tk.StringVar(value='Using preset: default')
+        ttk.Label(preset_bar, textvariable=self.image_preset_caption_var, foreground='gray').pack(side=tk.LEFT, padx=10)
         
         ttk.Label(main_frame, text='Reference Images Preview', font=('TkDefaultFont', 10, 'bold')).pack(pady=(0, 10))
         
@@ -2307,8 +2518,10 @@ class SunoPersona(tk.Tk):
         btn_frame = ttk.Frame(main_frame)
         btn_frame.pack(fill=tk.X, pady=(10, 0))
         ttk.Button(btn_frame, text='Refresh Images', command=self.refresh_persona_images).pack(side=tk.LEFT, padx=5)
-        
-        # Profile image generator
+        ttk.Button(btn_frame, text='Generate Reference Images', command=self.generate_reference_images).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text='Generate From Reference Images', command=self.generate_from_reference_images).pack(side=tk.LEFT, padx=5)
+
+        # Profile image generator (lives here so prompts sit with persona reference context)
         profile_frame = ttk.LabelFrame(main_frame, text='Profile Image Generator', padding=8)
         profile_frame.pack(fill=tk.BOTH, expand=False, pady=(12, 0))
         
@@ -2320,7 +2533,7 @@ class SunoPersona(tk.Tk):
         
         prompt_toolbar = ttk.Frame(profile_frame)
         prompt_toolbar.pack(fill=tk.X, pady=(0, 4))
-        ttk.Button(prompt_toolbar, text='Reset From Persona', command=self.update_profile_prompt_from_persona).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(prompt_toolbar, text='Reset From Persona', command=lambda: self.update_profile_prompt_from_persona(force=True)).pack(side=tk.LEFT, padx=(0, 6))
         
         ttk.Label(prompt_toolbar, text='Images to create:').pack(side=tk.LEFT, padx=(12, 4))
         self.profile_image_count_var = tk.IntVar(value=2)
@@ -2342,6 +2555,98 @@ class SunoPersona(tk.Tk):
         
         # Initialize prompt content
         self.update_profile_prompt_from_persona()
+
+    def refresh_image_preset_controls(self):
+        """Refresh preset dropdown and caption for persona images."""
+        if not hasattr(self, 'image_preset_combo'):
+            return
+        presets = self._get_persona_image_presets()
+        values = [p.get('key', 'default') for p in presets]
+        self.image_preset_combo['values'] = values
+
+        target = 'default'
+        if self.current_persona:
+            target = self.current_persona.get('current_image_preset') or self._get_default_image_preset_key()
+        if values and target not in values:
+            target = values[0]
+        self.image_preset_var.set(target)
+
+        if hasattr(self, 'image_preset_caption_var'):
+            default_label = self._get_preset_label(self._get_default_image_preset_key())
+            caption = f"Using preset: {self._get_preset_label(target)}"
+            if target == self._get_default_image_preset_key():
+                caption += " (default)"
+            elif default_label:
+                caption += f" | Default: {default_label}"
+            self.image_preset_caption_var.set(caption)
+        self._load_preset_prompts_into_ui(target)
+
+    def on_image_preset_change(self, event=None):
+        """Handle preset selection change."""
+        if not self.current_persona:
+            return
+        # Save current UI prompts to the previous preset
+        prev_key = self.current_persona.get('current_image_preset')
+        self._save_preset_prompts_from_ui(prev_key)
+        selected = self.image_preset_var.get() or self._get_default_image_preset_key()
+        self.current_persona['current_image_preset'] = selected
+        save_persona_config(self.current_persona_path, self.current_persona)
+        self.refresh_image_preset_controls()
+        self.refresh_persona_images()
+        self.refresh_profile_images_gallery()
+        self.refresh_song_preset_options()
+        self._load_preset_prompts_into_ui(selected)
+
+    def add_image_preset(self):
+        """Create a new persona image preset."""
+        if not self.current_persona_path or not self.current_persona:
+            messagebox.showwarning('Warning', 'Select a persona before adding presets.')
+            return
+        name = simpledialog.askstring('New Image Preset', 'Preset name (e.g., Stage Look, Casual):', parent=self)
+        if not name:
+            return
+        key = self._safe_filename(name.strip().lower())
+        if not key:
+            messagebox.showerror('Error', 'Please enter a valid preset name.')
+            return
+        presets = self._get_persona_image_presets()
+        if any(p.get('key') == key for p in presets):
+            messagebox.showerror('Error', f'Preset "{key}" already exists.')
+            return
+
+        presets.append({'key': key, 'label': name.strip(), 'is_default': False, 'profile_prompt': '', 'profile_custom_prompt': ''})
+        self.current_persona['image_presets'] = presets
+        self.current_persona['current_image_preset'] = key
+
+        preset_dir = self.get_persona_image_base_path(key)
+        os.makedirs(preset_dir, exist_ok=True)
+        save_persona_config(self.current_persona_path, self.current_persona)
+
+        self.refresh_image_preset_controls()
+        self.refresh_persona_images()
+        self.refresh_profile_images_gallery()
+        self.refresh_song_preset_options()
+        self.log_debug('INFO', f'Added persona image preset: {name.strip()} ({key})')
+
+    def set_default_image_preset(self):
+        """Mark the selected preset as default for this persona."""
+        if not self.current_persona:
+            return
+        key = self.image_preset_var.get() or self._get_default_image_preset_key()
+        presets = self._get_persona_image_presets()
+        changed = False
+        for preset in presets:
+            was_default = preset.get('is_default', False)
+            preset['is_default'] = preset.get('key') == key
+            if preset['is_default'] != was_default:
+                changed = True
+        if changed:
+            self.current_persona['image_presets'] = presets
+            self.current_persona['current_image_preset'] = key
+            save_persona_config(self.current_persona_path, self.current_persona)
+            self.refresh_image_preset_controls()
+            self.refresh_song_preset_options()
+            self.log_debug('INFO', f'Set default image preset: {key}')
     
     def refresh_persona_images(self):
         """Refresh the persona images preview."""
@@ -2363,10 +2668,12 @@ class SunoPersona(tk.Tk):
             return
         
         views = ['Front', 'Side', 'Back']
-        safe_name = self.current_persona.get('name', 'persona').replace(' ', '-').replace(':', '_').replace('/', '_').replace('\\', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace("'", '_').replace('<', '_').replace('>', '_').replace('|', '_')
+        preset_key = self.image_preset_var.get() if hasattr(self, 'image_preset_var') else self.current_persona.get('current_image_preset', 'default')
+        base_path = self.get_persona_image_base_path(preset_key)
+        safe_name = self._safe_persona_basename()
         
         for view in views:
-            image_path = os.path.join(self.current_persona_path, f'{safe_name}-{view}.png')
+            image_path = os.path.join(base_path, f'{safe_name}-{view}.png')
             canvas = self.image_labels[view]
             
             if os.path.exists(image_path):
@@ -2504,6 +2811,8 @@ class SunoPersona(tk.Tk):
         self.profile_gallery_frame = gallery_frame
         self.profile_image_thumbs = []
 
+        # Initialize prompt content
+        self.update_profile_prompt_from_persona()
         self.refresh_profile_images_gallery()
 
     def refresh_profile_images_gallery(self):
@@ -2523,9 +2832,11 @@ class SunoPersona(tk.Tk):
             ).grid(row=0, column=0, padx=10, pady=10, sticky=tk.W)
             return
 
+        preset_key = self.image_preset_var.get() if hasattr(self, 'image_preset_var') else self.current_persona.get('current_image_preset', 'default')
+        base_path = self.get_persona_image_base_path(preset_key)
         persona_name = self.current_persona.get('name', 'persona') if self.current_persona else 'persona'
-        safe_name = persona_name.replace(' ', '-').replace(':', '_').replace('/', '_').replace('\\', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace("'", '_').replace('<', '_').replace('>', '_').replace('|', '_')
-        pattern = os.path.join(self.current_persona_path, f'{safe_name}-Profile-*.png')
+        safe_name = self._safe_filename(persona_name)
+        pattern = os.path.join(base_path, f'{safe_name}-Profile-*.png')
         image_files = glob.glob(pattern)
 
         def sort_key(path):
@@ -2581,9 +2892,17 @@ class SunoPersona(tk.Tk):
             messagebox.showerror('Error', f'Could not open image: {e}')
             self.log_debug('ERROR', f'Failed to open image {image_path}: {e}')
     
-    def update_profile_prompt_from_persona(self):
+    def update_profile_prompt_from_persona(self, force: bool = False):
         """Build the profile image prompt from the current persona details."""
         if not hasattr(self, 'profile_prompt_text'):
+            return
+        
+        # If not forcing and there is already content, keep it
+        try:
+            existing = self.profile_prompt_text.get('1.0', tk.END).strip()
+        except Exception:
+            existing = ''
+        if (not force) and existing:
             return
         
         try:
@@ -2593,7 +2912,9 @@ class SunoPersona(tk.Tk):
         
         if hasattr(self, 'profile_custom_prompt_text'):
             try:
-                self.profile_custom_prompt_text.delete('1.0', tk.END)
+                # Only clear custom prompt when forcing
+                if force:
+                    self.profile_custom_prompt_text.delete('1.0', tk.END)
             except Exception:
                 pass
         
@@ -2668,7 +2989,7 @@ class SunoPersona(tk.Tk):
             messagebox.showwarning('Warning', 'Please select a persona to save.')
             return
         
-        config = {}
+        config = dict(self.current_persona) if self.current_persona else {}
         for key, widget in self.persona_widgets.items():
             if key == 'genre_tags':
                 tags_text = self.genre_tags_text.get('1.0', tk.END).strip()
@@ -2679,6 +3000,10 @@ class SunoPersona(tk.Tk):
             elif isinstance(widget, ttk.Entry):
                 if key in self.persona_fields:
                     config[key] = self.persona_fields[key].get().strip()
+        # Preserve image preset metadata
+        config['image_presets'] = self._get_persona_image_presets()
+        if hasattr(self, 'image_preset_var'):
+            config['current_image_preset'] = self.image_preset_var.get() or self._get_default_image_preset_key()
         
         if save_persona_config(self.current_persona_path, config):
             self.current_persona = config
@@ -2697,6 +3022,9 @@ class SunoPersona(tk.Tk):
         response = messagebox.askyesno('Reset Persona', 'Are you sure you want to reset all fields to saved values? Unsaved changes will be lost.')
         if response:
             self.current_persona = load_persona_config(self.current_persona_path)
+            self._ensure_persona_image_preset_state()
+            self.refresh_image_preset_controls()
+            self.refresh_song_preset_options()
             self.load_persona_info()
             self.log_debug('INFO', 'Persona reset to saved values')
             messagebox.showinfo('Success', 'Persona reset to saved values!')
@@ -3039,8 +3367,9 @@ class SunoPersona(tk.Tk):
             return
         
         base_prompt = (self.current_persona.get('base_image_prompt') or '').strip()
-        profile_prompt = self.profile_prompt_text.get('1.0', tk.END).strip() if hasattr(self, 'profile_prompt_text') else ''
-        custom_prompt = self.profile_custom_prompt_text.get('1.0', tk.END).strip() if hasattr(self, 'profile_custom_prompt_text') else ''
+        preset_base_prompt, preset_custom_prompt = self._get_active_preset_prompts()
+        profile_prompt = preset_base_prompt
+        custom_prompt = preset_custom_prompt
         
         if not profile_prompt and base_prompt:
             profile_prompt = base_prompt
@@ -3054,6 +3383,12 @@ class SunoPersona(tk.Tk):
         vibe = (self.current_persona.get('vibe') or '').strip()
         visual = (self.current_persona.get('visual_aesthetic') or '').strip()
         tagline = (self.current_persona.get('tagline') or '').strip()
+        preset_key = self.image_preset_var.get() if hasattr(self, 'image_preset_var') else self.current_persona.get('current_image_preset', 'default')
+        base_path = self.get_persona_image_base_path(preset_key)
+        os.makedirs(base_path, exist_ok=True)
+        self.current_persona['current_image_preset'] = preset_key
+        # Persist prompts into preset record
+        self._save_preset_prompts_from_ui(preset_key)
         
         final_prompt = profile_prompt
         theme_bits = []
@@ -3072,8 +3407,8 @@ class SunoPersona(tk.Tk):
             final_prompt += f"\n\nCUSTOM SCENE / DETAILS: {custom_prompt}"
         
         # Add reference image description if Front image exists
-        safe_name = persona_name.replace(' ', '-').replace(':', '_').replace('/', '_').replace('\\', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace("'", '_').replace('<', '_').replace('>', '_').replace('|', '_')
-        front_image_path = os.path.join(self.current_persona_path, f'{safe_name}-Front.png') if self.current_persona_path else None
+        safe_name = self._safe_persona_basename()
+        front_image_path = os.path.join(base_path, f'{safe_name}-Front.png') if self.current_persona_path else None
         
         if front_image_path and os.path.exists(front_image_path):
             try:
@@ -3083,7 +3418,7 @@ class SunoPersona(tk.Tk):
                 new_height = max(1, original_img.height // 2)
                 downscaled_img = original_img.resize((new_width, new_height), Image.Resampling.LANCZOS)
                 
-                temp_dir = os.path.join(self.current_persona_path, 'temp')
+                temp_dir = os.path.join(base_path, 'temp')
                 os.makedirs(temp_dir, exist_ok=True)
                 reference_image_path = os.path.join(temp_dir, f'{safe_name}-Front-downscaled.png')
                 downscaled_img.save(reference_image_path, 'PNG')
@@ -3131,7 +3466,7 @@ class SunoPersona(tk.Tk):
         
         # Find first available index to avoid overwriting existing profile images
         next_index = 1
-        while os.path.exists(os.path.join(self.current_persona_path, f'{safe_name}-Profile-{next_index}.png')):
+        while os.path.exists(os.path.join(base_path, f'{safe_name}-Profile-{next_index}.png')):
             next_index += 1
         
         successes = 0
@@ -3140,7 +3475,7 @@ class SunoPersona(tk.Tk):
         
         for i in range(count):
             target_index = next_index + i
-            filename = os.path.join(self.current_persona_path, f'{safe_name}-Profile-{target_index}.png')
+            filename = os.path.join(base_path, f'{safe_name}-Profile-{target_index}.png')
             variation_prompt = f"{final_prompt}\n\nPROFILE VARIATION {i+1}: keep the same character identity while varying camera angle, lighting, and subtle expression."
             
             try:
@@ -3177,6 +3512,7 @@ class SunoPersona(tk.Tk):
         if errors and successes:
             self.log_debug('WARNING', f'{errors} profile image(s) failed during generation.')
         
+        save_persona_config(self.current_persona_path, self.current_persona)
         self.refresh_profile_images_gallery()
     
     def generate_reference_images(self):
@@ -3185,12 +3521,20 @@ class SunoPersona(tk.Tk):
             messagebox.showwarning('Warning', 'Please select a persona first.')
             return
         
-        base_prompt = self.current_persona.get('base_image_prompt', '')
+        preset_base_prompt, preset_custom_prompt = self._get_active_preset_prompts()
+        base_prompt = preset_base_prompt or self.current_persona.get('base_image_prompt', '')
         if not base_prompt:
             messagebox.showwarning('Warning', 'Please set a Base Image Prompt first.')
             return
+        if preset_custom_prompt:
+            base_prompt = f"{base_prompt}\n\nCUSTOM SCENE DETAILS: {preset_custom_prompt}"
         
-        safe_name = self.current_persona.get('name', 'persona').replace(' ', '-').replace(':', '_').replace('/', '_').replace('\\', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace("'", '_').replace('<', '_').replace('>', '_').replace('|', '_')
+        preset_key = self.image_preset_var.get() if hasattr(self, 'image_preset_var') else self.current_persona.get('current_image_preset', 'default')
+        base_path = self.get_persona_image_base_path(preset_key)
+        os.makedirs(base_path, exist_ok=True)
+        self.current_persona['current_image_preset'] = preset_key
+        self._save_preset_prompts_from_ui(preset_key)
+        safe_name = self._safe_persona_basename()
         front_image_path = None
         
         # Step 1: Generate Front image first
@@ -3217,7 +3561,7 @@ class SunoPersona(tk.Tk):
             if result['success']:
                 img_bytes = result.get('image_bytes', b'')
                 if img_bytes:
-                    front_filename = os.path.join(self.current_persona_path, f'{safe_name}-Front.png')
+                    front_filename = os.path.join(base_path, f'{safe_name}-Front.png')
                     with open(front_filename, 'wb') as f:
                         f.write(img_bytes)
                     front_image_path = front_filename
@@ -3307,7 +3651,7 @@ class SunoPersona(tk.Tk):
                 if result_img['success']:
                     img_bytes = result_img.get('image_bytes', b'')
                     if img_bytes:
-                        filename = os.path.join(self.current_persona_path, f'{safe_name}-{view}.png')
+                        filename = os.path.join(base_path, f'{safe_name}-{view}.png')
                         with open(filename, 'wb') as f:
                             f.write(img_bytes)
                         self.log_debug('INFO', f'{view} reference image saved: {filename}')
@@ -3322,6 +3666,7 @@ class SunoPersona(tk.Tk):
                 self.config(cursor='')
         
         # Final refresh to ensure all images are displayed
+        save_persona_config(self.current_persona_path, self.current_persona)
         self.refresh_persona_images()
         messagebox.showinfo('Success', 'Reference images generation completed. Front generated first, then Side and Back matched to Front.')
     
@@ -3423,43 +3768,49 @@ class SunoPersona(tk.Tk):
         ttk.Entry(scrollable_frame, textvariable=self.full_song_name_var, width=60).grid(row=1, column=1, columnspan=2, sticky=tk.W+tk.E, pady=5, padx=5)
         ttk.Button(scrollable_frame, text='Generate', command=self.generate_full_song_name).grid(row=1, column=3, padx=5)
         
+        ttk.Label(scrollable_frame, text='Persona Image Preset:', font=('TkDefaultFont', 9, 'bold')).grid(row=2, column=0, sticky=tk.W, pady=5)
+        self.song_persona_preset_var = tk.StringVar()
+        self.song_persona_preset_combo = ttk.Combobox(scrollable_frame, textvariable=self.song_persona_preset_var, state='readonly', width=40)
+        self.song_persona_preset_combo.grid(row=2, column=1, columnspan=2, sticky=tk.W+tk.E, pady=5, padx=5)
+        ttk.Button(scrollable_frame, text='Refresh Presets', command=self.refresh_song_preset_options).grid(row=2, column=3, padx=5)
+        
         # Play button for MP3 file (will be shown/hidden based on file existence)
         self.play_mp3_button = ttk.Button(scrollable_frame, text='▶ Play MP3', command=self.play_mp3, state=tk.DISABLED)
         self.play_mp3_button.grid(row=1, column=4, padx=5)
         
-        ttk.Label(scrollable_frame, text='Lyric Ideas:', font=('TkDefaultFont', 9, 'bold')).grid(row=2, column=0, sticky=tk.NW, pady=5)
+        ttk.Label(scrollable_frame, text='Lyric Ideas:', font=('TkDefaultFont', 9, 'bold')).grid(row=3, column=0, sticky=tk.NW, pady=5)
         self.lyric_ideas_text = scrolledtext.ScrolledText(scrollable_frame, height=3, wrap=tk.WORD, width=60)
-        self.lyric_ideas_text.grid(row=2, column=1, columnspan=2, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
+        self.lyric_ideas_text.grid(row=3, column=1, columnspan=2, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
         
-        ttk.Label(scrollable_frame, text='Lyrics:', font=('TkDefaultFont', 9, 'bold')).grid(row=3, column=0, sticky=tk.NW, pady=5)
+        ttk.Label(scrollable_frame, text='Lyrics:', font=('TkDefaultFont', 9, 'bold')).grid(row=4, column=0, sticky=tk.NW, pady=5)
         self.lyrics_text = scrolledtext.ScrolledText(scrollable_frame, height=6, wrap=tk.WORD, width=60)
-        self.lyrics_text.grid(row=3, column=1, columnspan=2, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
-        ttk.Button(scrollable_frame, text='Generate', command=self.generate_lyrics).grid(row=3, column=3, padx=5, pady=5, sticky=tk.N)
+        self.lyrics_text.grid(row=4, column=1, columnspan=2, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
+        ttk.Button(scrollable_frame, text='Generate', command=self.generate_lyrics).grid(row=4, column=3, padx=5, pady=5, sticky=tk.N)
         
-        ttk.Label(scrollable_frame, text='Song Style:', font=('TkDefaultFont', 9, 'bold')).grid(row=4, column=0, sticky=tk.NW, pady=5)
+        ttk.Label(scrollable_frame, text='Song Style:', font=('TkDefaultFont', 9, 'bold')).grid(row=5, column=0, sticky=tk.NW, pady=5)
         self.song_style_text = scrolledtext.ScrolledText(scrollable_frame, height=3, wrap=tk.WORD, width=60)
-        self.song_style_text.grid(row=4, column=1, columnspan=2, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
+        self.song_style_text.grid(row=5, column=1, columnspan=2, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
 
         style_btn_frame = ttk.Frame(scrollable_frame)
-        style_btn_frame.grid(row=4, column=3, padx=5, pady=5, sticky=tk.N)
+        style_btn_frame.grid(row=5, column=3, padx=5, pady=5, sticky=tk.N)
         ttk.Button(style_btn_frame, text='Select Styles...', command=lambda: self.open_style_selector(False)).pack(fill=tk.X, pady=(0, 4))
         ttk.Button(style_btn_frame, text='Select + Merge', command=lambda: self.open_style_selector(True)).pack(fill=tk.X)
         
-        ttk.Label(scrollable_frame, text='Merged Style:', font=('TkDefaultFont', 9, 'bold')).grid(row=5, column=0, sticky=tk.NW, pady=5)
+        ttk.Label(scrollable_frame, text='Merged Style:', font=('TkDefaultFont', 9, 'bold')).grid(row=6, column=0, sticky=tk.NW, pady=5)
         self.merged_style_text = scrolledtext.ScrolledText(scrollable_frame, height=3, wrap=tk.WORD, width=60)
-        self.merged_style_text.grid(row=5, column=1, columnspan=2, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
-        ttk.Button(scrollable_frame, text='Merge', command=self.merge_song_style).grid(row=5, column=3, padx=5, pady=5, sticky=tk.N)
+        self.merged_style_text.grid(row=6, column=1, columnspan=2, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
+        ttk.Button(scrollable_frame, text='Merge', command=self.merge_song_style).grid(row=6, column=3, padx=5, pady=5, sticky=tk.N)
 
-        ttk.Label(scrollable_frame, text='Storyboard Theme / Global Image Style:', font=('TkDefaultFont', 9, 'bold')).grid(row=6, column=0, sticky=tk.NW, pady=5)
+        ttk.Label(scrollable_frame, text='Storyboard Theme / Global Image Style:', font=('TkDefaultFont', 9, 'bold')).grid(row=7, column=0, sticky=tk.NW, pady=5)
         self.storyboard_theme_text = scrolledtext.ScrolledText(scrollable_frame, height=3, wrap=tk.WORD, width=60)
-        self.storyboard_theme_text.grid(row=6, column=1, columnspan=2, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
+        self.storyboard_theme_text.grid(row=7, column=1, columnspan=2, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
         theme_btn_frame = ttk.Frame(scrollable_frame)
-        theme_btn_frame.grid(row=6, column=3, padx=5, pady=5, sticky=tk.N)
+        theme_btn_frame.grid(row=7, column=3, padx=5, pady=5, sticky=tk.N)
         ttk.Button(theme_btn_frame, text='Use Merged Style', command=self.set_storyboard_theme_from_merged_style).pack(fill=tk.X, pady=(0, 4))
         ttk.Button(theme_btn_frame, text='Improve', command=self.improve_storyboard_theme).pack(fill=tk.X)
 
         ai_results_notebook = ttk.Notebook(scrollable_frame)
-        ai_results_notebook.grid(row=7, column=0, columnspan=4, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
+        ai_results_notebook.grid(row=8, column=0, columnspan=4, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
         
         album_cover_frame = ttk.Frame(ai_results_notebook)
         ai_results_notebook.add(album_cover_frame, text='Album Cover')
@@ -3510,8 +3861,8 @@ class SunoPersona(tk.Tk):
         self.create_extracted_lyrics_tab(extracted_lyrics_frame)
         
         scrollable_frame.columnconfigure(1, weight=1)
-        scrollable_frame.rowconfigure(3, weight=1)
-        scrollable_frame.rowconfigure(7, weight=1)
+        scrollable_frame.rowconfigure(4, weight=1)
+        scrollable_frame.rowconfigure(8, weight=1)
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
@@ -3557,6 +3908,26 @@ class SunoPersona(tk.Tk):
 
         # Storyboard tab (full details) now lives beside Song Details
         self.create_storyboard_tab(storyboard_tab)
+
+    def refresh_song_preset_options(self):
+        """Sync the song-level preset selector with persona presets."""
+        if not hasattr(self, 'song_persona_preset_combo'):
+            return
+        presets = self._get_persona_image_presets()
+        values = [p.get('key', 'default') for p in presets]
+        self.song_persona_preset_combo['values'] = values
+
+        desired = None
+        if self.current_song and self.current_song.get('persona_image_preset'):
+            desired = self.current_song.get('persona_image_preset')
+        if not desired and self.current_persona:
+            desired = self.current_persona.get('current_image_preset', self._get_default_image_preset_key())
+        if not desired:
+            desired = 'default'
+
+        if values and desired not in values:
+            desired = values[0]
+        self.song_persona_preset_var.set(desired)
     
     def create_extracted_lyrics_tab(self, parent):
         """Create the Extracted Lyrics tab for displaying lyrics extracted from MP3."""
@@ -3619,8 +3990,10 @@ class SunoPersona(tk.Tk):
         options_frame.pack(fill=tk.X, pady=(0, 10))
         self.overlay_lyrics_var = tk.BooleanVar(value=False)
         self.embed_lyrics_var = tk.BooleanVar(value=True)
+        self.embed_keywords_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(options_frame, text='Overlay lyrics on image (bottom bar)', variable=self.overlay_lyrics_var).pack(anchor=tk.W, pady=2)
         ttk.Checkbutton(options_frame, text='Embed lyrics into scene prompts', variable=self.embed_lyrics_var).pack(anchor=tk.W, pady=2)
+        ttk.Checkbutton(options_frame, text='Embed keywords into scene prompts', variable=self.embed_keywords_var).pack(anchor=tk.W, pady=2)
         
         # Storyboard scenes list
         list_frame = ttk.LabelFrame(main_frame, text='Storyboard Scenes', padding=5)
@@ -3677,12 +4050,14 @@ class SunoPersona(tk.Tk):
         ttk.Button(action_frame, text='Generate Image (Selected)', command=self.generate_storyboard_image_selected).pack(side=tk.LEFT, padx=5)
         ttk.Button(action_frame, text='Generate All Images', command=self.generate_storyboard_images_all).pack(side=tk.LEFT, padx=5)
         ttk.Button(action_frame, text='Copy Prompt (Selected)', command=self.copy_selected_scene_prompt).pack(side=tk.LEFT, padx=5)
+        ttk.Button(action_frame, text='Regenerate Selected Scenes', command=self.regenerate_selected_scenes).pack(side=tk.LEFT, padx=5)
         
         # Add right-click context menu for copying prompts
         self.storyboard_context_menu = tk.Menu(self, tearoff=0)
         self.storyboard_context_menu.add_command(label='Copy Prompt', command=self.copy_selected_scene_prompt)
         self.storyboard_context_menu.add_command(label='Copy Lyrics', command=self.copy_selected_scene_lyrics)
         self.storyboard_context_menu.add_command(label='Copy Scene Info', command=self.copy_selected_scene_info)
+        self.storyboard_context_menu.add_command(label='Regenerate Selected Scenes', command=self.regenerate_selected_scenes)
         
         def show_storyboard_context_menu(event):
             """Show context menu on right-click."""
@@ -3793,6 +4168,205 @@ class SunoPersona(tk.Tk):
             self.clipboard_append(text_to_copy)
             self.update()
 
+    def _parse_scenes_from_text(self, content: str, default_duration: int, lyric_segments: list, song_duration: float) -> list[dict]:
+        """Parse AI storyboard text into scene dicts without touching the UI."""
+        scenes = []
+        lines = content.split('\n')
+        current_scene = None
+        current_prompt: list[str] = []
+        scene_lyrics = ''
+        
+        for line in lines:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if stripped.upper().startswith('SCENE'):
+                if current_scene is not None and current_prompt:
+                    prompt_text = '\n'.join(current_prompt).strip()
+                    if not scene_lyrics or scene_lyrics.strip().lower() == '[no lyrics]':
+                        prompt_text = self.sanitize_prompt_no_lyrics(prompt_text)
+                        scene_lyrics = ''
+                    if prompt_text:
+                        scene_start_time = (current_scene - 1) * default_duration
+                        scene_end_time = min(scene_start_time + default_duration, song_duration) if song_duration else scene_start_time + default_duration
+                        lyrics_calc = scene_lyrics
+                        if lyric_segments and song_duration > 0 and not lyrics_calc:
+                            lyrics_calc = self.get_lyrics_for_scene(scene_start_time, scene_end_time, lyric_segments)
+                        scenes.append({
+                            'scene': current_scene,
+                            'duration': f'{default_duration}s',
+                            'timestamp': self.format_timestamp(scene_start_time),
+                            'lyrics': lyrics_calc,
+                            'prompt': self.apply_storyboard_theme_prefix(prompt_text)
+                        })
+                parts = stripped.split(':')
+                if parts:
+                    num_match = [p for p in parts[0].split() if p.isdigit()]
+                    current_scene = int(num_match[0]) if num_match else None
+                current_prompt = []
+                scene_lyrics = ''
+            else:
+                current_prompt.append(stripped)
+        if current_scene is not None and current_prompt:
+            prompt_text = '\n'.join(current_prompt).strip()
+            if not scene_lyrics or scene_lyrics.strip().lower() == '[no lyrics]':
+                prompt_text = self.sanitize_prompt_no_lyrics(prompt_text)
+                scene_lyrics = ''
+            if prompt_text:
+                scene_start_time = (current_scene - 1) * default_duration
+                scene_end_time = min(scene_start_time + default_duration, song_duration) if song_duration else scene_start_time + default_duration
+                lyrics_calc = scene_lyrics
+                if lyric_segments and song_duration > 0 and not lyrics_calc:
+                    lyrics_calc = self.get_lyrics_for_scene(scene_start_time, scene_end_time, lyric_segments)
+                scenes.append({
+                    'scene': current_scene,
+                    'duration': f'{default_duration}s',
+                    'timestamp': self.format_timestamp(scene_start_time),
+                    'lyrics': lyrics_calc,
+                    'prompt': self.apply_storyboard_theme_prefix(prompt_text)
+                })
+        return scenes
+
+    def regenerate_selected_scenes(self):
+        """Regenerate the selected storyboard scenes via AI to add variation."""
+        if not hasattr(self, 'storyboard_tree'):
+            return
+        selection = self.storyboard_tree.selection()
+        if not selection:
+            messagebox.showwarning('Warning', 'Please select at least one scene to regenerate.')
+            return
+        
+        try:
+            seconds_per_video = int(self.storyboard_seconds_var.get() or '8')
+        except Exception:
+            seconds_per_video = 8
+        if seconds_per_video < 1:
+            seconds_per_video = 6
+        
+        mp3_path = self.get_mp3_filepath()
+        if not mp3_path or not os.path.exists(mp3_path):
+            messagebox.showwarning('Warning', 'MP3 file not found. Please ensure the MP3 exists before regenerating scenes.')
+            return
+        
+        lyrics = ''
+        if self.current_song:
+            lyrics = self.current_song.get('extracted_lyrics', '').strip()
+        if not lyrics:
+            lyrics = self.get_extracted_lyrics(mp3_path, force_extract=False)
+            if hasattr(self, 'extracted_lyrics_text') and lyrics:
+                self.extracted_lyrics_text.delete('1.0', tk.END)
+                self.extracted_lyrics_text.insert('1.0', lyrics)
+        song_duration = self.get_mp3_duration(mp3_path)
+        lyric_segments = self.parse_lyrics_with_timing(lyrics, song_duration) if lyrics and song_duration > 0 else []
+        
+        storyboard_theme = self.storyboard_theme_text.get('1.0', tk.END).strip() if hasattr(self, 'storyboard_theme_text') else ''
+        merged_style = self._get_sanitized_style_text()
+        persona_scene_percent = int(self.persona_scene_percent_var.get() or 35) if hasattr(self, 'persona_scene_percent_var') else 35
+        try:
+            storyboard_setup_count = int(self.storyboard_setup_count_var.get() or 4)
+        except Exception:
+            storyboard_setup_count = 4
+        persona_name = self.current_persona.get('name', '') if self.current_persona else ''
+        visual_aesthetic = self.current_persona.get('visual_aesthetic', '') if self.current_persona else ''
+        base_image_prompt = self.current_persona.get('base_image_prompt', '') if self.current_persona else ''
+        vibe = self.current_persona.get('vibe', '') if self.current_persona else ''
+        full_song_name = self.full_song_name_var.get().strip() if hasattr(self, 'full_song_name_var') else ''
+        song_name = self.song_name_var.get().strip() if hasattr(self, 'song_name_var') else ''
+        total_scenes = max(
+            [int(self.storyboard_tree.item(i, 'values')[0]) for i in self.storyboard_tree.get_children()] or [len(self.current_song.get('storyboard', [])) if self.current_song else 0] or [0]
+        )
+        selected_scene_nums = sorted({int(self.storyboard_tree.item(i, 'values')[0]) for i in selection})
+        
+        system_message = (
+            "You are a professional music video storyboard director. "
+            "Regenerate ONLY the requested scenes. Output format for each: "
+            "\"SCENE X: [duration] seconds\\n[prompt]\". No extra scenes, no questions."
+        )
+        
+        regenerated = {}
+        self.log_debug('INFO', f'Regenerating scenes: {selected_scene_nums}')
+        self.config(cursor='wait')
+        self.update()
+        try:
+            for scene_num in selected_scene_nums:
+                batch_prompt = self._create_batch_storyboard_prompt(
+                    song_name, full_song_name, lyrics, merged_style, storyboard_theme, persona_scene_percent,
+                    storyboard_setup_count, persona_name, visual_aesthetic, base_image_prompt, vibe,
+                    lyric_segments, song_duration, seconds_per_video, scene_num, scene_num, total_scenes
+                )
+                self.save_storyboard_prompt(
+                    batch_prompt,
+                    seconds_per_video,
+                    {
+                        'mode': 'regenerate',
+                        'scene': scene_num,
+                        'total_scenes': total_scenes,
+                        'seconds_per_video': seconds_per_video
+                    }
+                )
+                result = self.azure_ai(batch_prompt, system_message=system_message, profile='text', max_tokens=2000, temperature=1)
+                if not result.get('success'):
+                    messagebox.showerror('Error', f'Failed to regenerate scene {scene_num}: {result.get("error")}')
+                    self.log_debug('ERROR', f'Regenerate scene {scene_num} failed: {result.get("error")}')
+                    continue
+                parsed = self._parse_scenes_from_text(result.get('content', ''), seconds_per_video, lyric_segments, song_duration)
+                if not parsed:
+                    messagebox.showwarning('Warning', f'No scene parsed for scene {scene_num}.')
+                    continue
+                for scene_data in parsed:
+                    regenerated[scene_data['scene']] = scene_data
+        except Exception as exc:
+            messagebox.showerror('Error', f'Error regenerating scenes: {exc}')
+            self.log_debug('ERROR', f'Error regenerating scenes: {exc}')
+        finally:
+            self.config(cursor='')
+        
+        if not regenerated:
+            return
+        
+        for item in self.storyboard_tree.get_children():
+            values = self.storyboard_tree.item(item, 'values')
+            if not values or len(values) < 5:
+                continue
+            scene_num = int(values[0])
+            if scene_num in regenerated:
+                data = regenerated[scene_num]
+                new_values = (
+                    scene_num,
+                    data.get('timestamp', values[1]),
+                    data.get('duration', values[2]),
+                    data.get('lyrics', values[3]),
+                    data.get('prompt', values[4])
+                )
+                self.storyboard_tree.item(item, values=new_values)
+        
+        if self.current_song is not None:
+            storyboard_list = self.current_song.get('storyboard', [])
+            updated = []
+            for scene in storyboard_list:
+                scene_num = scene.get('scene')
+                if scene_num in regenerated:
+                    new = scene.copy()
+                    new['prompt'] = regenerated[scene_num].get('prompt', new.get('prompt', ''))
+                    new['lyrics'] = regenerated[scene_num].get('lyrics', new.get('lyrics', ''))
+                    new['duration'] = regenerated[scene_num].get('duration', new.get('duration', ''))
+                    new['timestamp'] = regenerated[scene_num].get('timestamp', new.get('timestamp', ''))
+                    updated.append(new)
+                else:
+                    updated.append(scene)
+            for snum, sdata in regenerated.items():
+                if not any(s.get('scene') == snum for s in updated):
+                    updated.append({
+                        'scene': snum,
+                        'timestamp': sdata.get('timestamp', ''),
+                        'duration': sdata.get('duration', ''),
+                        'lyrics': sdata.get('lyrics', ''),
+                        'prompt': sdata.get('prompt', '')
+                    })
+            self.current_song['storyboard'] = updated
+        
+        self.log_debug('INFO', f'Regenerated {len(regenerated)} scene(s) successfully.')
+
     def on_storyboard_select(self, event=None):
         """Show full prompt for the first selected storyboard scene."""
         if not hasattr(self, 'storyboard_tree') or not hasattr(self, 'storyboard_preview_text'):
@@ -3823,6 +4397,7 @@ class SunoPersona(tk.Tk):
         for item in self.songs_tree.get_children():
             self.songs_tree.delete(item)
         
+        self.refresh_song_preset_options()
         if not self.current_persona_path:
             return
         
@@ -3926,7 +4501,8 @@ class SunoPersona(tk.Tk):
                 'video_loop': '',
                 'storyboard': [],
                 'storyboard_seconds_per_video': 8,
-                'storyboard_setup_count': 4
+                'storyboard_setup_count': 4,
+                'persona_image_preset': self.current_persona.get('current_image_preset', 'default') if self.current_persona else 'default'
             }
             
             save_song_config(new_song_path, config)
@@ -3963,6 +4539,10 @@ class SunoPersona(tk.Tk):
         
         self.song_name_var.set(self.current_song.get('song_name', ''))
         self.full_song_name_var.set(self.current_song.get('full_song_name', ''))
+        self.refresh_song_preset_options()
+        if hasattr(self, 'song_persona_preset_var'):
+            preset_val = self.current_song.get('persona_image_preset') or (self.current_persona.get('current_image_preset') if self.current_persona else 'default')
+            self.song_persona_preset_var.set(preset_val or 'default')
         self.lyric_ideas_text.delete('1.0', tk.END)
         self.lyric_ideas_text.insert('1.0', self.current_song.get('lyric_ideas', ''))
         self.lyrics_text.delete('1.0', tk.END)
@@ -3991,6 +4571,10 @@ class SunoPersona(tk.Tk):
             self.overlay_lyrics_var.set(bool(self.current_song.get('overlay_lyrics_on_image', False)))
         if hasattr(self, 'embed_lyrics_var'):
             self.embed_lyrics_var.set(bool(self.current_song.get('embed_lyrics_in_prompt', True)))
+        if hasattr(self, 'embed_keywords_var'):
+            self.embed_keywords_var.set(bool(self.current_song.get('embed_keywords_in_prompt', False)))
+        if hasattr(self, 'embed_keywords_var'):
+            self.embed_keywords_var.set(bool(self.current_song.get('embed_keywords_in_prompt', False)))
         
         # Load album cover and video loop settings
         if hasattr(self, 'album_cover_size_var'):
@@ -4019,6 +4603,10 @@ class SunoPersona(tk.Tk):
         """Clear song info form."""
         self.song_name_var.set('')
         self.full_song_name_var.set('')
+        if hasattr(self, 'song_persona_preset_var'):
+            default_preset = self.current_persona.get('current_image_preset', self._get_default_image_preset_key()) if self.current_persona else 'default'
+            self.song_persona_preset_var.set(default_preset)
+            self.refresh_song_preset_options()
         self.lyric_ideas_text.delete('1.0', tk.END)
         self.lyrics_text.delete('1.0', tk.END)
         if hasattr(self, 'extracted_lyrics_text'):
@@ -4039,6 +4627,8 @@ class SunoPersona(tk.Tk):
             self.overlay_lyrics_var.set(False)
         if hasattr(self, 'embed_lyrics_var'):
             self.embed_lyrics_var.set(True)
+        if hasattr(self, 'embed_keywords_var'):
+            self.embed_keywords_var.set(False)
         self.scene_final_prompts = {}
     
     def get_mp3_filepath(self) -> str:
@@ -4193,7 +4783,9 @@ class SunoPersona(tk.Tk):
             'video_loop_size': self.video_loop_size_var.get() if hasattr(self, 'video_loop_size_var') else '9:16 (720x1280)',
             'overlay_lyrics_on_image': bool(self.overlay_lyrics_var.get()) if hasattr(self, 'overlay_lyrics_var') else False,
             'embed_lyrics_in_prompt': bool(self.embed_lyrics_var.get()) if hasattr(self, 'embed_lyrics_var') else True,
-            'storyboard_setup_count': int(self.storyboard_setup_count_var.get() or 4) if hasattr(self, 'storyboard_setup_count_var') else 4
+            'embed_keywords_in_prompt': bool(self.embed_keywords_var.get()) if hasattr(self, 'embed_keywords_var') else False,
+            'storyboard_setup_count': int(self.storyboard_setup_count_var.get() or 4) if hasattr(self, 'storyboard_setup_count_var') else 4,
+            'persona_image_preset': self.song_persona_preset_var.get().strip() if hasattr(self, 'song_persona_preset_var') and self.song_persona_preset_var.get() else self.current_persona.get('current_image_preset', 'default') if self.current_persona else 'default'
         }
         
         if save_song_config(self.current_song_path, config):
@@ -4584,16 +5176,19 @@ class SunoPersona(tk.Tk):
         full_song_name = self.full_song_name_var.get().strip()
         merged_style = self._get_sanitized_style_text()
         visual_aesthetic = self.current_persona.get('visual_aesthetic', '')
+        preset_key = self._get_song_persona_preset_key()
+        base_path = self.get_persona_image_base_path(preset_key)
+        storyboard_theme = self.storyboard_theme_text.get('1.0', tk.END).strip() if hasattr(self, 'storyboard_theme_text') else ''
         
         if not song_name:
             messagebox.showwarning('Warning', 'Please enter a song name.')
             return
         
         # Check if persona reference images exist
-        safe_name = self.current_persona.get('name', 'persona').replace(' ', '-').replace(':', '_').replace('/', '_').replace('\\', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace("'", '_').replace('<', '_').replace('>', '_').replace('|', '_')
-        front_image_path = os.path.join(self.current_persona_path, f'{safe_name}-Front.png')
-        side_image_path = os.path.join(self.current_persona_path, f'{safe_name}-Side.png')
-        back_image_path = os.path.join(self.current_persona_path, f'{safe_name}-Back.png')
+        safe_name = self._safe_persona_basename()
+        front_image_path = os.path.join(base_path, f'{safe_name}-Front.png')
+        side_image_path = os.path.join(base_path, f'{safe_name}-Side.png')
+        back_image_path = os.path.join(base_path, f'{safe_name}-Back.png')
         
         reference_images = []
         if os.path.exists(front_image_path):
@@ -4608,9 +5203,31 @@ class SunoPersona(tk.Tk):
         vibe = self.current_persona.get('vibe', '')
         
         # Build base prompt
-        prompt = f"Generate an album cover prompt for '{song_name}' by the AI persona '{self.current_persona.get('name', '')}'."
+        artist_name = self.current_persona.get('name', '')
+        prompt = f"Generate an album cover prompt for '{song_name}' by the AI persona '{artist_name}'."
         prompt += f"\n\nFull Song Name: {full_song_name}"
         prompt += f"\n\nMerged Style: {merged_style}"
+        if storyboard_theme:
+            prompt += f"\n\nSTORYBOARD THEME (MANDATORY - primary art direction): {storyboard_theme}"
+            prompt += "\nUse this storyboard theme 100% as the core visual aesthetic. All album cover decisions must align with it."
+        # Ensure title/artist appear on the cover
+        album_title = full_song_name if full_song_name else song_name
+        if album_title or artist_name:
+            prompt += "\n\nMANDATORY TEXT ELEMENTS:"
+            if album_title:
+                prompt += f"\n- Include the album title \"{album_title}\" as integrated cover typography (no subtitle bars)."
+            if artist_name:
+                prompt += f"\n- Include the artist name \"{artist_name}\" as integrated cover typography."
+            prompt += (
+                "\n- Render BOTH strings visibly on the cover. Title and artist must be readable and distinct."
+                "\n- Use cohesive typography that matches the storyboard theme; embed text into the scene (on armor plates, signage, HUD, ground, etc.), not as floating UI overlays."
+                "\n- Keep text placement clean and legible while integrated with the environment."
+            )
+            prompt += "\n\nRENDER TEXT ON COVER (verbatim):"
+            if album_title:
+                prompt += f"\n1) \"{album_title}\""
+            if artist_name:
+                prompt += f"\n2) \"{artist_name}\""
         
         # Include full persona visual description
         if visual_aesthetic:
@@ -4624,6 +5241,8 @@ class SunoPersona(tk.Tk):
         if reference_images:
             prompt += f"\n\nAnalyze the provided reference images of this persona and create an album cover prompt that matches the character's visual appearance, styling, and aesthetic from these images."
             prompt += "\n\nIMPORTANT: The album cover must fully incorporate ALL visual characteristics from the persona's Visual Aesthetic and Base Image Prompt descriptions above."
+            if storyboard_theme:
+                prompt += "\nMANDATORY: The storyboard theme overrides any conflicting cues. Keep the theme fully intact while merging persona visuals."
             prompt += "\n\nCreate a detailed album cover prompt suitable for image generation that incorporates ALL of the persona's visual characteristics, appearance, styling, and aesthetic."
             
             self.log_debug('INFO', f'Generating album cover prompt using {len(reference_images)} reference images...')
@@ -4639,6 +5258,8 @@ class SunoPersona(tk.Tk):
                 return
         else:
             prompt += "\n\nIMPORTANT: The album cover must fully incorporate ALL visual characteristics from the persona's Visual Aesthetic and Base Image Prompt descriptions above."
+            if storyboard_theme:
+                prompt += "\nMANDATORY: The storyboard theme overrides any conflicting cues. Keep the theme fully intact while merging persona visuals."
             prompt += "\n\nCreate a detailed album cover prompt suitable for image generation that incorporates ALL of the persona's visual characteristics, appearance, styling, and aesthetic."
             
             self.log_debug('INFO', 'Generating album cover prompt (no reference images available)...')
@@ -4677,16 +5298,18 @@ class SunoPersona(tk.Tk):
         
         album_cover = self.album_cover_text.get('1.0', tk.END).strip()
         merged_style = self._get_sanitized_style_text()
+        preset_key = self._get_song_persona_preset_key()
+        base_path = self.get_persona_image_base_path(preset_key)
         
         if not album_cover:
             messagebox.showwarning('Warning', 'Please generate an album cover prompt first.')
             return
         
         # Check if persona reference images exist
-        safe_name = self.current_persona.get('name', 'persona').replace(' ', '-').replace(':', '_').replace('/', '_').replace('\\', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace("'", '_').replace('<', '_').replace('>', '_').replace('|', '_')
-        front_image_path = os.path.join(self.current_persona_path, f'{safe_name}-Front.png')
-        side_image_path = os.path.join(self.current_persona_path, f'{safe_name}-Side.png')
-        back_image_path = os.path.join(self.current_persona_path, f'{safe_name}-Back.png')
+        safe_name = self._safe_persona_basename()
+        front_image_path = os.path.join(base_path, f'{safe_name}-Front.png')
+        side_image_path = os.path.join(base_path, f'{safe_name}-Side.png')
+        back_image_path = os.path.join(base_path, f'{safe_name}-Back.png')
         
         reference_images = []
         if os.path.exists(front_image_path):
@@ -5743,6 +6366,7 @@ Vibe: {vibe if vibe else 'N/A'}
    - A setup = location + lighting + base composition. You may "cheat" by re-lighting a corner to create multiple looks.
    - Reuse these setups by changing shot type, angle, lens, blocking, props, and motion. Do NOT introduce new locations beyond the {storyboard_setup_count} setups.
    - Highlight high-energy sections (hooks/chorus) by swapping to the most striking setup; return to calmer setups for verses/outro.
+   - Assign EACH setup its own base color palette family (e.g., warm amber/gold, teal+orange, indigo+silver, coral+violet, sepia+turquoise). Keep a setup’s base palette when revisiting it (small lighting/accent shifts are fine), but ensure different setups use different hue families. If the global theme leans green, only one setup may stay green; the others must use clearly different palettes (warm/cool/neon/dusk contrasts). This prevents all scenes from defaulting to the same green tone.
 
 4. VISUAL VARIETY: Every scene must differ significantly:
    - Rotate shot types: extreme close-up, medium, wide, aerial, macro
@@ -5798,7 +6422,7 @@ ABSOLUTE RULES:
 2. Generate ALL {num_scenes} scenes - no stopping, no questions
 3. 60-70% of scenes must be [NO CHARACTERS] - purely environmental/abstract
 4. Use only {storyboard_setup_count} distinct setups (location + lighting). Rotate through them; do NOT introduce new setups beyond this count. Sweet spot is 3-4 setups; default is 4.
-5. Every scene must be visually distinct from all others (change shot type/angle/light/palette)
+5. Every scene must be visually distinct from all others (change shot type/angle/light/palette). No two consecutive scenes may share the same palette + setup combination; change palette OR lighting OR shot type between adjacent scenes.
 6. Keep modern pacing: think 2-4 second shots; refresh visuals on section changes (verse/chorus/bridge) using the strongest setups for hooks.
 7. If hitting response limits, batch output (scenes 1-14, then 15-28, etc.)
 """
@@ -5985,7 +6609,19 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
             prompt += "Every scene description must start with this theme text, then add scene specifics.\n\n"
         prompt += f"Target persona presence: about {persona_scene_percent}% of scenes (non-consecutive). Keep plenty of non-persona scenes for variety.\n\n"
         prompt += f"Use only {storyboard_setup_count} distinct visual setups (location + lighting). Rotate through them; do NOT add more setups. Sweet spot is 3-4; default is 4. You may 'cheat' by relighting a corner to make multiple looks. Use the most striking setup for hooks/chorus; calmer setups for verses/outro.\n"
-        prompt += "Keep modern pacing: imagine 2-4 second shots and refresh visuals on section changes.\n\n"
+        prompt += "Keep modern pacing: imagine 2-4 second shots and refresh visuals on section changes.\n"
+        prompt += (
+            "COLOR VARIATION: Each scene MUST include a COLOR PALETTE line and rotate distinct palettes across scenes. "
+            "Do NOT reuse the same base palette in consecutive scenes; avoid repeating the previous two palettes. "
+            "Examples: teal+orange neon, warm amber dusk, cool moonlit blue, crimson/gold stage, pastel haze, emerald+violet, silver+magenta, sepia+turquoise. "
+            "Assign each of the {storyboard_setup_count} setups its own base palette family (e.g., warm, cool, neon, dusk). When you revisit a setup, keep its base palette but you may tweak lighting accents. If the global theme suggests green, limit green to a single setup and force other setups into contrasting palettes (warm/cool/neon/dusk) so the storyboard is not all green. "
+            "Keep a palette consistent within a scene but shift between scenes while fitting the theme and lyrics mood.\n\n"
+        )
+        prompt += (
+            "CONSECUTIVE VARIATION: No two consecutive scenes may reuse the same palette AND setup combination. "
+            "If a location repeats, change the lighting, camera angle, and palette. "
+            "Always change at least one of: palette, lighting, shot type, or focal subject between adjacent scenes.\n\n"
+        )
         
         # Include persona visual description only as reference (not for every scene)
         prompt += "\nPERSONA REFERENCE (only use when persona appears in scenes - see requirements below):\n"
@@ -6034,14 +6670,14 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
             prompt += f"Start immediately with SCENE {batch_start}:, no preamble, no explanations.\n\n"
         else:
             prompt += f"CRITICAL: Generate ONLY scenes {batch_start} through {batch_end}. Start immediately with SCENE {batch_start}:, no preamble, no explanations.\n\n"
-        prompt += "Output format:\n"
+        prompt += "Output format (must include COLOR PALETTE before each scene prompt):\n"
         if scene_lyrics_info:
             # Include actual lyrics in the format examples
             scene1_lyrics = scene_lyrics_dict.get(batch_start, '')
             scene2_lyrics = scene_lyrics_dict.get(batch_start + 1, '') if batch_start < batch_end else ''
             
             if scene1_lyrics:
-                prompt += f"SCENE {batch_start}: [duration] seconds\nLYRICS FOR THIS SCENE: \"{scene1_lyrics}\"\n"
+                prompt += f"SCENE {batch_start}: [duration] seconds\nLYRICS FOR THIS SCENE: \"{scene1_lyrics}\"\nCOLOR PALETTE: [distinct palette for this scene]\n"
                 prompt += "CRITICAL INSTRUCTIONS FOR THIS SCENE:\n"
                 prompt += "1. CONTENT SAFETY: Use safe, artistic language. Avoid 'black' (use 'dark', 'shadowy'), 'void' (use 'empty space'), 'compressing/bending under force' (use 'curving', 'warping'), 'praying' (use 'pleading', 'hoping'). Create visually poetic prompts that pass content moderation.\n"
                 prompt += "2. The image must visually represent and incorporate the lyrics above - include visual elements that match what the lyrics describe.\n"
@@ -6052,11 +6688,11 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
                 prompt += "   - If lyrics cannot be naturally integrated into the environment, focus on visual representation of the lyrics' meaning instead\n"
                 prompt += f"3. Format the image prompt to include: [visual description] + \"with the lyrics text '{scene1_lyrics}' embedded INTO THE ENVIRONMENT ONLY (e.g., carved into walls, glowing in neon signs, written on objects, formed by patterns, integrated into textures) - NO text overlays, NO bottom bars, NO subtitles, NO floating text\"\n\n"
             else:
-                prompt += f"SCENE {batch_start}: [duration] seconds\n[detailed image prompt that visually represents and incorporates the lyrics for Scene {batch_start}'s time period - directly reflect the mood, imagery, and content of those specific lyrics]\n\n"
+                prompt += f"SCENE {batch_start}: [duration] seconds\nCOLOR PALETTE: [distinct palette for this scene]\n[detailed image prompt that visually represents and incorporates the lyrics for Scene {batch_start}'s time period - directly reflect the mood, imagery, and content of those specific lyrics]\n\n"
             
             if batch_start < batch_end:
                 if scene2_lyrics:
-                    prompt += f"SCENE {batch_start + 1}: [duration] seconds\nLYRICS FOR THIS SCENE: \"{scene2_lyrics}\"\n"
+                    prompt += f"SCENE {batch_start + 1}: [duration] seconds\nLYRICS FOR THIS SCENE: \"{scene2_lyrics}\"\nCOLOR PALETTE: [distinct palette for this scene]\n"
                     prompt += "CRITICAL INSTRUCTIONS FOR THIS SCENE:\n"
                     prompt += "1. CONTENT SAFETY: Use safe, artistic language. Avoid 'black' (use 'dark', 'shadowy'), 'void' (use 'empty space'), 'compressing/bending under force' (use 'curving', 'warping'), 'praying' (use 'pleading', 'hoping'). Create visually poetic prompts that pass content moderation.\n"
                     prompt += "2. The image must visually represent and incorporate the lyrics above - include visual elements that match what the lyrics describe.\n"
@@ -6067,11 +6703,11 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
                     prompt += "   - If lyrics cannot be naturally integrated into the environment, focus on visual representation of the lyrics' meaning instead\n"
                     prompt += f"4. Format the image prompt to include: [visual description] + \"with the lyrics text '{scene2_lyrics}' embedded INTO THE ENVIRONMENT ONLY (e.g., carved into walls, glowing in neon signs, written on objects, formed by patterns, integrated into textures) - NO text overlays, NO bottom bars, NO subtitles, NO floating text\"\n\n"
                 else:
-                    prompt += f"SCENE {batch_start + 1}: [duration] seconds\n[detailed image prompt that visually represents and incorporates the lyrics for Scene {batch_start + 1}'s time period - directly reflect the mood, imagery, and content of those specific lyrics]\n\n"
+                    prompt += f"SCENE {batch_start + 1}: [duration] seconds\nCOLOR PALETTE: [distinct palette for this scene]\n[detailed image prompt that visually represents and incorporates the lyrics for Scene {batch_start + 1}'s time period - directly reflect the mood, imagery, and content of those specific lyrics]\n\n"
         else:
-            prompt += f"SCENE {batch_start}: [duration] seconds\n[detailed image prompt]\n\n"
+            prompt += f"SCENE {batch_start}: [duration] seconds\nCOLOR PALETTE: [distinct palette for this scene]\n[detailed image prompt]\n\n"
             if batch_start < batch_end:
-                prompt += f"SCENE {batch_start + 1}: [duration] seconds\n[detailed image prompt]\n\n"
+                prompt += f"SCENE {batch_start + 1}: [duration] seconds\nCOLOR PALETTE: [distinct palette for this scene]\n[detailed image prompt]\n\n"
         prompt += f"(Continue through SCENE {batch_end})\n"
         
         return prompt
@@ -6640,7 +7276,7 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
         This applies persona detection and reference image analysis to ensure the
         copied prompt matches exactly what is sent to the model.
         """
-        cache_key = str(scene_num)
+        cache_key = f"{scene_num}|{self._get_song_persona_preset_key()}"
         if cache_key in self.scene_final_prompts:
             return self.scene_final_prompts[cache_key]
 
@@ -6648,6 +7284,10 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
         prompt = self.apply_storyboard_theme_prefix(prompt)
         lyrics_text = self.sanitize_lyrics_for_prompt(lyrics) if lyrics else ''
         embed_lyrics_enabled = bool(self.embed_lyrics_var.get()) if hasattr(self, 'embed_lyrics_var') else True
+        embed_keywords_enabled = bool(self.embed_keywords_var.get()) if hasattr(self, 'embed_keywords_var') else False
+        keyword = ''
+        if embed_keywords_enabled:
+            keyword = self._extract_major_keyword(f"{lyrics_text} {prompt}")
 
         # If current scene is similar to the previous one, include a reference description from the previous scene's image
         reference_note = self._prepare_previous_scene_reference(int(scene_num) if str(scene_num).isdigit() else scene_num, prompt)
@@ -6714,8 +7354,10 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
 
         # If persona is present, enrich prompt with reference image analysis
         if persona_in_scene and self.current_persona and self.current_persona_path:
-            safe_name = self.current_persona.get('name', 'persona').replace(' ', '-').replace(':', '_').replace('/', '_').replace('\\', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace("'", '_').replace('<', '_').replace('>', '_').replace('|', '_')
-            front_image_path = os.path.join(self.current_persona_path, f'{safe_name}-Front.png')
+            preset_key = self._get_song_persona_preset_key()
+            base_path = self.get_persona_image_base_path(preset_key)
+            safe_name = self._safe_persona_basename()
+            front_image_path = os.path.join(base_path, f'{safe_name}-Front.png')
             if os.path.exists(front_image_path):
                 try:
                     from PIL import Image
@@ -6769,6 +7411,12 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
                     "\n\nLyrics for mood only (keep scene text-free): "
                     f"\"{lyrics_text}\". Use the feeling of these words to shape lighting, color, and symbolism, but render no visible text."
                 )
+        # Optional keyword embedding
+        if keyword and '[NO LYRICS]' not in lyrics_text.upper():
+            prompt += (
+                f"\n\nOPTIONAL KEYWORD: \"{keyword}\". Only embed this word as diegetic text (signage, hologram, graffiti, screen UI) IF it naturally fits the scene and does not conflict with aesthetics. "
+                "If it feels forced or breaks immersion, omit it and keep the scene text-free."
+            )
         elif not lyrics_text:
             prompt += "\n\nNo lyrics for this scene; keep visuals text-free."
 
@@ -6895,8 +7543,10 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
         
         # Check if Front Persona Image exists and analyze it for reference
         if self.current_persona and self.current_persona_path:
-            safe_name = self.current_persona.get('name', 'persona').replace(' ', '-').replace(':', '_').replace('/', '_').replace('\\', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace("'", '_').replace('<', '_').replace('>', '_').replace('|', '_')
-            front_image_path = os.path.join(self.current_persona_path, f'{safe_name}-Front.png')
+            preset_key = self._get_song_persona_preset_key()
+            base_path = self.get_persona_image_base_path(preset_key)
+            safe_name = self._safe_persona_basename()
+            front_image_path = os.path.join(base_path, f'{safe_name}-Front.png')
             
             if os.path.exists(front_image_path):
                 try:
