@@ -318,7 +318,8 @@ def call_azure_ai(
         if temperature is not None:
             payload['temperature'] = temperature
         
-        response = requests.post(url, headers=headers, json=payload, timeout=30)
+        # Long storyboards can exceed 30s; allow more headroom
+        response = requests.post(url, headers=headers, json=payload, timeout=120)
         
         # Handle model-specific parameter restrictions
         if response.status_code == 400:
@@ -330,7 +331,7 @@ def call_azure_ai(
                 if ('temperature' in error_msg) and ('not support' in error_msg or 'only the default' in error_msg):
                     # Try forcing temperature=1 first
                     payload['temperature'] = 1
-                    response = requests.post(url, headers=headers, json=payload, timeout=30)
+                    response = requests.post(url, headers=headers, json=payload, timeout=120)
                     if response.status_code == 400:
                         try:
                             error_data = response.json()
@@ -340,7 +341,7 @@ def call_azure_ai(
                     # If still failing due to temperature, remove parameter entirely
                     if response.status_code == 400 and 'temperature' in error_msg:
                         payload.pop('temperature', None)
-                        response = requests.post(url, headers=headers, json=payload, timeout=30)
+                        response = requests.post(url, headers=headers, json=payload, timeout=120)
                         if response.status_code == 400:
                             try:
                                 error_data = response.json()
@@ -352,7 +353,7 @@ def call_azure_ai(
                 if response.status_code == 400 and 'max_completion_tokens' in error_msg and 'not supported' in error_msg:
                     payload.pop('max_completion_tokens', None)
                     payload['max_tokens'] = max_tokens
-                    response = requests.post(url, headers=headers, json=payload, timeout=30)
+                    response = requests.post(url, headers=headers, json=payload, timeout=120)
             except:
                 pass
         
@@ -1761,7 +1762,7 @@ def load_song_config(song_path: str) -> dict:
         'album_cover': '',
         'video_loop': '',
         'storyboard': [],
-        'storyboard_seconds_per_video': 8,
+        'storyboard_seconds_per_video': 6,
         'storyboard_image_size': '3:2 (1536x1024)',
         'album_cover_size': '1:1 (1024x1024)',
         'album_cover_format': 'PNG',
@@ -1769,8 +1770,8 @@ def load_song_config(song_path: str) -> dict:
         'overlay_lyrics_on_image': False,
         'embed_lyrics_in_prompt': True,
         'embed_keywords_in_prompt': False,
-        'persona_scene_percent': 35,
-        'storyboard_setup_count': 4,
+        'persona_scene_percent': 40,
+        'storyboard_setup_count': 6,
         'persona_image_preset': 'default'
     }
     
@@ -3964,7 +3965,7 @@ class SunoPersona(tk.Tk):
         controls_frame.pack(fill=tk.X, pady=(0, 10))
         
         ttk.Label(controls_frame, text='Seconds per video:', font=('TkDefaultFont', 9, 'bold')).pack(side=tk.LEFT, padx=5)
-        self.storyboard_seconds_var = tk.StringVar(value='8')
+        self.storyboard_seconds_var = tk.StringVar(value='6')
         seconds_entry = ttk.Entry(controls_frame, textvariable=self.storyboard_seconds_var, width=5)
         seconds_entry.pack(side=tk.LEFT, padx=5)
         
@@ -3977,11 +3978,11 @@ class SunoPersona(tk.Tk):
         image_size_combo.pack(side=tk.LEFT, padx=5)
 
         ttk.Label(controls_frame, text='Persona Scenes %:', font=('TkDefaultFont', 9, 'bold')).pack(side=tk.LEFT, padx=(10, 5))
-        self.persona_scene_percent_var = tk.StringVar(value='35')
+        self.persona_scene_percent_var = tk.StringVar(value='40')
         ttk.Spinbox(controls_frame, from_=0, to=100, textvariable=self.persona_scene_percent_var, width=4).pack(side=tk.LEFT, padx=2)
 
         ttk.Label(controls_frame, text='Distinct setups:', font=('TkDefaultFont', 9, 'bold')).pack(side=tk.LEFT, padx=(10, 5))
-        self.storyboard_setup_count_var = tk.StringVar(value='4')
+        self.storyboard_setup_count_var = tk.StringVar(value='6')
         ttk.Spinbox(controls_frame, from_=1, to=12, textvariable=self.storyboard_setup_count_var, width=4).pack(side=tk.LEFT, padx=2)
 
         ttk.Button(controls_frame, text='Generate Storyboard', command=self.generate_storyboard).pack(side=tk.LEFT, padx=10)
@@ -4238,7 +4239,7 @@ class SunoPersona(tk.Tk):
             return
         
         try:
-            seconds_per_video = int(self.storyboard_seconds_var.get() or '8')
+            seconds_per_video = int(self.storyboard_seconds_var.get() or '6')
         except Exception:
             seconds_per_video = 8
         if seconds_per_video < 1:
@@ -4262,11 +4263,11 @@ class SunoPersona(tk.Tk):
         
         storyboard_theme = self.storyboard_theme_text.get('1.0', tk.END).strip() if hasattr(self, 'storyboard_theme_text') else ''
         merged_style = self._get_sanitized_style_text()
-        persona_scene_percent = int(self.persona_scene_percent_var.get() or 35) if hasattr(self, 'persona_scene_percent_var') else 35
+        persona_scene_percent = int(self.persona_scene_percent_var.get() or 40) if hasattr(self, 'persona_scene_percent_var') else 40
         try:
-            storyboard_setup_count = int(self.storyboard_setup_count_var.get() or 4)
+            storyboard_setup_count = int(self.storyboard_setup_count_var.get() or 6)
         except Exception:
-            storyboard_setup_count = 4
+            storyboard_setup_count = 6
         persona_name = self.current_persona.get('name', '') if self.current_persona else ''
         visual_aesthetic = self.current_persona.get('visual_aesthetic', '') if self.current_persona else ''
         base_image_prompt = self.current_persona.get('base_image_prompt', '') if self.current_persona else ''
@@ -4501,8 +4502,9 @@ class SunoPersona(tk.Tk):
                 'album_cover': '',
                 'video_loop': '',
                 'storyboard': [],
-                'storyboard_seconds_per_video': 8,
-                'storyboard_setup_count': 4,
+                'storyboard_seconds_per_video': 6,
+                'storyboard_setup_count': 6,
+                'persona_scene_percent': 40,
                 'persona_image_preset': self.current_persona.get('current_image_preset', 'default') if self.current_persona else 'default'
             }
             
@@ -4556,9 +4558,9 @@ class SunoPersona(tk.Tk):
             self.storyboard_theme_text.delete('1.0', tk.END)
             self.storyboard_theme_text.insert('1.0', self.current_song.get('storyboard_theme', ''))
         if hasattr(self, 'persona_scene_percent_var'):
-            self.persona_scene_percent_var.set(str(self.current_song.get('persona_scene_percent', 35)))
+            self.persona_scene_percent_var.set(str(self.current_song.get('persona_scene_percent', 40)))
         if hasattr(self, 'storyboard_setup_count_var'):
-            self.storyboard_setup_count_var.set(str(self.current_song.get('storyboard_setup_count', 4)))
+            self.storyboard_setup_count_var.set(str(self.current_song.get('storyboard_setup_count', 6)))
         self.song_description_text.delete('1.0', tk.END)
         self.song_description_text.insert('1.0', self.current_song.get('song_description', ''))
         if hasattr(self, 'song_description_de_text'):
@@ -4592,7 +4594,7 @@ class SunoPersona(tk.Tk):
         
         # Load storyboard
         if hasattr(self, 'storyboard_seconds_var'):
-            self.storyboard_seconds_var.set(str(self.current_song.get('storyboard_seconds_per_video', 8)))
+            self.storyboard_seconds_var.set(str(self.current_song.get('storyboard_seconds_per_video', 6)))
             if hasattr(self, 'storyboard_image_size_var'):
                 self.storyboard_image_size_var.set(self.current_song.get('storyboard_image_size', '3:2 (1536x1024)'))
             self.load_storyboard()
@@ -4617,7 +4619,7 @@ class SunoPersona(tk.Tk):
         if hasattr(self, 'storyboard_theme_text'):
             self.storyboard_theme_text.delete('1.0', tk.END)
         if hasattr(self, 'persona_scene_percent_var'):
-            self.persona_scene_percent_var.set('35')
+            self.persona_scene_percent_var.set('40')
         if hasattr(self, 'song_description_text'):
             self.song_description_text.delete('1.0', tk.END)
         if hasattr(self, 'song_description_de_text'):
@@ -4771,13 +4773,13 @@ class SunoPersona(tk.Tk):
             'song_style': self.song_style_text.get('1.0', tk.END).strip(),
             'merged_style': self.merged_style_text.get('1.0', tk.END).strip(),
             'storyboard_theme': self.storyboard_theme_text.get('1.0', tk.END).strip() if hasattr(self, 'storyboard_theme_text') else '',
-            'persona_scene_percent': int(self.persona_scene_percent_var.get() or 35) if hasattr(self, 'persona_scene_percent_var') else 35,
+            'persona_scene_percent': int(self.persona_scene_percent_var.get() or 40) if hasattr(self, 'persona_scene_percent_var') else 40,
             'song_description': self.song_description_text.get('1.0', tk.END).strip() if hasattr(self, 'song_description_text') else self.current_song.get('song_description', '') if self.current_song else '',
             'song_description_de': self.song_description_de_text.get('1.0', tk.END).strip() if hasattr(self, 'song_description_de_text') else self.current_song.get('song_description_de', '') if self.current_song else '',
             'album_cover': self.album_cover_text.get('1.0', tk.END).strip(),
             'video_loop': self.video_loop_text.get('1.0', tk.END).strip(),
             'storyboard': self.get_storyboard_data() if hasattr(self, 'storyboard_tree') else [],
-            'storyboard_seconds_per_video': int(self.storyboard_seconds_var.get() or '8') if hasattr(self, 'storyboard_seconds_var') else 8,
+            'storyboard_seconds_per_video': int(self.storyboard_seconds_var.get() or '6') if hasattr(self, 'storyboard_seconds_var') else 6,
             'storyboard_image_size': self.storyboard_image_size_var.get() if hasattr(self, 'storyboard_image_size_var') else '3:2 (1536x1024)',
             'album_cover_size': self.album_cover_size_var.get() if hasattr(self, 'album_cover_size_var') else '1:1 (1024x1024)',
             'album_cover_format': self.album_cover_format_var.get() if hasattr(self, 'album_cover_format_var') else 'PNG',
@@ -4785,7 +4787,7 @@ class SunoPersona(tk.Tk):
             'overlay_lyrics_on_image': bool(self.overlay_lyrics_var.get()) if hasattr(self, 'overlay_lyrics_var') else False,
             'embed_lyrics_in_prompt': bool(self.embed_lyrics_var.get()) if hasattr(self, 'embed_lyrics_var') else True,
             'embed_keywords_in_prompt': bool(self.embed_keywords_var.get()) if hasattr(self, 'embed_keywords_var') else False,
-            'storyboard_setup_count': int(self.storyboard_setup_count_var.get() or 4) if hasattr(self, 'storyboard_setup_count_var') else 4,
+            'storyboard_setup_count': int(self.storyboard_setup_count_var.get() or 6) if hasattr(self, 'storyboard_setup_count_var') else 6,
             'persona_image_preset': self.song_persona_preset_var.get().strip() if hasattr(self, 'song_persona_preset_var') and self.song_persona_preset_var.get() else self.current_persona.get('current_image_preset', 'default') if self.current_persona else 'default'
         }
         
@@ -5347,6 +5349,14 @@ class SunoPersona(tk.Tk):
         if vibe:
             prompt += f"\n\nPersona Vibe: {vibe}"
         
+        # Force non-centered, scene-driven placement for the persona
+        prompt += (
+            "\n\nComposition and placement rules:"
+            "\n- Embed the persona into the environment; do NOT default to centering them."
+            "\n- Place the persona wherever the scene reads best (left/right third, foreground or background, over-shoulder, partial silhouette, small-in-frame, or cropped)."
+            "\n- Choose the strongest composition for this scene; only center if the scene explicitly benefits from it."
+        )
+        
         # If reference images exist, use vision API to analyze them
         if reference_images:
             prompt += f"\n\nAnalyze the provided reference images of this persona and create an album cover prompt that matches the character's visual appearance, styling, and aesthetic from these images."
@@ -5515,7 +5525,7 @@ class SunoPersona(tk.Tk):
                 # Compute timestamp if missing
                 if not timestamp:
                     try:
-                        seconds_per_video = int(self.storyboard_seconds_var.get() or '8')
+                        seconds_per_video = int(self.storyboard_seconds_var.get() or '6')
                         start_time = (int(scene_num) - 1) * seconds_per_video
                         timestamp = self.format_timestamp(start_time)
                     except Exception:
@@ -6272,7 +6282,7 @@ class SunoPersona(tk.Tk):
             return
         
         try:
-            seconds_per_video = int(self.storyboard_seconds_var.get() or '8')
+            seconds_per_video = int(self.storyboard_seconds_var.get() or '6')
             if seconds_per_video < 1 or seconds_per_video > 20:
                 messagebox.showwarning('Warning', 'Seconds per video must be between 1 and 20.')
                 return
@@ -6302,15 +6312,15 @@ class SunoPersona(tk.Tk):
         merged_style = self.merged_style_text.get('1.0', tk.END).strip()
         storyboard_theme = self.storyboard_theme_text.get('1.0', tk.END).strip() if hasattr(self, 'storyboard_theme_text') else ''
         try:
-            persona_scene_percent = int(self.persona_scene_percent_var.get() or 35) if hasattr(self, 'persona_scene_percent_var') else 35
+            persona_scene_percent = int(self.persona_scene_percent_var.get() or 40) if hasattr(self, 'persona_scene_percent_var') else 40
         except Exception:
-            persona_scene_percent = 35
+            persona_scene_percent = 40
         persona_scene_percent = max(0, min(100, persona_scene_percent))
         no_persona_percent = max(0, 100 - persona_scene_percent)
         try:
-            storyboard_setup_count = int(self.storyboard_setup_count_var.get() or 4) if hasattr(self, 'storyboard_setup_count_var') else 4
+            storyboard_setup_count = int(self.storyboard_setup_count_var.get() or 6) if hasattr(self, 'storyboard_setup_count_var') else 6
         except Exception:
-            storyboard_setup_count = 4
+            storyboard_setup_count = 6
         storyboard_setup_count = max(1, min(12, storyboard_setup_count))
         persona_name = self.current_persona.get('name', '')
         visual_aesthetic = self.current_persona.get('visual_aesthetic', '')
@@ -6501,6 +6511,11 @@ Vibe: {vibe if vibe else 'N/A'}
    - "void" -> "vast emptiness", "expansive darkness"  
    - "praying" -> "pleading", "hoping", "seeking"
    - Avoid violent/forceful language - use artistic alternatives
+
+9. COMPOSITION FOR PERSONA (when present):
+   - Embed the persona into the environment; do NOT default to centering them
+   - Place them where the scene reads best (left/right third, foreground or background, over-shoulder, partial silhouette, small-in-frame, or cropped)
+   - Choose the strongest composition for the shot; only center if it clearly benefits the scene
 </RULES>
 
 <OUTPUT_FORMAT>
@@ -6531,7 +6546,7 @@ ABSOLUTE RULES:
 1. Output ONLY scene prompts in format: "SCENE X: [duration] seconds\\n[prompt]"
 2. Generate ALL {num_scenes} scenes - no stopping, no questions
 3. 60-70% of scenes must be [NO CHARACTERS] - purely environmental/abstract
-4. Use only {storyboard_setup_count} distinct setups (location + lighting). Rotate through them; do NOT introduce new setups beyond this count. Sweet spot is 3-4 setups; default is 4.
+4. Use only {storyboard_setup_count} distinct setups (location + lighting). Rotate through them; do NOT introduce new setups beyond this count.
 5. Every scene must be visually distinct from all others (change shot type/angle/light/palette). No two consecutive scenes may share the same palette + setup combination; change palette OR lighting OR shot type between adjacent scenes.
 6. Keep modern pacing: think 2-4 second shots; refresh visuals on section changes (verse/chorus/bridge) using the strongest setups for hooks.
 7. If hitting response limits, batch output (scenes 1-14, then 15-28, etc.)
@@ -6541,6 +6556,8 @@ ABSOLUTE RULES:
                 system_message += f"{next_rule_num}. Every scene prompt must START with this theme prefix before anything else: {storyboard_theme}\n"
                 next_rule_num += 1
             system_message += f"{next_rule_num}. Target persona presence: about {persona_scene_percent}% of scenes (non-consecutive). Maintain variety.\n"
+            next_rule_num += 1
+            system_message += f"{next_rule_num}. When persona appears, avoid default centering. Embed them in the environment and pick the best composition (rule of thirds, foreground/background, over-shoulder, partial silhouette, small-in-frame, or cropped). Center only if it clearly strengthens the shot.\n"
             system_message += """
 
 Start immediately with "SCENE 1:" - no introduction or commentary."""
@@ -6718,7 +6735,7 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
             prompt += f"GLOBAL STORY THEME (prepend to every scene): {storyboard_theme}\n"
             prompt += "Every scene description must start with this theme text, then add scene specifics.\n\n"
         prompt += f"Target persona presence: about {persona_scene_percent}% of scenes (non-consecutive). Keep plenty of non-persona scenes for variety.\n\n"
-        prompt += f"Use only {storyboard_setup_count} distinct visual setups (location + lighting). Rotate through them; do NOT add more setups. Sweet spot is 3-4; default is 4. You may 'cheat' by relighting a corner to make multiple looks. Use the most striking setup for hooks/chorus; calmer setups for verses/outro.\n"
+        prompt += f"Use only {storyboard_setup_count} distinct visual setups (location + lighting). Rotate through them; do NOT add more setups. You may 'cheat' by relighting a corner to make multiple looks. Use the most striking setup for hooks/chorus; calmer setups for verses/outro.\n"
         prompt += "Keep modern pacing: imagine 2-4 second shots and refresh visuals on section changes.\n"
         prompt += (
             "COLOR VARIATION: Each scene MUST include a COLOR PALETTE line and rotate distinct palettes across scenes. "
