@@ -1805,11 +1805,11 @@ def save_song_config(song_path: str, config: dict):
 def get_mp3_filename(full_song_name: str) -> str:
     """Generate safe MP3 filename from full song name.
     
-    Example: 'Sister Smoke – AI's Shadow (electric blues groove)' 
-    -> 'Sister Smoke – AI's Shadow (electric blues groove).mp3'
+    Example: 'AI's Shadow - Sister Smoke - (cyberpunk, blues, glitch)' 
+    -> 'AI's Shadow - Sister Smoke - (cyberpunk, blues, glitch).mp3'
     
     Args:
-        full_song_name: The full song name in format [Persona] – [Song] ([Style])
+        full_song_name: The full song name in format [Song] - [Persona] - (keywords)
     
     Returns:
         Safe filename with .mp3 extension
@@ -2153,6 +2153,146 @@ class SunoPersona(tk.Tk):
         song_style = self.song_style_text.get('1.0', tk.END).strip() if hasattr(self, 'song_style_text') else ''
         style_text = merged_style or song_style
         return self._sanitize_style_keywords(style_text)
+
+    def _extract_style_keywords(self, style_text: str) -> list[str]:
+        """Extract up to three concise single-word keywords from style text."""
+        if not style_text:
+            return []
+        
+        band_name_lc = {name.lower() for name in getattr(self, 'known_band_names', set())}
+        gender_stop = {
+            'male', 'female', 'man', 'woman', 'boy', 'girl',
+            'tenor', 'baritone', 'bass', 'alto', 'contralto',
+            'mezzo', 'soprano', 'falsetto', 'vocal', 'vocals',
+            'voice', 'singer', 'sung', 'sings', 'sang'
+        }
+        style_stop = {
+            'style', 'styles', 'mix', 'blend', 'fusion', 'vibe', 'vibes',
+            'music', 'song', 'track', 'sound', 'sounds', 'beat', 'beats',
+            'tempo', 'bpm', 'version', 'remix', 'edit', 'intro', 'outro',
+            'verse', 'chorus', 'hook', 'bridge', 'vocals', 'lyric', 'lyrics'
+        }
+        filler_stop = {
+            'the', 'a', 'an', 'of', 'in', 'on', 'at', 'to', 'for', 'from',
+            'with', 'and', 'or', 'but', 'by', 'into', 'over', 'under', 'out',
+            'feat', 'featuring', 'ft', 'inspired', 'style', 'like', 'original',
+            'effect', 'effects'
+        }
+        name_stop = {
+            'tom', 'morello', 'john', 'jane', 'mike', 'michael', 'david',
+            'sarah', 'sara', 'james', 'paul', 'peter', 'lisa', 'mark'
+        }
+        instrument_stop = {
+            'guitar', 'drums', 'drummer', 'bass', 'piano', 'synth', 'synths',
+            'synthesizer', 'keyboard', 'keys', 'violin', 'cello', 'harp',
+            'trumpet', 'sax', 'saxophone', 'clarinet', 'flute', 'banjo',
+            'mandolin', 'ukulele', 'accordion', 'harmonica', 'percussion',
+            'trombone', 'tuba', 'viola', 'organ', 'drum', 'hi-hat', 'snare'
+        }
+        nonstyle_stop = {
+            'effect', 'effects', 'riff', 'riffing', 'groove', 'grooves', 'accent', 'accents',
+            'energy', 'attitude', 'reverb', 'delay', 'distortion', 'chorusfx',
+            'chant', 'chants', 'crowd', 'call', 'response', 'hits', 'hit', 'punchy',
+            'tight', 'minimal', 'explosive', 'politically', 'charged', 'shouted',
+            'militant', 'vocals', 'live', 'drop', 'drops', 'tuned'
+        }
+        generic_adj_stop = {
+            'raw', 'soulful', 'earthy', 'gritty', 'moody', 'dark', 'emotive',
+            'emotional', 'passionate', 'cinematic', 'atmospheric', 'dramatic',
+            'nostalgic', 'retro', 'vintage', 'classic', 'modern', 'organic'
+        }
+        # Helper: crude stem to avoid near-duplicates
+        def stem(word: str) -> str:
+            return re.sub(r'(ing|ed|ly|ical|icity|icity|ous|ness|ment|s)$', '', word.lower())
+        normalized = style_text.replace('\n', ',')
+        parts = [p.strip() for p in re.split(r'[;,\|/]', normalized) if p.strip()]
+        
+        keywords: list[str] = []
+        seen = set()
+        
+        for part in parts:
+            clean_part = re.sub(r'\s+', ' ', part).strip(' -')
+            if not clean_part:
+                continue
+            words = re.findall(r"[A-Za-z0-9']+", clean_part)
+            for word in words:
+                if len(word) <= 2:
+                    continue
+                if word.isdigit():
+                    continue
+                lowered = word.lower()
+                if lowered in gender_stop:
+                    continue
+                if lowered in style_stop:
+                    continue
+                if lowered in filler_stop:
+                    continue
+                if lowered in name_stop:
+                    continue
+                if lowered in instrument_stop:
+                    continue
+                if lowered in nonstyle_stop:
+                    continue
+                if lowered in generic_adj_stop:
+                    continue
+                if lowered in band_name_lc:
+                    continue
+                stemmed = stem(lowered)
+                if stemmed in seen:
+                    continue
+                keywords.append(word)
+                seen.add(stemmed)
+                if len(keywords) >= 3:
+                    return keywords
+        
+        if len(keywords) < 3:
+            fallback_words = [
+                w for w in re.findall(r"[A-Za-z0-9']+", style_text) if len(w) > 2
+            ]
+            for word in fallback_words:
+                lowered = word.lower()
+                if lowered in gender_stop:
+                    continue
+                if lowered in style_stop:
+                    continue
+                if lowered in filler_stop:
+                    continue
+                if lowered in name_stop:
+                    continue
+                if lowered in instrument_stop:
+                    continue
+                if lowered in nonstyle_stop:
+                    continue
+                if lowered in generic_adj_stop:
+                    continue
+                if lowered in band_name_lc:
+                    continue
+                stemmed = stem(lowered)
+                if stemmed in seen:
+                    continue
+                keywords.append(word)
+                seen.add(stemmed)
+                if len(keywords) >= 3:
+                    break
+        
+        # Backup pass: if still empty, harvest from any remaining words (non-stop)
+        if not keywords:
+            tokens = re.findall(r"[A-Za-z0-9']+", style_text)
+            for word in tokens:
+                if len(word) <= 2:
+                    continue
+                lowered = word.lower()
+                if lowered in gender_stop or lowered in style_stop or lowered in filler_stop or lowered in name_stop or lowered in instrument_stop or lowered in nonstyle_stop or lowered in generic_adj_stop or lowered in band_name_lc:
+                    continue
+                stemmed = stem(lowered)
+                if stemmed in seen:
+                    continue
+                keywords.append(word)
+                seen.add(stemmed)
+                if len(keywords) >= 3:
+                    break
+
+        return keywords[:3]
 
     def _extract_major_keyword(self, text: str) -> str:
         """Extract a simple major keyword from text (lyrics or prompt)."""
@@ -5001,7 +5141,7 @@ class SunoPersona(tk.Tk):
         
         Returns:
             Full path to MP3 file: [song_folder]/[Full Song Name].mp3
-            Example: .../AI-Songs/[song_folder]/Sister Smoke – AI's Shadow (electric blues groove).mp3
+            Example: .../AI-Songs/[song_folder]/AI's Shadow - Sister Smoke - (cyberpunk, blues, glitch).mp3
         """
         if not self.current_song_path:
             return ''
@@ -5164,7 +5304,7 @@ class SunoPersona(tk.Tk):
             self.log_debug('ERROR', 'Failed to save song')
     
     def generate_full_song_name(self):
-        """Generate full song name in format: [Persona Name] – [Song Name] ([Style/Genre])."""
+        """Generate full song name via AI prompt: [Song Name] - [Persona Name] - (3 keywords)."""
         if not self.current_persona:
             messagebox.showwarning('Warning', 'Please select a persona first.')
             return
@@ -5186,24 +5326,86 @@ class SunoPersona(tk.Tk):
             messagebox.showwarning('Warning', 'Persona name is not set.')
             return
         
-        # Extract style/genre from song style
-        style_part = 'Original'
-        if song_style:
-            # Get first meaningful part of style
-            style_part = song_style.split(',')[0].split('\n')[0].strip()
-            # Clean up style part - remove any parentheses or brackets that might already be there
-            style_part = style_part.split('(')[0].split('[')[0].strip()
-            # Limit length
-            if len(style_part) > 40:
-                style_part = style_part[:40].strip()
-            if not style_part:
-                style_part = 'Original'
-        else:
-            style_part = 'Original'
+        # Use only the merged style for keywords (ignore raw song style, voice, gender)
+        merged_style_raw = self.merged_style_text.get('1.0', tk.END).strip() if hasattr(self, 'merged_style_text') else ''
+        style_text = merged_style_raw
+        keywords = self._extract_style_keywords(style_text)
+        keywords_text = ', '.join(keywords[:3]) if keywords else ''
         
-        # Construct the full song name format: [Persona Name] – [Song Name] ([Style/Genre])
-        # DO NOT change the song name - use it exactly as entered
-        full_song_name = f"{persona_name} – {song_name} ({style_part})"
+        fallback_keywords = keywords.copy() if keywords else []
+        if not fallback_keywords:
+            fallback_keywords = ['style']
+        while len(fallback_keywords) < 3:
+            fallback_keywords.append(fallback_keywords[-1])
+        fallback_full_song_name = f"{song_name} - {persona_name} - ({', '.join(fallback_keywords[:3])})"
+        
+        truncated_merged = merged_style_raw
+        if len(truncated_merged) > 320:
+            truncated_merged = truncated_merged[:320].rstrip() + '...'
+        
+        def _trim_text(value: str, limit: int = 200) -> str:
+            if not value:
+                return ''
+            return value if len(value) <= limit else value[:limit].rstrip() + '...'
+        
+        lyrics_text = self.lyrics_text.get('1.0', tk.END).strip() if hasattr(self, 'lyrics_text') else ''
+        merged_style = merged_style_raw
+        
+        lyrics_trim = _trim_text(lyrics_text, 200)
+        
+        system_message = (
+            "You format AI-generated song titles. Return exactly one line in the form:\n"
+            "Song Title - Persona Name - (kw1, kw2, kw3)\n"
+            "Rules: Use the provided Song Name verbatim. Use the Persona Name verbatim. "
+            "Derive up to three single-word style keywords from the Style only. "
+            "No artist/persona/band names, genders, voices, instruments, production terms, or non-style words. Only style words. "
+            "Separate keywords with space inside parentheses. "
+            "Do not invent band/artist names. "
+            "Do not leave the answer blank. "
+            "Output only the final title line, nothing else."
+        )
+        
+        prompt = (
+            "Create the formatted full song name.\n\n"
+            f"Song Name: {song_name}\n"
+            f"Persona Name: {persona_name}\n"
+            f"Song Style: {song_style}\n"
+            f"Merged Style: {merged_style}\n"
+            "Find threesingle-word style descriptors based on Style words (no names, no instruments, no production terms). "
+            "If you cannot find three, reuse the strongest until you have three. "
+            "Return exactly: Song Name - Persona Name - (kw1, kw2, kw3)"
+        )
+        
+        ai_full_song_name = None
+        try:
+            result = self.azure_ai(prompt, system_message=system_message, profile='text', max_tokens=4096, temperature=0.2)
+            self.log_debug(
+                'PROMPT',
+                f"AI full song name result: success={result.get('success')}, "
+                f"error={result.get('error')}, "
+                f"content_preview={(result.get('content') or '').strip()[:400]}"
+            )
+            if result.get('success'):
+                ai_text = (result.get('content') or '').strip()
+                self.log_debug('PROMPT', f'AI full song name raw response:\n{ai_text}')
+                if ai_text:
+                    first_line = ai_text.splitlines()[0].strip()
+                    # Basic format validation
+                    if ' - ' in first_line and '(' in first_line and ')' in first_line:
+                        ai_full_song_name = first_line
+                    else:
+                        self.log_debug('WARNING', f'AI full song name not in expected format, using fallback. AI returned: {first_line}')
+                else:
+                    self.log_debug('WARNING', 'AI returned empty full song name, using fallback.')
+            else:
+                self.log_debug('ERROR', f"AI full song name failed: {result.get('error')}")
+        except Exception as exc:
+            self.log_debug('ERROR', f'AI full song name exception: {exc}')
+        
+        # Use AI result if valid; otherwise fall back to deterministic string
+        full_song_name = ai_full_song_name or fallback_full_song_name
+        if not ai_full_song_name:
+            self.log_debug('PROMPT', f'Using fallback full song name: {full_song_name}')
         
         self.full_song_name_var.set(full_song_name)
         self.log_debug('INFO', f'Full song name generated: {full_song_name}')
