@@ -1753,6 +1753,8 @@ def load_song_config(song_path: str) -> dict:
     default_config = {
         'song_name': '',
         'full_song_name': '',
+        'album_id': '',
+        'album_name': '',
         'lyric_ideas': '',
         'lyrics': '',
         'extracted_lyrics': '',
@@ -1802,6 +1804,49 @@ def save_song_config(song_path: str, config: dict):
         return False
 
 
+def load_album_config(album_path: str) -> dict:
+    """Load album config.json from album folder."""
+    config_file = os.path.join(album_path, 'config.json')
+    default_config = {
+        'album_id': '',
+        'album_name': '',
+        'songs': [],
+        'cover_prompt': '',
+        'cover_size': '1:1 (1024x1024)',
+        'cover_format': 'PNG',
+        'video_prompt': '',
+        'video_size': '9:16 (720x1280)',
+        'language': 'EN',
+        'cover_image_file': '',
+        'video_prompt_file': ''
+    }
+    if os.path.exists(config_file):
+        try:
+            with open(config_file, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+                for key in default_config:
+                    if key not in config:
+                        config[key] = default_config[key]
+                return config
+        except Exception as e:
+            print(f'Error loading album config: {e}')
+            return default_config
+    return default_config
+
+
+def save_album_config(album_path: str, config: dict):
+    """Save album config.json to album folder."""
+    config_file = os.path.join(album_path, 'config.json')
+    try:
+        os.makedirs(album_path, exist_ok=True)
+        with open(config_file, 'w', encoding='utf-8') as f:
+            json.dump(config, f, indent=4)
+        return True
+    except Exception as e:
+        print(f'Error saving album config: {e}')
+        return False
+
+
 def get_mp3_filename(full_song_name: str) -> str:
     """Generate safe MP3 filename from full song name.
     
@@ -1842,6 +1887,12 @@ class SunoPersona(tk.Tk):
         self.current_persona_path = None
         self.current_song = None
         self.current_song_path = None
+        self.current_album = None
+        self.current_album_id = None
+        self.albums: dict[str, dict] = {}
+        self.current_album_songs: list[str] = []
+        self.last_song_cover_path = ''
+        self.last_album_cover_path = ''
         self.scene_final_prompts = {}
         self.merge_song_weight = 50
         
@@ -1949,6 +2000,98 @@ class SunoPersona(tk.Tk):
         if system_message is not None:
             sys_len = len(system_message)
             self.log_debug('PROMPT', f'{title} system ({sys_len} chars):\n{system_message}')
+
+    def _album_slug(self, name: str) -> str:
+        """Create a filesystem-safe slug for an album name."""
+        base = name.strip().lower()
+        if not base:
+            return 'album'
+        base = re.sub(r'[^a-z0-9]+', '-', base)
+        base = re.sub(r'-{2,}', '-', base).strip('-')
+        return base or 'album'
+
+    def _albums_dir(self) -> str | None:
+        """Return the albums directory for the current persona."""
+        if not self.current_persona_path:
+            return None
+        return os.path.join(self.current_persona_path, 'AI-Albums')
+
+    def load_albums(self):
+        """Load albums for the current persona."""
+        self.albums = {}
+        if not self.current_persona_path:
+            return
+        albums_dir = self._albums_dir()
+        if not albums_dir or not os.path.exists(albums_dir):
+            return
+        try:
+            for item in os.listdir(albums_dir):
+                path = os.path.join(albums_dir, item)
+                if not os.path.isdir(path):
+                    continue
+                config = load_album_config(path)
+                album_id = config.get('album_id') or item
+                config['album_id'] = album_id
+                config['folder_name'] = item
+                self.albums[album_id] = config
+        except Exception as exc:
+            self.log_debug('ERROR', f'Failed to load albums: {exc}')
+
+    def _get_album_path(self, album_id: str) -> str | None:
+        """Get album folder path by id."""
+        albums_dir = self._albums_dir()
+        if not albums_dir or not album_id:
+            return None
+        folder = self.albums.get(album_id, {}).get('folder_name') or album_id
+        return os.path.join(albums_dir, folder)
+
+    def _get_selected_song_ids(self) -> list[str]:
+        """Return selected song folder ids (exclude album nodes)."""
+        if not hasattr(self, 'songs_tree'):
+            return []
+        selected = []
+        for iid in self.songs_tree.selection():
+            if iid.startswith('album::'):
+                continue
+            selected.append(iid)
+        return selected
+
+    def show_image_preview(self, image_path: str, title: str = 'Preview'):
+        """Open a simple preview window for an image."""
+        if not image_path or not os.path.exists(image_path):
+            messagebox.showwarning('Warning', f'Image not found:\n{image_path}')
+            return
+        try:
+            from PIL import Image, ImageTk  # Pillow is already used elsewhere
+            img = Image.open(image_path)
+            max_w, max_h = 768, 768
+            img.thumbnail((max_w, max_h), Image.Resampling.LANCZOS)
+            preview = tk.Toplevel(self)
+            preview.title(title)
+            preview.geometry(f'{img.width + 20}x{img.height + 60}')
+            tk.Label(preview, text=os.path.basename(image_path)).pack(pady=(6, 2))
+            photo = ImageTk.PhotoImage(img)
+            lbl = tk.Label(preview, image=photo)
+            lbl.image = photo  # keep reference
+            lbl.pack(padx=6, pady=6)
+            ttk.Button(preview, text='Close', command=preview.destroy).pack(pady=(0, 8))
+        except Exception as exc:
+            messagebox.showerror('Error', f'Failed to preview image: {exc}')
+            self.log_debug('ERROR', f'Preview failed: {exc}')
+
+    def preview_last_song_cover(self):
+        """Preview the last generated song cover."""
+        if self.last_song_cover_path:
+            self.show_image_preview(self.last_song_cover_path, 'Song Cover Preview')
+        else:
+            messagebox.showinfo('Info', 'No song cover generated yet.')
+
+    def preview_last_album_cover(self):
+        """Preview the last generated album cover."""
+        if self.last_album_cover_path:
+            self.show_image_preview(self.last_album_cover_path, 'Album Cover Preview')
+        else:
+            messagebox.showinfo('Info', 'No album cover generated yet.')
     
     def _load_known_band_names(self) -> set[str]:
         """Collect artist/band names from the styles CSV for later sanitizing."""
@@ -2414,7 +2557,9 @@ class SunoPersona(tk.Tk):
         self.refresh_image_preset_controls()
         self.load_persona_info()
         self._load_preset_prompts_into_ui()
+        self.clear_album_form()
         self.refresh_songs_list()
+        self.refresh_album_selector()
         self.refresh_persona_images()
         self.refresh_profile_images_gallery()
         self.update_profile_prompt_from_persona()
@@ -4018,9 +4163,16 @@ class SunoPersona(tk.Tk):
         songs_list_frame = ttk.LabelFrame(main_frame, text='Songs', padding=5)
         songs_list_frame.pack(fill=tk.X, pady=(0, 10))  # Fixed height, don't expand
         
-        self.songs_tree = ttk.Treeview(songs_list_frame, columns=('song_name',), show='headings', selectmode='browse')
-        self.songs_tree.heading('song_name', text='Song Name')
-        self.songs_tree.column('song_name', width=300, anchor=tk.W)
+        self.songs_tree = ttk.Treeview(
+            songs_list_frame,
+            columns=('album',),
+            show='tree headings',
+            selectmode='extended'
+        )
+        self.songs_tree.heading('#0', text='Song / Album')
+        self.songs_tree.column('#0', width=260, anchor=tk.W)
+        self.songs_tree.heading('album', text='Album')
+        self.songs_tree.column('album', width=160, anchor=tk.W)
         
         songs_scrollbar = ttk.Scrollbar(songs_list_frame, orient=tk.VERTICAL, command=self.songs_tree.yview)
         self.songs_tree.configure(yscrollcommand=songs_scrollbar.set)
@@ -4042,9 +4194,15 @@ class SunoPersona(tk.Tk):
         self.songs_tree.bind("<Button-4>", on_mousewheel_songs)
         self.songs_tree.bind("<Button-5>", on_mousewheel_songs)
         
-        song_details_frame = ttk.LabelFrame(main_frame, text='Song Details', padding=10)
-        song_details_frame.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
-        
+        details_notebook = ttk.Notebook(main_frame)
+        details_notebook.pack(fill=tk.BOTH, expand=True, pady=(0, 0))
+
+        albums_frame = ttk.Frame(details_notebook)
+        details_notebook.add(albums_frame, text='Albums')
+        self.create_album_tab(albums_frame)
+
+        song_details_frame = ttk.Frame(details_notebook)
+        details_notebook.add(song_details_frame, text='Song Details')
         self.create_song_details_form(song_details_frame)
     
     def create_song_details_form(self, parent):
@@ -4153,6 +4311,7 @@ class SunoPersona(tk.Tk):
         album_cover_toolbar.pack(fill=tk.X, padx=2, pady=2)
         ttk.Button(album_cover_toolbar, text='Generate Prompt', command=self.generate_album_cover).pack(side=tk.LEFT, padx=2)
         ttk.Button(album_cover_toolbar, text='Run', command=self.run_image_model).pack(side=tk.LEFT, padx=2)
+        ttk.Button(album_cover_toolbar, text='Preview', command=self.preview_last_song_cover).pack(side=tk.LEFT, padx=2)
         
         ttk.Label(album_cover_toolbar, text='Size:', font=('TkDefaultFont', 8)).pack(side=tk.LEFT, padx=(10, 2))
         self.album_cover_size_var = tk.StringVar(value='1:1 (1024x1024)')
@@ -4242,6 +4401,104 @@ class SunoPersona(tk.Tk):
 
         # Storyboard tab (full details) now lives beside Song Details
         self.create_storyboard_tab(storyboard_tab)
+
+    def create_album_tab(self, parent):
+        """Create the Albums manager UI on its own tab."""
+        album_frame = ttk.Frame(parent, padding=8)
+        album_frame.pack(fill=tk.BOTH, expand=True)
+
+        album_top = ttk.Frame(album_frame)
+        album_top.pack(fill=tk.X, pady=(0, 6))
+
+        ttk.Label(album_top, text='Album:', font=('TkDefaultFont', 9, 'bold')).grid(row=0, column=0, sticky=tk.W, padx=(0, 6))
+        self.album_select_var = tk.StringVar()
+        self.album_select_combo = ttk.Combobox(album_top, textvariable=self.album_select_var, width=36, state='readonly')
+        self.album_select_combo.grid(row=0, column=1, sticky=tk.W, padx=(0, 6))
+        self.album_select_combo.bind('<<ComboboxSelected>>', self.on_album_select_combo)
+        ttk.Button(album_top, text='Clear', command=self.clear_album_form).grid(row=0, column=2, padx=4, sticky=tk.W)
+        ttk.Button(album_top, text='Delete Album', command=self.delete_album).grid(row=0, column=3, padx=4, sticky=tk.W)
+        ttk.Button(album_top, text='Save Album', command=self.save_album).grid(row=0, column=4, padx=4, sticky=tk.W)
+
+        ttk.Label(album_top, text='Name:', font=('TkDefaultFont', 9, 'bold')).grid(row=1, column=0, sticky=tk.W, pady=(6, 2))
+        self.album_name_var = tk.StringVar()
+        ttk.Entry(album_top, textvariable=self.album_name_var, width=40).grid(row=1, column=1, sticky=tk.W, padx=(0, 6), pady=(6, 2))
+
+        lang_frame = ttk.Frame(album_top)
+        lang_frame.grid(row=1, column=2, columnspan=2, sticky=tk.W, padx=4, pady=(6, 2))
+        ttk.Label(lang_frame, text='Suggest language:').pack(side=tk.LEFT, padx=(0, 4))
+        self.album_lang_var = tk.StringVar(value='EN')
+        ttk.Radiobutton(lang_frame, text='EN', variable=self.album_lang_var, value='EN').pack(side=tk.LEFT)
+        ttk.Radiobutton(lang_frame, text='DE', variable=self.album_lang_var, value='DE').pack(side=tk.LEFT, padx=(4, 0))
+
+        sugg_frame = ttk.Frame(album_frame)
+        sugg_frame.pack(fill=tk.X, pady=(4, 6))
+        ttk.Button(sugg_frame, text='Suggest Album Names (AI)', command=self.suggest_album_names).pack(side=tk.LEFT, padx=(0, 6))
+        self.album_suggestions_list = tk.Listbox(sugg_frame, height=4, activestyle='dotbox', selectmode=tk.SINGLE, exportselection=False, width=60)
+        self.album_suggestions_list.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.album_suggestions_list.bind('<Double-Button-1>', self.apply_album_suggestion)
+
+        songs_ops = ttk.Frame(album_frame)
+        songs_ops.pack(fill=tk.X, pady=(4, 6))
+        ttk.Button(songs_ops, text='New Album from Selected Songs', command=self.new_album_from_selection).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(songs_ops, text='Add Selected Songs', command=self.add_selected_songs_to_album).pack(side=tk.LEFT, padx=4)
+        ttk.Button(songs_ops, text='Remove Selected Songs', command=self.remove_selected_album_songs).pack(side=tk.LEFT, padx=4)
+        ttk.Button(songs_ops, text='Ungroup Selected Songs', command=self.ungroup_selected_songs).pack(side=tk.LEFT, padx=4)
+
+        album_bottom = ttk.Frame(album_frame)
+        album_bottom.pack(fill=tk.BOTH, expand=True, pady=(2, 4))
+
+        album_song_frame = ttk.Frame(album_bottom)
+        album_song_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 8))
+        ttk.Label(album_song_frame, text='Album Songs:', font=('TkDefaultFont', 9, 'bold')).pack(anchor=tk.W)
+        self.album_songs_list = tk.Listbox(album_song_frame, height=5, activestyle='dotbox', selectmode=tk.EXTENDED, exportselection=False)
+        self.album_songs_list.pack(fill=tk.BOTH, expand=True, pady=(2, 2))
+
+        album_prompt_frame = ttk.Frame(album_bottom)
+        album_prompt_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        cover_bar = ttk.Frame(album_prompt_frame)
+        cover_bar.pack(fill=tk.X, pady=(0, 2))
+        ttk.Label(cover_bar, text='Album Cover:', font=('TkDefaultFont', 9, 'bold')).pack(side=tk.LEFT)
+        ttk.Button(cover_bar, text='Generate Prompt', command=self.generate_album_cover_prompt_album).pack(side=tk.LEFT, padx=4)
+        ttk.Button(cover_bar, text='Run Cover Image', command=self.run_album_cover_image).pack(side=tk.LEFT, padx=4)
+        ttk.Button(cover_bar, text='Preview', command=self.preview_last_album_cover).pack(side=tk.LEFT, padx=4)
+
+        size_bar = ttk.Frame(album_prompt_frame)
+        size_bar.pack(fill=tk.X, pady=(0, 2))
+        ttk.Label(size_bar, text='Size:').pack(side=tk.LEFT, padx=(0, 4))
+        self.album_cover_size_album_var = tk.StringVar(value='1:1 (1024x1024)')
+        ttk.Combobox(size_bar, textvariable=self.album_cover_size_album_var,
+                     values=['1:1 (1024x1024)', '3:2 (1536x1024)', '16:9 (1792x1024)',
+                             '4:3 (1365x1024)', '9:16 (1024x1792)', '21:9 (2048x1024)'],
+                     state='readonly', width=18).pack(side=tk.LEFT)
+        ttk.Label(size_bar, text='Format:').pack(side=tk.LEFT, padx=(10, 4))
+        self.album_cover_format_album_var = tk.StringVar(value='PNG')
+        ttk.Combobox(size_bar, textvariable=self.album_cover_format_album_var,
+                     values=['PNG', 'JPEG'], state='readonly', width=8).pack(side=tk.LEFT)
+
+        self.album_cover_album_text = scrolledtext.ScrolledText(album_prompt_frame, height=4, wrap=tk.WORD, width=60)
+        self.album_cover_album_text.pack(fill=tk.BOTH, expand=True, pady=(0, 6))
+
+        video_bar = ttk.Frame(album_prompt_frame)
+        video_bar.pack(fill=tk.X, pady=(0, 2))
+        ttk.Label(video_bar, text='Album Video Prompt:', font=('TkDefaultFont', 9, 'bold')).pack(side=tk.LEFT)
+        ttk.Button(video_bar, text='Generate', command=self.generate_album_video_prompt).pack(side=tk.LEFT, padx=4)
+
+        video_size_bar = ttk.Frame(album_prompt_frame)
+        video_size_bar.pack(fill=tk.X, pady=(0, 2))
+        ttk.Label(video_size_bar, text='Size:').pack(side=tk.LEFT, padx=(0, 4))
+        self.album_video_size_var = tk.StringVar(value='9:16 (720x1280)')
+        ttk.Combobox(video_size_bar, textvariable=self.album_video_size_var,
+                     values=['9:16 (720x1280)', '16:9 (1280x720)', '1:1 (1024x1024)',
+                             '21:9 (1920x1080)', '4:3 (1024x768)', '3:4 (768x1024)'],
+                     state='readonly', width=18).pack(side=tk.LEFT)
+
+        self.album_video_text = scrolledtext.ScrolledText(album_prompt_frame, height=4, wrap=tk.WORD, width=60)
+        self.album_video_text.pack(fill=tk.BOTH, expand=True, pady=(0, 4))
+
+        action_row = ttk.Frame(album_frame)
+        action_row.pack(fill=tk.X, pady=(0, 2))
+        ttk.Button(action_row, text='Save Album', command=self.save_album).pack(side=tk.LEFT, padx=(0, 6))
 
     def refresh_song_preset_options(self):
         """Sync the song-level preset selector with persona presets."""
@@ -4739,20 +4996,45 @@ class SunoPersona(tk.Tk):
         if not os.path.exists(songs_dir):
             return
         
-        songs = []
+        # Load albums first
+        self.load_albums()
+        album_buckets: dict[str, list[tuple[str, str]]] = {}
+        ungrouped: list[tuple[str, str]] = []
+        
         for item in os.listdir(songs_dir):
             item_path = os.path.join(songs_dir, item)
             if os.path.isdir(item_path):
                 config = load_song_config(item_path)
                 song_name = config.get('song_name', item)
-                songs.append((item, song_name))
+                album_id = config.get('album_id', '')
+                if album_id:
+                    album_buckets.setdefault(album_id, []).append((item, song_name))
+                else:
+                    ungrouped.append((item, song_name))
         
-        songs.sort(key=lambda x: x[1].lower())
+        # Sort within buckets
+        for key in album_buckets:
+            album_buckets[key].sort(key=lambda x: x[1].lower())
+        ungrouped.sort(key=lambda x: x[1].lower())
+
+        # Insert albums
+        for album_id, album_cfg in sorted(self.albums.items(), key=lambda kv: kv[1].get('album_name', kv[0]).lower()):
+            album_name = album_cfg.get('album_name') or album_id
+            parent_id = f'album::{album_id}'
+            self.songs_tree.insert('', tk.END, iid=parent_id, text=album_name, values=(album_name,), tags=('album',))
+            for folder_name, display_name in album_buckets.get(album_id, []):
+                self.songs_tree.insert(parent_id, tk.END, iid=folder_name, text=display_name, values=(album_name,), tags=(folder_name,))
+
+        # Ungrouped section
+        if ungrouped:
+            ungroup_parent = 'album::ungrouped'
+            self.songs_tree.insert('', tk.END, iid=ungroup_parent, text='Ungrouped', values=('Ungrouped',), tags=('album',))
+            for folder_name, display_name in ungrouped:
+                self.songs_tree.insert(ungroup_parent, tk.END, iid=folder_name, text=display_name, values=('Ungrouped',), tags=(folder_name,))
         
-        for folder_name, display_name in songs:
-            self.songs_tree.insert('', tk.END, iid=folder_name, values=(display_name,), tags=(folder_name,))
-        
-        self.log_debug('INFO', f'Refreshed songs list: {len(songs)} songs')
+        self.refresh_album_selector()
+        total_songs = sum(len(v) for v in album_buckets.values()) + len(ungrouped)
+        self.log_debug('INFO', f'Refreshed songs list: {total_songs} songs')
     
     def clear_songs_list(self):
         """Clear the songs list."""
@@ -4766,11 +5048,14 @@ class SunoPersona(tk.Tk):
             return
         
         folder_name = sel[0]
+        if folder_name.startswith('album::'):
+            return
         self.current_song_path = os.path.join(self.current_persona_path, 'AI-Songs', folder_name)
         self.current_song = load_song_config(self.current_song_path)
         
         self.load_song_info()
         self.log_debug('INFO', f'Selected song: {self.current_song.get("song_name", folder_name)}')
+        self.last_song_cover_path = ''
     
     def new_song(self):
         """Create a new song."""
@@ -5269,6 +5554,8 @@ class SunoPersona(tk.Tk):
         config = {
             'song_name': self.song_name_var.get().strip(),
             'full_song_name': self.full_song_name_var.get().strip(),
+            'album_id': self.current_song.get('album_id', '') if self.current_song else '',
+            'album_name': self.current_song.get('album_name', '') if self.current_song else '',
             'lyric_ideas': self.lyric_ideas_text.get('1.0', tk.END).strip(),
             'lyrics': self.lyrics_text.get('1.0', tk.END).strip(),
             'extracted_lyrics': self.extracted_lyrics_text.get('1.0', tk.END).strip() if hasattr(self, 'extracted_lyrics_text') else self.current_song.get('extracted_lyrics', '') if self.current_song else '',
@@ -5302,6 +5589,489 @@ class SunoPersona(tk.Tk):
         else:
             messagebox.showerror('Error', 'Failed to save song.')
             self.log_debug('ERROR', 'Failed to save song')
+
+    def clear_album_form(self):
+        """Reset album form fields."""
+        self.current_album = None
+        self.current_album_id = None
+        self.album_select_var.set('')
+        self.album_name_var.set('')
+        self.album_lang_var.set('EN')
+        self.album_cover_album_text.delete('1.0', tk.END)
+        self.album_video_text.delete('1.0', tk.END)
+        self.album_suggestions_list.delete(0, tk.END)
+        self.album_songs_list.delete(0, tk.END)
+        self.current_album_songs = []
+        self.last_album_cover_path = ''
+
+    def refresh_album_selector(self):
+        """Refresh album combobox options."""
+        values = []
+        for aid, cfg in sorted(self.albums.items(), key=lambda kv: kv[1].get('album_name', kv[0]).lower()):
+            values.append(cfg.get('album_name') or aid)
+        self.album_select_combo['values'] = values
+
+    def on_album_select_combo(self, event=None):
+        """Load album into form when selected."""
+        sel_name = self.album_select_var.get()
+        if not sel_name:
+            return
+        target_id = None
+        for aid, cfg in self.albums.items():
+            if cfg.get('album_name') == sel_name or aid == sel_name:
+                target_id = aid
+                break
+        if not target_id:
+            return
+        self.current_album_id = target_id
+        self.current_album = self.albums.get(target_id, {})
+        self.album_name_var.set(self.current_album.get('album_name', ''))
+        self.album_lang_var.set(self.current_album.get('language', 'EN') or 'EN')
+        self.album_cover_size_album_var.set(self.current_album.get('cover_size', '1:1 (1024x1024)'))
+        self.album_cover_format_album_var.set(self.current_album.get('cover_format', 'PNG'))
+        self.album_video_size_var.set(self.current_album.get('video_size', '9:16 (720x1280)'))
+        self.album_cover_album_text.delete('1.0', tk.END)
+        self.album_cover_album_text.insert('1.0', self.current_album.get('cover_prompt', ''))
+        self.album_video_text.delete('1.0', tk.END)
+        self.album_video_text.insert('1.0', self.current_album.get('video_prompt', ''))
+        self.last_album_cover_path = self.current_album.get('cover_image_file', '') or ''
+        self.album_songs_list.delete(0, tk.END)
+        self.current_album_songs = list(self.current_album.get('songs', []))
+        for s in self.current_album_songs:
+            self.album_songs_list.insert(tk.END, s)
+
+    def apply_album_suggestion(self, event=None):
+        """Apply selected album suggestion."""
+        sel = self.album_suggestions_list.curselection()
+        if not sel:
+            return
+        value = self.album_suggestions_list.get(sel[0])
+        self.album_name_var.set(value)
+
+    def suggest_album_names(self):
+        """Ask AI for album name suggestions."""
+        selected_songs = self._get_selected_song_ids()
+        if not selected_songs:
+            messagebox.showwarning('Warning', 'Select one or more songs first.')
+            return
+        song_titles = []
+        song_styles = []
+        for sid in selected_songs:
+            path = os.path.join(self.current_persona_path, 'AI-Songs', sid)
+            cfg = load_song_config(path)
+            song_titles.append(cfg.get('song_name', sid))
+            if cfg.get('song_style'):
+                song_styles.append(cfg.get('song_style'))
+        persona_name = self.current_persona.get('name', '') if self.current_persona else ''
+        merged_style = self._get_sanitized_style_text()
+        lang = self.album_lang_var.get() or 'EN'
+
+        prompt = (
+            "Propose 5 concise album title options. Language: {lang}."
+            "\nConsider the persona name, merged style, and the selected song titles/styles."
+            "\nReturn one suggestion per line, no numbering, no quotes."
+            "\nPersona: {persona}\nMerged Style: {style}\nSongs:\n{songs}\nStyles:\n{styles}"
+        ).format(
+            lang=lang,
+            persona=persona_name or 'N/A',
+            style=merged_style or 'N/A',
+            songs='\n'.join(song_titles) if song_titles else 'N/A',
+            styles='\n'.join(song_styles) if song_styles else 'N/A'
+        )
+
+        try:
+            self.config(cursor='wait')
+            self.update()
+            result = self.azure_ai(prompt, profile='text')
+        except Exception as exc:
+            self.config(cursor='')
+            messagebox.showerror('Error', f'Failed to fetch album suggestions: {exc}')
+            self.log_debug('ERROR', f'Album suggestion failed: {exc}')
+            return
+        finally:
+            self.config(cursor='')
+
+        if not result.get('success'):
+            messagebox.showerror('Error', f'Failed to fetch album suggestions: {result.get("error", "Unknown error")}')
+            return
+
+        content = result.get('content', '').strip()
+        if not content:
+            messagebox.showwarning('Warning', 'No suggestions returned.')
+            return
+        suggestions = [line.strip(' -"') for line in content.splitlines() if line.strip()]
+        self.album_suggestions_list.delete(0, tk.END)
+        for sug in suggestions[:5]:
+            self.album_suggestions_list.insert(tk.END, sug)
+
+    def new_album_from_selection(self):
+        """Create a new album from selected songs."""
+        if not self.current_persona_path:
+            messagebox.showwarning('Warning', 'Please select a persona first.')
+            return
+        selected = self._get_selected_song_ids()
+        if not selected:
+            messagebox.showwarning('Warning', 'Select one or more songs to group into an album.')
+            return
+        album_name = self.album_name_var.get().strip()
+        if not album_name:
+            messagebox.showwarning('Warning', 'Enter an album name first.')
+            return
+        album_id = self._album_slug(album_name)
+        albums_dir = self._albums_dir()
+        if not albums_dir:
+            messagebox.showerror('Error', 'Persona path not available.')
+            return
+        os.makedirs(albums_dir, exist_ok=True)
+        album_path = os.path.join(albums_dir, album_id)
+        os.makedirs(album_path, exist_ok=True)
+
+        config = load_album_config(album_path)
+        config['album_id'] = album_id
+        config['album_name'] = album_name
+        config['language'] = self.album_lang_var.get() or 'EN'
+        config['cover_size'] = self.album_cover_size_album_var.get()
+        config['cover_format'] = self.album_cover_format_album_var.get()
+        config['video_size'] = self.album_video_size_var.get()
+        config['songs'] = selected
+        config['cover_prompt'] = self.album_cover_album_text.get('1.0', tk.END).strip()
+        config['video_prompt'] = self.album_video_text.get('1.0', tk.END).strip()
+
+        if save_album_config(album_path, config):
+            # Assign songs to album
+            for sid in selected:
+                song_path = os.path.join(self.current_persona_path, 'AI-Songs', sid)
+                song_cfg = load_song_config(song_path)
+                song_cfg['album_id'] = album_id
+                song_cfg['album_name'] = album_name
+                save_song_config(song_path, song_cfg)
+            self.load_albums()
+            self.refresh_album_selector()
+            self.refresh_songs_list()
+            self.album_select_var.set(album_name)
+            self.on_album_select_combo()
+            messagebox.showinfo('Success', f'Album "{album_name}" created with {len(selected)} song(s).')
+        else:
+            messagebox.showerror('Error', 'Failed to save album.')
+
+    def add_selected_songs_to_album(self):
+        """Add selected songs to the current album list (form only)."""
+        selected = self._get_selected_song_ids()
+        if not selected:
+            messagebox.showwarning('Warning', 'Select songs to add.')
+            return
+        for sid in selected:
+            if sid not in self.current_album_songs:
+                self.current_album_songs.append(sid)
+                self.album_songs_list.insert(tk.END, sid)
+
+    def remove_selected_album_songs(self):
+        """Remove songs from current album list (form only)."""
+        selections = list(self.album_songs_list.curselection())
+        selections.sort(reverse=True)
+        for idx in selections:
+            value = self.album_songs_list.get(idx)
+            self.album_songs_list.delete(idx)
+            if value in self.current_album_songs:
+                self.current_album_songs.remove(value)
+
+    def ungroup_selected_songs(self):
+        """Ungroup selected songs from any album."""
+        selected = self._get_selected_song_ids()
+        if not selected:
+            messagebox.showwarning('Warning', 'Select songs to ungroup.')
+            return
+        for sid in selected:
+            song_path = os.path.join(self.current_persona_path, 'AI-Songs', sid)
+            cfg = load_song_config(song_path)
+            cfg['album_id'] = ''
+            cfg['album_name'] = ''
+            save_song_config(song_path, cfg)
+        self.refresh_songs_list()
+        messagebox.showinfo('Success', f'Ungrouped {len(selected)} song(s).')
+
+    def save_album(self):
+        """Persist the current album form to disk and update song configs."""
+        if not self.current_persona_path:
+            messagebox.showwarning('Warning', 'Please select a persona first.')
+            return
+        album_name = self.album_name_var.get().strip()
+        if not album_name:
+            messagebox.showwarning('Warning', 'Album name is required.')
+            return
+        album_id = self.current_album_id or self._album_slug(album_name)
+        albums_dir = self._albums_dir()
+        if not albums_dir:
+            messagebox.showerror('Error', 'Persona path not available.')
+            return
+        os.makedirs(albums_dir, exist_ok=True)
+        album_path = os.path.join(albums_dir, album_id)
+        os.makedirs(album_path, exist_ok=True)
+
+        songs = list(self.current_album_songs)
+        # Ensure songs exist
+        songs = [s for s in songs if os.path.isdir(os.path.join(self.current_persona_path, 'AI-Songs', s))]
+
+        config = load_album_config(album_path)
+        config.update({
+            'album_id': album_id,
+            'album_name': album_name,
+            'language': self.album_lang_var.get() or 'EN',
+            'cover_size': self.album_cover_size_album_var.get(),
+            'cover_format': self.album_cover_format_album_var.get(),
+            'video_size': self.album_video_size_var.get(),
+            'cover_prompt': self.album_cover_album_text.get('1.0', tk.END).strip(),
+            'video_prompt': self.album_video_text.get('1.0', tk.END).strip(),
+            'songs': songs,
+            'cover_image_file': self.last_album_cover_path or config.get('cover_image_file', '')
+        })
+
+        if save_album_config(album_path, config):
+            # Update song configs
+            for sid in songs:
+                song_path = os.path.join(self.current_persona_path, 'AI-Songs', sid)
+                song_cfg = load_song_config(song_path)
+                song_cfg['album_id'] = album_id
+                song_cfg['album_name'] = album_name
+                save_song_config(song_path, song_cfg)
+            # Clear album assignment from songs no longer in album
+            if self.current_album_id:
+                prev_album_id = self.current_album_id
+                for sid in os.listdir(os.path.join(self.current_persona_path, 'AI-Songs')):
+                    if sid in songs:
+                        continue
+                    spath = os.path.join(self.current_persona_path, 'AI-Songs', sid)
+                    if not os.path.isdir(spath):
+                        continue
+                    scfg = load_song_config(spath)
+                    if scfg.get('album_id') == prev_album_id and scfg.get('album_name') == album_name:
+                        scfg['album_id'] = ''
+                        scfg['album_name'] = ''
+                        save_song_config(spath, scfg)
+
+            self.current_album_id = album_id
+            self.current_album = config
+            self.last_album_cover_path = config.get('cover_image_file', '') or self.last_album_cover_path
+            self.load_albums()
+            self.refresh_album_selector()
+            self.refresh_songs_list()
+            self.album_select_var.set(album_name)
+            messagebox.showinfo('Success', f'Album "{album_name}" saved.')
+        else:
+            messagebox.showerror('Error', 'Failed to save album.')
+
+    def delete_album(self):
+        """Delete the selected album and ungroup its songs."""
+        if not self.current_album_id:
+            messagebox.showwarning('Warning', 'Select an album first.')
+            return
+        album_id = self.current_album_id
+        album_cfg = self.albums.get(album_id, {})
+        album_name = album_cfg.get('album_name', album_id)
+        path = self._get_album_path(album_id)
+        # Ungroup songs
+        for sid in album_cfg.get('songs', []):
+            song_path = os.path.join(self.current_persona_path, 'AI-Songs', sid)
+            cfg = load_song_config(song_path)
+            cfg['album_id'] = ''
+            cfg['album_name'] = ''
+            save_song_config(song_path, cfg)
+        # Delete config file only (respect user rule: do not delete files) -> set empty
+        if path:
+            blank = {
+                'album_id': '',
+                'album_name': '',
+                'songs': [],
+                'cover_prompt': '',
+                'cover_size': '1:1 (1024x1024)',
+                'cover_format': 'PNG',
+                'video_prompt': '',
+                'video_size': '9:16 (720x1280)',
+                'language': 'EN',
+                'cover_image_file': '',
+                'video_prompt_file': ''
+            }
+            save_album_config(path, blank)
+        self.load_albums()
+        self.refresh_album_selector()
+        self.refresh_songs_list()
+        self.clear_album_form()
+        messagebox.showinfo('Success', f'Album "{album_name}" deleted and songs ungrouped.')
+
+    def _album_cover_size_value(self) -> str:
+        match = re.search(r'\((\d+x\d+)\)', self.album_cover_size_album_var.get() or '')
+        return match.group(1) if match else '1024x1024'
+
+    def _album_video_size_value(self) -> str:
+        match = re.search(r'\((\d+x\d+)\)', self.album_video_size_var.get() or '')
+        return match.group(1) if match else '720x1280'
+
+    def generate_album_cover_prompt_album(self):
+        """Generate album-level cover prompt from selected songs/persona."""
+        if not self.current_persona:
+            messagebox.showwarning('Warning', 'Please select a persona first.')
+            return
+        album_name = self.album_name_var.get().strip()
+        if not album_name:
+            messagebox.showwarning('Warning', 'Enter an album name first.')
+            return
+        songs = self.current_album_songs or self._get_selected_song_ids()
+        song_titles = []
+        for sid in songs:
+            spath = os.path.join(self.current_persona_path, 'AI-Songs', sid)
+            scfg = load_song_config(spath)
+            song_titles.append(scfg.get('song_name', sid))
+
+        merged_style = self._get_sanitized_style_text()
+        storyboard_theme = self.storyboard_theme_text.get('1.0', tk.END).strip() if hasattr(self, 'storyboard_theme_text') else ''
+        visual_aesthetic = self.current_persona.get('visual_aesthetic', '')
+        base_image_prompt = self.current_persona.get('base_image_prompt', '')
+        vibe = self.current_persona.get('vibe', '')
+        preset_key = self._get_song_persona_preset_key()
+        base_path = self.get_persona_image_base_path(preset_key)
+        safe_name = self._safe_persona_basename()
+        references = []
+        for view in ['Front', 'Side', 'Back']:
+            p = os.path.join(base_path, f'{safe_name}-{view}.png')
+            if os.path.exists(p):
+                references.append(p)
+
+        prompt = (
+            f"Create an album cover prompt for the album \"{album_name}\"."
+            f"\nSongs: {', '.join(song_titles) if song_titles else 'N/A'}"
+            f"\nPersona: {self.current_persona.get('name', '')}"
+            f"\nMerged Style: {merged_style}"
+        )
+        if storyboard_theme:
+            prompt += f"\nStoryboard Theme (primary aesthetic): {storyboard_theme}"
+        if visual_aesthetic:
+            prompt += f"\nPersona Visual Aesthetic: {visual_aesthetic}"
+        if base_image_prompt:
+            prompt += f"\nPersona Base Image Prompt: {base_image_prompt}"
+        if vibe:
+            prompt += f"\nPersona Vibe: {vibe}"
+        prompt += (
+            "\nReturn only the album cover image prompt text."
+            "\nMANDATORY TYPOGRAPHY: Render the full album title and persona/artist name verbatim, with no truncation, no abbreviation, and no ellipsis. Text must be fully readable in the final cover."
+            "\nTEXT LAYOUT RULES: Reserve clear space so the full title and artist fit without clipping. Do not crop or cut off any characters. Adjust composition/scale to keep 100% of the text visible and readable. No ellipsis, no partial words."
+        )
+
+        try:
+            self.config(cursor='wait')
+            self.update()
+            if references:
+                system_message = "You generate album cover prompts using reference images. Output only the prompt text."
+                result = self.azure_vision(references, prompt, system_message=system_message, profile='text')
+            else:
+                system_message = "You generate album cover prompts. Output only the prompt text."
+                result = self.azure_ai(prompt, system_message=system_message, profile='text')
+        except Exception as exc:
+            self.config(cursor='')
+            messagebox.showerror('Error', f'Failed to generate album cover prompt: {exc}')
+            self.log_debug('ERROR', f'Album cover prompt failed: {exc}')
+            return
+        finally:
+            self.config(cursor='')
+
+        if result.get('success'):
+            text = result.get('content', '').strip()
+            self.album_cover_album_text.delete('1.0', tk.END)
+            self.album_cover_album_text.insert('1.0', text)
+            if self.current_album is not None:
+                self.current_album['cover_prompt'] = text
+            # Keep album cover prompt handy for preview context
+        else:
+            messagebox.showerror('Error', f'Failed to generate album cover prompt: {result.get("error", "Unknown error")}')
+
+    def run_album_cover_image(self):
+        """Generate album cover image from the album prompt."""
+        prompt = self.album_cover_album_text.get('1.0', tk.END).strip()
+        if not prompt:
+            messagebox.showwarning('Warning', 'Generate an album cover prompt first.')
+            return
+        self.last_album_cover_path = ''
+        album_name = self.album_name_var.get().strip() or 'album'
+        album_id = self.current_album_id or self._album_slug(album_name)
+        size = self._album_cover_size_value()
+        fmt = (self.album_cover_format_album_var.get() or 'PNG').lower()
+        album_path = self._get_album_path(album_id) or os.path.join(self._albums_dir() or '', album_id)
+        os.makedirs(album_path, exist_ok=True)
+        filename = os.path.join(album_path, f'cover.{fmt}')
+
+        try:
+            self.config(cursor='wait')
+            self.update()
+            result = self.azure_image(prompt, size=size, profile='image_gen')
+        except Exception as exc:
+            self.config(cursor='')
+            messagebox.showerror('Error', f'Failed to generate cover: {exc}')
+            self.log_debug('ERROR', f'Album cover image failed: {exc}')
+            return
+        finally:
+            self.config(cursor='')
+
+        if result.get('success'):
+            img_bytes = result.get('image_bytes', b'')
+            if img_bytes:
+                with open(filename, 'wb') as f:
+                    f.write(img_bytes)
+                messagebox.showinfo('Success', f'Album cover saved to {filename}')
+                if self.current_album is not None:
+                    self.current_album['cover_image_file'] = filename
+                self.last_album_cover_path = filename
+                self.show_image_preview(filename, 'Album Cover Preview')
+            else:
+                messagebox.showerror('Error', 'No image bytes received.')
+        else:
+            messagebox.showerror('Error', f'Failed to generate cover: {result.get("error", "Unknown error")}')
+
+    def generate_album_video_prompt(self):
+        """Generate album-level video loop prompt."""
+        if not self.current_persona:
+            messagebox.showwarning('Warning', 'Please select a persona first.')
+            return
+        album_name = self.album_name_var.get().strip()
+        base_prompt = self.album_cover_album_text.get('1.0', tk.END).strip()
+        if not base_prompt:
+            messagebox.showwarning('Warning', 'Generate album cover prompt first.')
+            return
+        merged_style = self._get_sanitized_style_text()
+        visual_aesthetic = self.current_persona.get('visual_aesthetic', '')
+        base_image_prompt = self.current_persona.get('base_image_prompt', '')
+        vibe = self.current_persona.get('vibe', '')
+        prompt = (
+            f"Create a seamless looping video prompt for the album \"{album_name}\" "
+            f"based on this cover description:\n{base_prompt}\n\nMerged Style: {merged_style}"
+        )
+        if visual_aesthetic:
+            prompt += f"\nPersona Visual Aesthetic: {visual_aesthetic}"
+        if base_image_prompt:
+            prompt += f"\nPersona Base Image Prompt: {base_image_prompt}"
+        if vibe:
+            prompt += f"\nPersona Vibe: {vibe}"
+        prompt += "\nReturn only the final video prompt text."
+
+        try:
+            self.config(cursor='wait')
+            self.update()
+            system_message = 'You are a video loop prompt generator. Output only the final prompt text.'
+            result = self.azure_ai(prompt, system_message=system_message, profile='text')
+        except Exception as exc:
+            self.config(cursor='')
+            messagebox.showerror('Error', f'Failed to generate album video prompt: {exc}')
+            self.log_debug('ERROR', f'Album video prompt failed: {exc}')
+            return
+        finally:
+            self.config(cursor='')
+
+        if result.get('success'):
+            text = result.get('content', '').strip()
+            self.album_video_text.delete('1.0', tk.END)
+            self.album_video_text.insert('1.0', text)
+            if self.current_album is not None:
+                self.current_album['video_prompt'] = text
+        else:
+            messagebox.showerror('Error', f'Failed to generate video prompt: {result.get("error", "Unknown error")}')
     
     def generate_full_song_name(self):
         """Generate full song name via AI prompt: [Song Name] - [Persona Name] - (3 keywords)."""
@@ -5898,6 +6668,8 @@ class SunoPersona(tk.Tk):
                 "\n- Render BOTH strings visibly on the cover. Title and artist must be readable and distinct."
                 "\n- Use cohesive typography that matches the storyboard theme; embed text into the scene (on armor plates, signage, HUD, ground, etc.), not as floating UI overlays."
                 "\n- Keep text placement clean and legible while integrated with the environment."
+                "\n- Do NOT truncate, abbreviate, or shorten the title or artist name. Render the full strings exactly as provided, verbatim."
+                "\n- TEXT LAYOUT RULES: Reserve clear space so the full title and artist fit without clipping. Do not crop or cut off any characters. Adjust composition/scale to keep 100% of the text visible and readable. No ellipsis, no partial words."
             )
             prompt += "\n\nRENDER TEXT ON COVER (verbatim):"
             if album_title:
@@ -8222,6 +8994,7 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
         if not prompt or prompt.startswith('Error:'):
             messagebox.showwarning('Warning', 'Please generate an album cover prompt first.')
             return
+        self.last_song_cover_path = ''
         
         dialog = ExtraCommandsDialog(self, prompt)
         self.wait_window(dialog)
@@ -8327,6 +9100,8 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
                 f.write(img_bytes)
             self.log_debug('INFO', f'Album cover saved to {filename}')
             messagebox.showinfo('Success', f'Album cover saved to:\n{filename}')
+            self.last_song_cover_path = filename
+            self.show_image_preview(filename, 'Song Cover Preview')
         except Exception as e:
             messagebox.showerror('Error', f'Failed to save album cover: {e}')
             self.log_debug('ERROR', f'Failed to save album cover: {e}')
