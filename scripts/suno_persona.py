@@ -2522,6 +2522,9 @@ class SunoPersona(tk.Tk):
         ttk.Button(btn_frame, text='Refresh Images', command=self.refresh_persona_images).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_frame, text='Generate Reference Images', command=self.generate_reference_images).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_frame, text='Generate From Reference Images', command=self.generate_from_reference_images).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text='Regenerate Front', command=lambda: self.generate_single_reference_view('Front')).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(btn_frame, text='Regenerate Side', command=lambda: self.generate_single_reference_view('Side')).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(btn_frame, text='Regenerate Back', command=lambda: self.generate_single_reference_view('Back')).pack(side=tk.RIGHT, padx=5)
 
         # Profile image generator (lives here so prompts sit with persona reference context)
         profile_frame = ttk.LabelFrame(main_frame, text='Profile Image Generator', padding=8)
@@ -3539,6 +3542,28 @@ class SunoPersona(tk.Tk):
         safe_name = self._safe_persona_basename()
         front_image_path = None
         
+        # Optionally extract face/identity description from default preset Front to keep persona consistent
+        default_preset_key = self._get_default_image_preset_key() if hasattr(self, '_get_default_image_preset_key') else 'default'
+        default_base_path = self.get_persona_image_base_path(default_preset_key)
+        default_front_path = os.path.join(default_base_path, f'{safe_name}-Front.png')
+        default_front_description = ''
+        if os.path.exists(default_front_path) and default_preset_key != preset_key:
+            self.log_debug('INFO', f'Analyzing default preset Front image for identity anchor: {default_front_path}')
+            try:
+                analyze_prompt = (
+                    "Analyze this reference image and describe the character's exact facial structure, hair, and overall appearance. "
+                    "Provide a concise but complete identity description to reuse in another style preset. "
+                    "Exclude scene/background; focus on face, hair, and visible outfit silhouette."
+                )
+                analyze_default = self.azure_vision([default_front_path], analyze_prompt, profile='text')
+                if analyze_default.get('success'):
+                    default_front_description = analyze_default.get('content', '').strip()
+                    self.log_debug('INFO', 'Default Front identity extracted for reuse in new preset.')
+                else:
+                    self.log_debug('WARNING', f'Failed to analyze default Front image: {analyze_default.get("error", "Unknown error")}')
+            except Exception as e:
+                self.log_debug('WARNING', f'Error analyzing default Front image: {e}')
+        
         # Step 1: Generate Front image first
         self.log_debug('INFO', 'Generating Front reference image...')
         self.config(cursor='wait')
@@ -3546,12 +3571,16 @@ class SunoPersona(tk.Tk):
         
         try:
             view_specific = (
-                "full-body portrait, facing camera, standing upright, long shot, "
-                "camera distance set to capture entire height, subject centered"
+                "full-body portrait, facing camera straight-on (not profile or 3/4), "
+                "shoulders squared, eyes looking into camera, standing upright, long shot, "
+                "camera distance set to capture entire height, subject centered, no turning away, "
+                "OVERRIDE any portrait/waist-up/head-and-shoulders/cropped instructions: MUST show entire figure head-to-toe with shoes and feet visible on floor, "
+                "leave margin above head and below feet, do NOT crop ankles or shoes"
             )
-            prompt = f"{base_prompt}, {view_specific}, pure white background, "
-            prompt += "FULL BODY VISIBLE from head to toe, feet and hands visible, entire figure in frame, "
-            prompt += "full-length portrait, no cropping, no cut-off body parts, no close-up, no zoom-in, "
+            identity_snippet = f"IDENTITY ANCHOR FROM DEFAULT PRESET: {default_front_description}. " if default_front_description else ""
+            prompt = f"{view_specific}, {identity_snippet}{base_prompt}, pure white background, "
+            prompt += "FULL BODY VISIBLE from head to toe, feet and shoes clearly visible on floor, entire figure in frame, "
+            prompt += "full-length portrait, generous margin above head and below feet, no cropping, no cut-off body parts, no close-up, no zoom-in, "
             prompt += "professional reference photo, studio photography, clean minimalist composition, "
             prompt += "even studio lighting with subtle dramatic shadows, high quality professional photography, "
             prompt += "no background elements, no props except those described in the base prompt, "
@@ -3605,11 +3634,15 @@ class SunoPersona(tk.Tk):
                 character_description = analyze_result['content'].strip()
                 self.log_debug('INFO', 'Front image analyzed successfully, extracted character description')
             else:
-                self.log_debug('WARNING', f'Failed to analyze Front image: {analyze_result["error"]}, will use base prompt')
+                self.log_debug('WARNING', f'Failed to analyze Front image: {analyze_result["error"]}')
         except Exception as e:
-            self.log_debug('WARNING', f'Error analyzing Front image: {e}, will use base prompt')
+            self.log_debug('WARNING', f'Error analyzing Front image: {e}')
         finally:
             self.config(cursor='')
+        
+        if not character_description:
+            messagebox.showerror('Error', 'Failed to extract character details from Front image. Please regenerate the Front view and try again before generating Side/Back.')
+            return
         
         # Step 3: Generate Side and Back using Front image analysis
         views = ['Side', 'Back']
@@ -3624,12 +3657,14 @@ class SunoPersona(tk.Tk):
                 if view.lower() == 'side':
                     view_specific = (
                         "full-body side profile, facing right, standing upright, long shot, "
-                        "camera distance set to capture entire height, subject centered"
+                        "camera distance set to capture entire height, subject centered, "
+                        "include full figure head-to-toe with shoes/feet visible on floor, leave margin above head and below feet, do NOT crop ankles or shoes"
                     )
                 elif view.lower() == 'back':
                     view_specific = (
                         "full-body view from behind, standing upright, long shot, "
-                        "camera distance set to capture entire height, subject centered"
+                        "camera distance set to capture entire height, subject centered, "
+                        "include full figure head-to-toe with shoes/feet visible on floor, leave margin above head and below feet, do NOT crop ankles or shoes"
                     )
                 
                 # Create prompt that uses the character description from Front image
@@ -3640,8 +3675,8 @@ class SunoPersona(tk.Tk):
                     # Fallback to base prompt if analysis failed
                     image_prompt = f"{base_prompt}, {view_specific}, pure white background, "
                 
-                image_prompt += "FULL BODY VISIBLE from head to toe, feet and hands visible, entire figure in frame, "
-                image_prompt += "full-length portrait, no cropping, no cut-off body parts, no close-up, no zoom-in, "
+                image_prompt += "FULL BODY VISIBLE from head to toe, feet and shoes clearly visible on floor, entire figure in frame, "
+                image_prompt += "full-length portrait, generous margin above head and below feet, no cropping, no cut-off body parts, no close-up, no zoom-in, "
                 image_prompt += "Match the exact same character appearance, clothing, styling, and visual details from the Front reference image, "
                 image_prompt += "professional reference photo, studio photography, clean minimalist composition, "
                 image_prompt += "even studio lighting with subtle dramatic shadows, high quality professional photography, "
@@ -3671,6 +3706,163 @@ class SunoPersona(tk.Tk):
         save_persona_config(self.current_persona_path, self.current_persona)
         self.refresh_persona_images()
         messagebox.showinfo('Success', 'Reference images generation completed. Front generated first, then Side and Back matched to Front.')
+
+    def generate_single_reference_view(self, view: str):
+        """Regenerate a single reference view (Front, Side, or Back) for the current persona."""
+        view = (view or '').strip().title()
+        if view not in ('Front', 'Side', 'Back'):
+            messagebox.showwarning('Warning', 'Invalid view selected.')
+            return
+        if not self.current_persona:
+            messagebox.showwarning('Warning', 'Please select a persona first.')
+            return
+        
+        preset_base_prompt, preset_custom_prompt = self._get_active_preset_prompts()
+        base_prompt = preset_base_prompt or self.current_persona.get('base_image_prompt', '')
+        if not base_prompt:
+            messagebox.showwarning('Warning', 'Please set a Base Image Prompt first.')
+            return
+        if preset_custom_prompt:
+            base_prompt = f"{base_prompt}\n\nCUSTOM SCENE DETAILS: {preset_custom_prompt}"
+        
+        preset_key = self.image_preset_var.get() if hasattr(self, 'image_preset_var') else self.current_persona.get('current_image_preset', 'default')
+        base_path = self.get_persona_image_base_path(preset_key)
+        os.makedirs(base_path, exist_ok=True)
+        self.current_persona['current_image_preset'] = preset_key
+        self._save_preset_prompts_from_ui(preset_key)
+        safe_name = self._safe_persona_basename()
+        
+        default_preset_key = self._get_default_image_preset_key() if hasattr(self, '_get_default_image_preset_key') else 'default'
+        default_base_path = self.get_persona_image_base_path(default_preset_key)
+        default_front_path = os.path.join(default_base_path, f'{safe_name}-Front.png')
+        
+        # For Side/Back we need the current Front image as anchor
+        current_front_path = os.path.join(base_path, f'{safe_name}-Front.png')
+        
+        def analyze_identity(path):
+            if not os.path.exists(path):
+                return ''
+            try:
+                analyze_prompt = (
+                    "Analyze this reference image and describe the character's exact facial structure, hair, and overall appearance. "
+                    "Provide a concise but complete identity description to reuse in another style preset. "
+                    "Exclude scene/background; focus on face, hair, and visible outfit silhouette."
+                )
+                result = self.azure_vision([path], analyze_prompt, profile='text')
+                if result.get('success'):
+                    return result.get('content', '').strip()
+                return ''
+            except Exception as exc:
+                self.log_debug('WARNING', f'Identity analysis failed: {exc}')
+                return ''
+        
+        # Build shared view-specific text
+        def build_view_specific(vname):
+            if vname == 'Front':
+                return (
+                    "full-body portrait, facing camera straight-on (not profile or 3/4), "
+                    "shoulders squared, eyes looking into camera, standing upright, long shot, "
+                    "camera distance set to capture entire height, subject centered, no turning away, "
+                    "OVERRIDE any portrait/waist-up/head-and-shoulders/cropped instructions: MUST show entire figure head-to-toe with shoes and feet visible on floor, "
+                    "leave margin above head and below feet, do NOT crop ankles or shoes"
+                )
+            if vname == 'Side':
+                return (
+                    "full-body side profile, facing right, standing upright, long shot, "
+                    "camera distance set to capture entire height, subject centered, "
+                    "include full figure head-to-toe with shoes/feet visible on floor, leave margin above head and below feet, do NOT crop ankles or shoes"
+                )
+            return (
+                "full-body view from behind, standing upright, long shot, "
+                "camera distance set to capture entire height, subject centered, "
+                "include full figure head-to-toe with shoes/feet visible on floor, leave margin above head and below feet, do NOT crop ankles or shoes"
+            )
+        
+        self.log_debug('INFO', f'Regenerating {view} reference image for preset "{preset_key}"')
+        self.config(cursor='wait')
+        self.update()
+        
+        try:
+            if view == 'Front':
+                identity_snippet = ''
+                if os.path.exists(default_front_path) and default_preset_key != preset_key:
+                    identity_snippet = analyze_identity(default_front_path)
+                identity_text = f"IDENTITY ANCHOR FROM DEFAULT PRESET: {identity_snippet}. " if identity_snippet else ''
+                prompt = f"{build_view_specific('Front')}, {identity_text}{base_prompt}, pure white background, "
+                prompt += "FULL BODY VISIBLE from head to toe, feet and shoes clearly visible on floor, entire figure in frame, "
+                prompt += "full-length portrait, generous margin above head and below feet, no cropping, no cut-off body parts, no close-up, no zoom-in, "
+                prompt += "professional reference photo, studio photography, clean minimalist composition, "
+                prompt += "even studio lighting with subtle dramatic shadows, high quality professional photography, "
+                prompt += "no background elements, no props except those described in the base prompt, "
+                prompt += "sharp focus, professional portrait photography style, reference sheet style, full-body shot"
+                
+                result = self.azure_image(prompt, size='1024x1536', profile='image_gen')
+                if result.get('success'):
+                    img_bytes = result.get('image_bytes', b'')
+                    if img_bytes:
+                        front_filename = os.path.join(base_path, f'{safe_name}-Front.png')
+                        with open(front_filename, 'wb') as f:
+                            f.write(img_bytes)
+                        self.log_debug('INFO', f'Front reference image regenerated: {front_filename}')
+                        self.refresh_persona_images()
+                        messagebox.showinfo('Success', 'Front reference image regenerated.')
+                    else:
+                        messagebox.showerror('Error', 'No image bytes received for Front view.')
+                else:
+                    messagebox.showerror('Error', f'Failed to regenerate Front image: {result.get("error", "Unknown error")}')
+                return
+            
+            # Side or Back: need front for character description
+            if not os.path.exists(current_front_path):
+                messagebox.showerror('Error', 'Front image is required to regenerate Side or Back. Please regenerate Front first.')
+                return
+            
+            # Analyze current front for identity/appearance
+            character_description = ''
+            try:
+                analyze_prompt = (
+                    "Analyze this Front reference image and provide a detailed description of the character's appearance, including: "
+                    "exact clothing details, colors, textures, styling, hair, accessories, pose, lighting style, and all visual characteristics. "
+                    "Output ONLY a detailed character description that can be used to generate matching Side and Back views with the same appearance."
+                )
+                analyze_result = self.azure_vision([current_front_path], analyze_prompt, profile='text')
+                if analyze_result.get('success'):
+                    character_description = analyze_result.get('content', '').strip()
+                    self.log_debug('INFO', 'Front image analyzed successfully for single-view generation')
+                else:
+                    self.log_debug('WARNING', f'Front analysis failed: {analyze_result.get("error", "Unknown error")}')
+            except Exception as exc:
+                self.log_debug('WARNING', f'Front analysis error: {exc}')
+            
+            if not character_description:
+                messagebox.showerror('Error', 'Failed to extract character details from Front image. Please regenerate the Front view and try again.')
+                return
+            
+            image_prompt = f"{character_description}, {build_view_specific(view)}, pure white background, "
+            
+            image_prompt += "FULL BODY VISIBLE from head to toe, feet and shoes clearly visible on floor, entire figure in frame, "
+            image_prompt += "full-length portrait, generous margin above head and below feet, no cropping, no cut-off body parts, no close-up, no zoom-in, "
+            image_prompt += "Match the exact same character appearance, clothing, styling, and visual details from the Front reference image, "
+            image_prompt += "professional reference photo, studio photography, clean minimalist composition, "
+            image_prompt += "even studio lighting with subtle dramatic shadows, high quality professional photography, "
+            image_prompt += "no background elements, sharp focus, professional portrait photography style, reference sheet style, full-body shot"
+            
+            result_img = self.azure_image(image_prompt, size='1024x1536', profile='image_gen')
+            if result_img.get('success'):
+                img_bytes = result_img.get('image_bytes', b'')
+                if img_bytes:
+                    filename = os.path.join(base_path, f'{safe_name}-{view}.png')
+                    with open(filename, 'wb') as f:
+                        f.write(img_bytes)
+                    self.log_debug('INFO', f'{view} reference image regenerated: {filename}')
+                    self.refresh_persona_images()
+                    messagebox.showinfo('Success', f'{view} reference image regenerated.')
+                else:
+                    messagebox.showerror('Error', f'No image bytes received for {view} view.')
+            else:
+                messagebox.showerror('Error', f'Failed to regenerate {view} image: {result_img.get("error", "Unknown error")}')
+        finally:
+            self.config(cursor='')
     
     def create_songs_tab(self, parent):
         """Create the AI Songs management tab."""
@@ -4448,17 +4640,185 @@ class SunoPersona(tk.Tk):
         
         dialog = tk.Toplevel(self)
         dialog.title('New Song')
-        dialog.geometry('400x150')
+        dialog.geometry('560x520')
+        dialog.minsize(540, 500)
         dialog.transient(self)
         dialog.grab_set()
+        dialog.update_idletasks()
+        try:
+            parent_x = self.winfo_rootx()
+            parent_y = self.winfo_rooty()
+            parent_w = self.winfo_width() or dialog.winfo_screenwidth()
+            parent_h = self.winfo_height() or dialog.winfo_screenheight()
+        except Exception:
+            parent_x = parent_y = 0
+            parent_w = dialog.winfo_screenwidth()
+            parent_h = dialog.winfo_screenheight()
+        dlg_w = dialog.winfo_width()
+        dlg_h = dialog.winfo_height()
+        pos_x = parent_x + (parent_w - dlg_w) // 2
+        pos_y = parent_y + (parent_h - dlg_h) // 2
+        dialog.geometry(f'+{max(0, pos_x)}+{max(0, pos_y)}')
         
-        ttk.Label(dialog, text='Song Name:', font=('TkDefaultFont', 9, 'bold')).pack(pady=10)
+        header_frame = ttk.Frame(dialog, padding=(8, 0))
+        header_frame.pack(fill=tk.X)
+        ttk.Label(header_frame, text='Song Name:', font=('TkDefaultFont', 9, 'bold')).grid(row=0, column=0, sticky=tk.W, pady=(10, 2))
         name_var = tk.StringVar()
-        name_entry = ttk.Entry(dialog, textvariable=name_var, width=40)
-        name_entry.pack(pady=5, padx=20)
+        name_entry = ttk.Entry(header_frame, textvariable=name_var, width=55)
+        name_entry.grid(row=0, column=1, sticky=tk.W, pady=(10, 2), padx=(6, 4))
         name_entry.focus_set()
         
+        ttk.Label(header_frame, text='Keyword hints (optional):', font=('TkDefaultFont', 9, 'bold')).grid(row=1, column=0, sticky=tk.W, pady=(6, 2))
+        keyword_var = tk.StringVar()
+        keyword_entry = ttk.Entry(header_frame, textvariable=keyword_var, width=55)
+        keyword_entry.grid(row=1, column=1, sticky=tk.W, pady=(6, 2), padx=(6, 4))
+        
+        suggestions_list = tk.Listbox(
+            dialog,
+            height=4,
+            activestyle='dotbox',
+            selectmode=tk.SINGLE,
+            exportselection=False,
+            bg='white',
+            fg='black',
+            highlightthickness=1,
+            borderwidth=1
+        )
+        scrollbar = ttk.Scrollbar(dialog, orient=tk.VERTICAL, command=suggestions_list.yview)
+        suggestions_list.configure(yscrollcommand=scrollbar.set)
+        
+        list_frame = ttk.Frame(dialog)
+        list_frame.pack(fill=tk.BOTH, expand=True, padx=12, pady=(4, 6))
+        ttk.Label(list_frame, text='AI Title Suggestions (select to use):', font=('TkDefaultFont', 9, 'bold')).pack(anchor=tk.W, pady=(0, 4))
+        
+        list_container = ttk.Frame(list_frame)
+        list_container.pack(fill=tk.X, expand=False)
+        suggestions_list.pack(in_=list_container, side=tk.LEFT, fill=tk.X, expand=False)
+        scrollbar.pack(in_=list_container, side=tk.RIGHT, fill=tk.Y)
+        
+        ttk.Label(list_frame, text='Pick a title:', font=('TkDefaultFont', 9, 'bold')).pack(anchor=tk.W, pady=(8, 2))
+        title_choice_var = tk.StringVar()
+        radio_frame = ttk.Frame(list_frame)
+        radio_frame.pack(fill=tk.BOTH, expand=False, padx=2, pady=(0, 6))
+        
+        status_var = tk.StringVar(value='Click "Suggest Titles" to generate options (optional).')
+        status_label = ttk.Label(dialog, textvariable=status_var, foreground='gray')
+        status_label.pack(pady=(4, 8))
+        
         result = [None]
+        
+        def apply_selection(selection: str):
+            if not selection:
+                return
+            name_var.set(selection)
+            name_entry.icursor(tk.END)
+            title_choice_var.set(selection)
+        
+        def on_list_select(event=None):
+            sel = suggestions_list.curselection()
+            if sel:
+                apply_selection(suggestions_list.get(sel[0]))
+        
+        suggestions_list.bind('<Double-Button-1>', on_list_select)
+        suggestions_list.bind('<<ListboxSelect>>', on_list_select)
+        
+        def fetch_title_suggestions():
+            if not self.current_persona:
+                messagebox.showwarning('Warning', 'Persona data not loaded. Please reopen or reselect the persona.')
+                return
+            
+            persona = self.current_persona
+            persona_name = persona.get('name', '').strip() or 'Unnamed Persona'
+            tagline = persona.get('tagline', '').strip()
+            vibe = persona.get('vibe', '').strip()
+            visual = persona.get('visual_aesthetic', '').strip()
+            bio = persona.get('bio', '').strip()
+            genres = persona.get('genre_tags', [])
+            voice_style = persona.get('voice_style', '').strip()
+            lyrics_style = persona.get('lyrics_style', '').strip()
+            
+            keywords_text = keyword_var.get().strip()
+            keywords_clause = f"\n- Keyword hints to weave in: {keywords_text}" if keywords_text else ""
+            
+            prompt = (
+                f"You are helping write song titles for the persona \"{persona_name}\".\n\n"
+                f"Persona snapshot:\n"
+                f"- Tagline: {tagline or '(empty)'}\n"
+                f"- Vibe: {vibe or '(empty)'}\n"
+                f"- Visual Aesthetic: {visual or '(empty)'}\n"
+                f"- Bio: {bio or '(empty)'}\n"
+                f"- Genres: {', '.join(genres) if genres else '(none)'}\n"
+                f"- Voice Style: {voice_style or '(empty)'}\n"
+                f"- Lyrics Style: {lyrics_style or '(empty)'}{keywords_clause}\n\n"
+                "Generate 10 concise, evocative song titles tailored to this persona.\n"
+                "Rules:\n"
+                "- 2 to 6 words each.\n"
+                "- No quotation marks, numbering, or bullet symbols.\n"
+                "- Avoid repeating the persona name in every title; only use if natural.\n"
+                "- Mix moods and tempos (ballads, upbeat, anthems, introspective).\n"
+                "- Keep titles radio-friendly and original.\n\n"
+                "Return only the titles, one per line."
+            )
+            
+            status_var.set('Requesting AI suggestions...')
+            for widget in (name_entry,):
+                widget.state(['disabled'])
+            fetch_btn.state(['disabled'])
+            dialog.update()
+            
+            try:
+                result_ai = self.azure_ai(prompt, system_message='You generate creative song titles that fit the provided persona.', profile='text', max_tokens=600, temperature=0.85)
+            except Exception as exc:
+                result_ai = {'success': False, 'error': str(exc), 'content': ''}
+            
+            for widget in (name_entry,):
+                widget.state(['!disabled'])
+            fetch_btn.state(['!disabled'])
+            
+            if not result_ai.get('success'):
+                status_var.set('Failed to get suggestions.')
+                messagebox.showerror('Error', f"Failed to generate suggestions: {result_ai.get('error', 'Unknown error')}")
+                self.log_debug('ERROR', f"AI title suggestions failed: {result_ai.get('error', 'Unknown error')}")
+                return
+            
+            content = result_ai.get('content', '')
+            self.log_debug('DEBUG', f'AI title suggestions raw content:\n{content}')
+            lines = []
+            for line in content.splitlines():
+                stripped = re.sub(r'^\s*\d+[\).\-\s]*', '', line).strip().strip('"').strip("'")
+                if stripped:
+                    lines.append(stripped)
+            unique = []
+            for title in lines:
+                if title not in unique:
+                    unique.append(title)
+                if len(unique) >= 10:
+                    break
+            
+            suggestions_list.delete(0, tk.END)
+            if not unique:
+                suggestions_list.insert(tk.END, 'No suggestions returned')
+                status_var.set('No suggestions returned. Try again.')
+                return
+            
+            for title in unique:
+                suggestions_list.insert(tk.END, title)
+            
+            # Build radio buttons for quick selection
+            for child in radio_frame.winfo_children():
+                child.destroy()
+            title_choice_var.set('')
+            for title in unique:
+                ttk.Radiobutton(
+                    radio_frame,
+                    text=title,
+                    variable=title_choice_var,
+                    value=title,
+                    command=lambda v=title: apply_selection(v)
+                ).pack(anchor=tk.W, pady=1, fill=tk.X)
+            
+            status_var.set(f'Loaded {len(unique)} suggestions. Double-click to use one.')
+            self.log_debug('INFO', f'Loaded {len(unique)} AI title suggestions: {unique}')
         
         def ok_clicked():
             name = name_var.get().strip()
@@ -4470,9 +4830,11 @@ class SunoPersona(tk.Tk):
             dialog.destroy()
         
         btn_frame = ttk.Frame(dialog)
-        btn_frame.pack(pady=10)
-        ttk.Button(btn_frame, text='OK', command=ok_clicked).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text='Cancel', command=cancel_clicked).pack(side=tk.LEFT, padx=5)
+        btn_frame.pack(pady=(0, 12))
+        fetch_btn = ttk.Button(btn_frame, text='Suggest Titles', command=fetch_title_suggestions)
+        fetch_btn.pack(side=tk.LEFT, padx=4)
+        ttk.Button(btn_frame, text='OK', command=ok_clicked).pack(side=tk.LEFT, padx=4)
+        ttk.Button(btn_frame, text='Cancel', command=cancel_clicked).pack(side=tk.LEFT, padx=4)
         
         dialog.bind('<Return>', lambda e: ok_clicked())
         dialog.bind('<Escape>', lambda e: cancel_clicked())
