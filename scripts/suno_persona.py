@@ -4855,26 +4855,68 @@ class SunoPersona(tk.Tk):
         
         song_name = self.song_name_var.get().strip()
         lyric_ideas = self.lyric_ideas_text.get('1.0', tk.END).strip()
-        lyrics_style = self.current_persona.get('lyrics_style', '')
+        lyrics_style = (self.current_persona.get('lyrics_style') or '').strip()
+        voice_style = (self.current_persona.get('voice_style') or '').strip()
+        persona_name = (self.current_persona.get('name') or '').strip()
+        persona_vibe = (self.current_persona.get('vibe') or '').strip()
+        tagline = (self.current_persona.get('tagline') or '').strip()
+        genre_tags = self.current_persona.get('genre_tags', [])
+        if isinstance(genre_tags, list):
+            genre_tags_text = ', '.join([t for t in genre_tags if t])
+        else:
+            genre_tags_text = str(genre_tags or '')
+        style_text = self._get_sanitized_style_text()
+        theme_or_topic = lyric_ideas if lyric_ideas else song_name
+        mood_text = persona_vibe if persona_vibe else 'dark, cinematic'
         
         if not song_name:
             messagebox.showwarning('Warning', 'Please enter a song name.')
             return
         
-        prompt = f"Generate lyrics for a song called '{song_name}' by the AI persona '{self.current_persona.get('name', '')}'."
-        prompt += f"\n\nPersona lyrics style: {lyrics_style}"
+        system_message = (
+            "You are the selected ARTIST_PERSONA. Fully embody the persona voice, "
+            "era influence, delivery style, and genre fusion. Use strong internal rhymes, "
+            "anthemic hooks, and AI/cyberpunk/dark futurism imagery when relevant. "
+            "Return lyrics only with the requested section headings—no explanations."
+        )
         
-        if lyric_ideas:
-            prompt += f"\n\nLyric ideas or themes: {lyric_ideas}"
+        prompt_lines = [
+            "AGENT TASK — LYRICS GENERATION (CONFIGURABLE ARTIST)",
+            f"ARTIST_PERSONA: {persona_name}",
+            f"GENRE_STYLE: {style_text or 'Original / unspecified'}",
+            f"THEME / TOPIC: {theme_or_topic}",
+            f"MOOD: {mood_text}",
+            "REFERENCE_VIBE: (stylistic only, do not copy melodies)",
+            "SONG_STRUCTURE: [Intro] [Verse 1] [Pre-Chorus] [Chorus / Hook] [Verse 2] [Bridge] [Final Hook] [Outro]",
+            "",
+            "Persona voice & style cues:",
+            f"- Voice tone: {voice_style or 'unspecified'}",
+            f"- Lyrics style: {lyrics_style or 'unspecified'}",
+            f"- Tagline: {tagline or 'n/a'}",
+            f"- Vibe: {persona_vibe or 'n/a'}",
+            f"- Genre tags: {genre_tags_text or 'n/a'}",
+            "",
+            "User hints / lyric ideas:",
+            lyric_ideas or "(none provided; infer from theme and persona)",
+            "",
+            "Output requirements:",
+            "- Produce full original lyrics; no melodic copying.",
+            "- Follow the structure with clear section headers exactly as written.",
+            "- Hooks must be chant-worthy; Final Hook should feel bigger/darker.",
+            "- Keep Pre-Chorus and Bridge short but impactful (may be brief).",
+            "- Use AI, machine, dark futurism, cyberpunk, destruction, and data metaphors when they fit.",
+            "- Strong internal rhymes; occasional multisyllabic phrasing.",
+            "- Return lyrics only, no commentary."
+        ]
         
-        prompt += "\n\nGenerate complete song lyrics with verses and chorus."
+        prompt = "\n".join(prompt_lines)
         
         self.log_debug('INFO', 'Generating lyrics...')
         self.config(cursor='wait')
         self.update()
         
         try:
-            result = self.azure_ai(prompt, profile='text')
+            result = self.azure_ai(prompt, system_message=system_message, profile='text')
             
             if result['success']:
                 lyrics = result['content'].strip()
