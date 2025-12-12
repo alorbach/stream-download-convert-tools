@@ -1254,6 +1254,7 @@ class SunoStyleBrowser(tk.Tk):
             "Do not provide a summary or refusal. Output ONLY the lyrics."
         )
 
+        self.log_debug('DEBUG', f'Fix Lyrics Prompt:\n{prompt}')
         self.log_debug('INFO', 'Fixing lyrics...')
         self.config(cursor='wait')
         self.update()
@@ -1764,6 +1765,7 @@ class SunoStyleBrowser(tk.Tk):
         prompt = template.replace('{STYLES_TO_MERGE}', styles)
         prompt = prompt.replace('{ORIGINAL_STYLE}', original_style if original_style else 'None selected')
         
+        self.log_debug('DEBUG', f'Merge Styles Prompt:\n{prompt}')
         # Call Azure AI
         self.log_debug('INFO', 'Calling Azure AI API...')
         self.config(cursor='wait')
@@ -1827,6 +1829,7 @@ class SunoStyleBrowser(tk.Tk):
                  prompt = template.replace('{STYLES_TO_MERGE}', styles)
                  prompt = prompt.replace('{ORIGINAL_STYLE}', original_style)
                  
+                 self.log_debug('DEBUG', f'Merge+Transform Step 1 - Merge Styles Prompt:\n{prompt}')
                  self.config(cursor='wait')
                  self.update()
                  try:
@@ -1869,6 +1872,7 @@ class SunoStyleBrowser(tk.Tk):
         prompt = prompt.replace('{ARTIST}', artist)
         prompt = prompt.replace('{STYLE_KEYWORDS}', styles)
         
+        self.log_debug('DEBUG', f'Transform Style Prompt:\n{prompt}')
         # Call Azure AI
         self.log_debug('INFO', 'Calling Azure AI API...')
         self.config(cursor='wait')
@@ -1924,6 +1928,7 @@ class SunoStyleBrowser(tk.Tk):
         prompt = prompt.replace('{ARTIST}', artist)
         prompt = prompt.replace('{STYLE_KEYWORDS}', style_keywords)
         
+        self.log_debug('DEBUG', f'Generate AI Cover Name Prompt:\n{prompt}')
         # Call Azure AI
         self.log_debug('INFO', 'Calling Azure AI API...')
         self.config(cursor='wait')
@@ -2050,6 +2055,7 @@ class SunoStyleBrowser(tk.Tk):
         prompt = prompt.replace('{TYPOGRAPHY_STYLE}', typography_style)
         prompt = prompt.replace('{AI_COVER_NAME}', ai_cover_name)
         
+        self.log_debug('DEBUG', f'Generate Album Cover Prompt:\n{prompt}')
         # Call Azure AI with system message to output only the prompt
         # TODO: Change to profile='image_gen' when image generation endpoint is implemented
         self.log_debug('INFO', 'Calling Azure AI for album cover generation...')
@@ -2171,6 +2177,7 @@ class SunoStyleBrowser(tk.Tk):
         prompt = prompt.replace('{LIGHTING_DESCRIPTION}', lighting_description)
         prompt = prompt.replace('{ANIMATION_DESCRIPTION}', animation_description)
         
+        self.log_debug('DEBUG', f'Generate Video Loop Prompt:\n{prompt}')
         # Call Azure AI with system message to output only the prompt
         # TODO: Change to profile='video_gen' when video generation endpoint is implemented
         self.log_debug('INFO', 'Calling Azure AI for video loop generation...')
@@ -2200,6 +2207,7 @@ class SunoStyleBrowser(tk.Tk):
             self.log_debug('WARNING', 'Run Video Loop Prompt: Please generate a video loop prompt first.')
             return
 
+        self.log_debug('DEBUG', f'Run Video Loop Prompt (initial):\n{prompt}')
         # Show dialog to inject extra commands
         dialog = ExtraCommandsDialog(self, prompt)
         self.wait_window(dialog)
@@ -2215,6 +2223,7 @@ class SunoStyleBrowser(tk.Tk):
             prompt = f"{prompt} {dialog.result}"
             self.log_debug('INFO', f'Extra commands injected: {dialog.result[:100]}...')
 
+        self.log_debug('DEBUG', f'Run Video Loop Prompt (final):\n{prompt}')
         # Read options
         size = self.video_size_var.get().strip() or '720x1280'
         seconds = self.video_seconds_var.get().strip() or '4'
@@ -2279,6 +2288,7 @@ class SunoStyleBrowser(tk.Tk):
             self.log_debug('WARNING', 'Run Image Model: Please generate an album cover prompt first.')
             return
 
+        self.log_debug('DEBUG', f'Run Image Model Prompt (initial):\n{prompt}')
         # Show dialog to inject extra commands
         dialog = ExtraCommandsDialog(self, prompt)
         self.wait_window(dialog)
@@ -2294,6 +2304,7 @@ class SunoStyleBrowser(tk.Tk):
             prompt = f"{prompt} {dialog.result}"
             self.log_debug('INFO', f'Extra commands injected: {dialog.result[:100]}...')
 
+        self.log_debug('DEBUG', f'Run Image Model Prompt (final):\n{prompt}')
         # Determine default filename from AI Cover Name (fallback to Song - Artist)
         ai_cover_name = self.ai_cover_name_var.get().strip()
         if not ai_cover_name:
@@ -2508,6 +2519,7 @@ class SunoStyleBrowser(tk.Tk):
         prompt = prompt.replace('{ARTIST}', artist)
         prompt = prompt.replace('{STYLE_NAME}', style_name)
         
+        self.log_debug('DEBUG', f'Generate YouTube Hashtags Prompt:\n{prompt}')
         self.log_debug('INFO', 'Generating optimized hashtags with AI...')
         self.config(cursor='wait')
         self.update()
