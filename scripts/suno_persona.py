@@ -4194,15 +4194,15 @@ class SunoPersona(tk.Tk):
         self.songs_tree.bind("<Button-4>", on_mousewheel_songs)
         self.songs_tree.bind("<Button-5>", on_mousewheel_songs)
         
-        details_notebook = ttk.Notebook(main_frame)
-        details_notebook.pack(fill=tk.BOTH, expand=True, pady=(0, 0))
+        self.details_notebook = ttk.Notebook(main_frame)
+        self.details_notebook.pack(fill=tk.BOTH, expand=True, pady=(0, 0))
 
-        albums_frame = ttk.Frame(details_notebook)
-        details_notebook.add(albums_frame, text='Albums')
+        albums_frame = ttk.Frame(self.details_notebook)
+        self.details_notebook.add(albums_frame, text='Albums')
         self.create_album_tab(albums_frame)
 
-        song_details_frame = ttk.Frame(details_notebook)
-        details_notebook.add(song_details_frame, text='Song Details')
+        song_details_frame = ttk.Frame(self.details_notebook)
+        self.details_notebook.add(song_details_frame, text='Song Details')
         self.create_song_details_form(song_details_frame)
     
     def create_song_details_form(self, parent):
@@ -5049,7 +5049,47 @@ class SunoPersona(tk.Tk):
         
         folder_name = sel[0]
         if folder_name.startswith('album::'):
+            # Album selected - switch to Albums tab and select in combobox
+            if hasattr(self, 'details_notebook'):
+                try:
+                    # Find the Albums tab index
+                    for i in range(self.details_notebook.index('end')):
+                        if self.details_notebook.tab(i, 'text') == 'Albums':
+                            self.details_notebook.select(i)
+                            break
+                except Exception as e:
+                    self.log_debug('WARNING', f'Failed to switch to Albums tab: {e}')
+            
+            # Get album name from treeview item text and set in combobox
+            try:
+                album_name = self.songs_tree.item(folder_name, 'text')
+                if album_name and hasattr(self, 'album_select_var'):
+                    # Check if this album name exists in the combobox values
+                    if hasattr(self, 'album_select_combo'):
+                        combo_values = self.album_select_combo['values']
+                        if album_name in combo_values:
+                            self.album_select_var.set(album_name)
+                            # Load the album into the form
+                            if hasattr(self, 'on_album_select_combo'):
+                                self.on_album_select_combo()
+                            self.log_debug('INFO', f'Selected album in combobox: {album_name}')
+                        else:
+                            self.log_debug('WARNING', f'Album "{album_name}" not found in combobox values')
+            except Exception as e:
+                self.log_debug('WARNING', f'Failed to select album in combobox: {e}')
             return
+        
+        # Song selected - switch to Song Details tab and load song
+        if hasattr(self, 'details_notebook'):
+            try:
+                # Find the Song Details tab index
+                for i in range(self.details_notebook.index('end')):
+                    if self.details_notebook.tab(i, 'text') == 'Song Details':
+                        self.details_notebook.select(i)
+                        break
+            except Exception as e:
+                self.log_debug('WARNING', f'Failed to switch to Song Details tab: {e}')
+        
         self.current_song_path = os.path.join(self.current_persona_path, 'AI-Songs', folder_name)
         self.current_song = load_song_config(self.current_song_path)
         
@@ -5548,7 +5588,7 @@ class SunoPersona(tk.Tk):
     def save_song(self):
         """Save song info to config.json."""
         if not self.current_song_path:
-            messagebox.showwarning('Warning', 'Please select a song to save.')
+            self.log_debug('WARNING', 'Please select a song to save.')
             return
         
         config = {
@@ -5583,11 +5623,9 @@ class SunoPersona(tk.Tk):
         if save_song_config(self.current_song_path, config):
             self.current_song = config
             self.log_debug('INFO', 'Song saved successfully')
-            messagebox.showinfo('Success', 'Song saved successfully!')
             # Update play button state after saving
             self.update_play_button()
         else:
-            messagebox.showerror('Error', 'Failed to save song.')
             self.log_debug('ERROR', 'Failed to save song')
 
     def clear_album_form(self):
@@ -6577,8 +6615,35 @@ class SunoPersona(tk.Tk):
             messagebox.showwarning('Warning', 'Please enter storyboard theme keywords or set a merged style first.')
             return
         
+        # Get existing storyboard scenes if available
+        existing_storyboard = None
+        if hasattr(self, 'storyboard_tree') and self.storyboard_tree.get_children():
+            existing_storyboard = self.get_storyboard_data()
+        elif self.current_song and self.current_song.get('storyboard'):
+            existing_storyboard = self.current_song.get('storyboard')
+        
+        # Build storyboard context if scenes exist
+        storyboard_context = ""
+        if existing_storyboard and len(existing_storyboard) > 0:
+            # Include a sample of scenes (first 3-5) to give context without overwhelming the prompt
+            sample_scenes = existing_storyboard[:5]
+            storyboard_context = "\n\nExisting Storyboard Scenes (for context):\n"
+            for scene in sample_scenes:
+                scene_num = scene.get('scene', '')
+                scene_prompt = scene.get('prompt', '') or scene.get('generated_prompt', '')
+                if scene_prompt:
+                    # Truncate long prompts to keep context manageable
+                    truncated_prompt = scene_prompt[:200] + "..." if len(scene_prompt) > 200 else scene_prompt
+                    storyboard_context += f"Scene {scene_num}: {truncated_prompt}\n"
+            if len(existing_storyboard) > 5:
+                storyboard_context += f"... and {len(existing_storyboard) - 5} more scenes\n"
+            storyboard_context += "\nUse the existing storyboard scenes as reference to improve the theme while maintaining consistency."
+        
         prompt = (
             "Improve and expand these storyboard theme keywords into a concise global visual style for all scenes.\n"
+            "CRITICAL: Preserve ALL narrative elements, story concepts, characters, and plot points from the seed theme.\n"
+            "If the seed mentions specific characters (like 'Devil', 'Drummer'), events (like 'hunting'), or story elements, these MUST remain in the improved theme.\n"
+            "Expand the VISUAL description (palette, lighting, camera mood, texture, atmosphere) while keeping the core story/narrative intact.\n"
             "Keep it SFW and under 90 words. Focus on palette, lighting, camera mood, texture, and atmosphere.\n"
             "Avoid brand names and band/artist names. No bullet points. Return only the theme text.\n\n"
             f"Song: {full_song_name if full_song_name else song_name}\n"
@@ -6587,8 +6652,9 @@ class SunoPersona(tk.Tk):
             f"Persona Visual Aesthetic: {visual_aesthetic if visual_aesthetic else 'N/A'}\n"
             f"Persona Base Image Prompt: {base_image_prompt if base_image_prompt else 'N/A'}\n"
             f"Persona Vibe: {vibe if vibe else 'N/A'}\n"
-            "Seed Theme Keywords:\n"
+            "Seed Theme Keywords (PRESERVE ALL NARRATIVE/STORY ELEMENTS):\n"
             f"{seed_theme if seed_theme else merged_style}"
+            f"{storyboard_context}"
         )
         
         self.log_debug('INFO', 'Improving storyboard theme...')
@@ -8886,6 +8952,41 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
         self.scene_final_prompts[cache_key] = prompt
         return prompt
     
+    def _save_storyboard_generated_prompt(self, scene_num: str, generated_prompt: str):
+        """Save the generated prompt to the storyboard scene in config.json.
+        
+        Args:
+            scene_num: Scene number
+            generated_prompt: The final prompt that was used for image generation
+        """
+        if not self.current_song_path or not self.current_song:
+            return
+        
+        try:
+            storyboard = self.current_song.get('storyboard', [])
+            scene_num_int = int(scene_num) if str(scene_num).isdigit() else None
+            
+            # Find the scene in the storyboard
+            for scene in storyboard:
+                scene_value = scene.get('scene')
+                # Handle both int and string scene numbers
+                if (scene_num_int is not None and scene_value == scene_num_int) or str(scene_value) == str(scene_num):
+                    # Update or add the generated_prompt field
+                    scene['generated_prompt'] = generated_prompt
+                    self.log_debug('INFO', f'Saved generated prompt for scene {scene_num} to config.json')
+                    
+                    # Save the updated config
+                    if save_song_config(self.current_song_path, self.current_song):
+                        self.log_debug('INFO', f'Config.json updated with generated prompt for scene {scene_num}')
+                    else:
+                        self.log_debug('WARNING', f'Failed to save config.json for scene {scene_num}')
+                    return
+            
+            # If scene not found, log a warning
+            self.log_debug('WARNING', f'Scene {scene_num} not found in storyboard, could not save generated prompt')
+        except Exception as e:
+            self.log_debug('ERROR', f'Error saving generated prompt for scene {scene_num}: {e}')
+
     def generate_storyboard_image(self, scene_num: str, prompt: str, show_success_message: bool = True, lyrics: str = None):
         """Generate image for a storyboard scene.
         
@@ -8939,6 +9040,8 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
                             overlay_enabled = bool(self.overlay_lyrics_var.get()) if hasattr(self, 'overlay_lyrics_var') else False
                             if lyrics and overlay_enabled:
                                 self.overlay_lyrics_on_image(image_filename, lyrics, scene_num)
+                            # Save the generated prompt to config.json
+                            self._save_storyboard_generated_prompt(scene_num, final_prompt)
                             if show_success_message:
                                 messagebox.showinfo('Success', f'Scene {scene_num} image generated and saved!')
                             return True
@@ -8967,6 +9070,8 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
                         if lyrics and overlay_enabled:
                             self.overlay_lyrics_on_image(image_filename, lyrics, scene_num)
 
+                        # Save the generated prompt to config.json
+                        self._save_storyboard_generated_prompt(scene_num, final_prompt)
                         if show_success_message:
                             messagebox.showinfo('Success', f'Scene {scene_num} image generated successfully!')
                         return True
