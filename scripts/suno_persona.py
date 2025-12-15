@@ -1075,11 +1075,11 @@ class SettingsDialog(tk.Toplevel):
         main_frame = ttk.Frame(self, padding=10)
         main_frame.pack(fill=tk.BOTH, expand=True)
         
-        notebook = ttk.Notebook(main_frame)
-        notebook.pack(fill=tk.BOTH, expand=True)
+        self.notebook = ttk.Notebook(main_frame)
+        self.notebook.pack(fill=tk.BOTH, expand=True)
         
-        general_frame = ttk.Frame(notebook, padding=10)
-        notebook.add(general_frame, text='General')
+        general_frame = ttk.Frame(self.notebook, padding=10)
+        self.notebook.add(general_frame, text='General')
         
         general_data = self.config.get('general', {})
         self.general_vars = {}
@@ -1100,33 +1100,82 @@ class SettingsDialog(tk.Toplevel):
         
         profiles = self.config.get('profiles', {})
         
+        # Ensure default profiles exist
+        default_profiles = ['text', 'image_gen', 'video_gen', 'transcribe']
+        for profile_name in default_profiles:
+            if profile_name not in profiles:
+                profiles[profile_name] = {}
+        
         self.profile_vars = {}
-        for profile_name in ['text', 'image_gen', 'video_gen', 'transcribe']:
+        self.profile_order = list(profiles.keys())  # Preserve order
+        
+        # Create profile management frame
+        profiles_management_frame = ttk.Frame(self.notebook, padding=10)
+        self.notebook.add(profiles_management_frame, text='Profile Management')
+        
+        ttk.Label(profiles_management_frame, text='Manage Profiles:', font=('TkDefaultFont', 9, 'bold')).grid(row=0, column=0, sticky=tk.W, pady=(0, 10), columnspan=3)
+        
+        # Profile list with scrollbar
+        list_frame = ttk.Frame(profiles_management_frame)
+        list_frame.grid(row=1, column=0, columnspan=3, sticky='nsew', pady=5)
+        
+        profile_listbox_frame = ttk.Frame(list_frame)
+        profile_listbox_frame.pack(fill=tk.BOTH, expand=True)
+        
+        scrollbar = ttk.Scrollbar(profile_listbox_frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        self.profile_listbox = tk.Listbox(profile_listbox_frame, yscrollcommand=scrollbar.set, height=8)
+        self.profile_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.config(command=self.profile_listbox.yview)
+        
+        # Populate listbox
+        for profile_name in self.profile_order:
+            self.profile_listbox.insert(tk.END, profile_name)
+        
+        # Buttons for profile management
+        btn_frame_manage = ttk.Frame(profiles_management_frame)
+        btn_frame_manage.grid(row=2, column=0, columnspan=3, pady=10)
+        
+        ttk.Button(btn_frame_manage, text='Add Profile', command=self.add_profile).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame_manage, text='Remove Profile', command=self.remove_profile).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame_manage, text='Rename Profile', command=self.rename_profile).pack(side=tk.LEFT, padx=5)
+        
+        ttk.Label(profiles_management_frame, text='Note: Core profiles (text, image_gen, video_gen, transcribe) cannot be removed.', 
+                 font=('TkDefaultFont', 8), foreground='gray').grid(row=3, column=0, columnspan=3, pady=5)
+        
+        # Create tabs for each profile
+        for profile_name in self.profile_order:
             profile_data = profiles.get(profile_name, {})
             self.profile_vars[profile_name] = {}
             
-            profile_frame = ttk.Frame(notebook, padding=10)
-            notebook.add(profile_frame, text=profile_name.replace('_', ' ').title())
+            profile_frame = ttk.Frame(self.notebook, padding=10)
+            self.notebook.add(profile_frame, text=profile_name.replace('_', ' ').title())
             
-            ttk.Label(profile_frame, text='Endpoint:').grid(row=0, column=0, sticky=tk.W, pady=5)
+            # Checkbox for image generation profile
+            self.profile_vars[profile_name]['is_image_profile'] = tk.BooleanVar(value=profile_data.get('is_image_profile', profile_name == 'image_gen' or 'image' in profile_name.lower() or 'dall' in profile_data.get('model_name', '').lower()))
+            ttk.Checkbutton(profile_frame, text='Use for Image Generation', 
+                          variable=self.profile_vars[profile_name]['is_image_profile']).grid(row=0, column=0, columnspan=2, sticky=tk.W, pady=(0, 10))
+            
+            ttk.Label(profile_frame, text='Endpoint:').grid(row=1, column=0, sticky=tk.W, pady=5)
             self.profile_vars[profile_name]['endpoint'] = tk.StringVar(value=profile_data.get('endpoint', ''))
-            ttk.Entry(profile_frame, textvariable=self.profile_vars[profile_name]['endpoint'], width=50).grid(row=0, column=1, pady=5, padx=5)
+            ttk.Entry(profile_frame, textvariable=self.profile_vars[profile_name]['endpoint'], width=50).grid(row=1, column=1, pady=5, padx=5)
             
-            ttk.Label(profile_frame, text='Model Name:').grid(row=1, column=0, sticky=tk.W, pady=5)
+            ttk.Label(profile_frame, text='Model Name:').grid(row=2, column=0, sticky=tk.W, pady=5)
             self.profile_vars[profile_name]['model_name'] = tk.StringVar(value=profile_data.get('model_name', ''))
-            ttk.Entry(profile_frame, textvariable=self.profile_vars[profile_name]['model_name'], width=50).grid(row=1, column=1, pady=5, padx=5)
+            ttk.Entry(profile_frame, textvariable=self.profile_vars[profile_name]['model_name'], width=50).grid(row=2, column=1, pady=5, padx=5)
             
-            ttk.Label(profile_frame, text='Deployment:').grid(row=2, column=0, sticky=tk.W, pady=5)
+            ttk.Label(profile_frame, text='Deployment:').grid(row=3, column=0, sticky=tk.W, pady=5)
             self.profile_vars[profile_name]['deployment'] = tk.StringVar(value=profile_data.get('deployment', ''))
-            ttk.Entry(profile_frame, textvariable=self.profile_vars[profile_name]['deployment'], width=50).grid(row=2, column=1, pady=5, padx=5)
+            ttk.Entry(profile_frame, textvariable=self.profile_vars[profile_name]['deployment'], width=50).grid(row=3, column=1, pady=5, padx=5)
             
-            ttk.Label(profile_frame, text='Subscription Key:').grid(row=3, column=0, sticky=tk.W, pady=5)
+            ttk.Label(profile_frame, text='Subscription Key:').grid(row=4, column=0, sticky=tk.W, pady=5)
             self.profile_vars[profile_name]['subscription_key'] = tk.StringVar(value=profile_data.get('subscription_key', ''))
-            ttk.Entry(profile_frame, textvariable=self.profile_vars[profile_name]['subscription_key'], width=50, show='*').grid(row=3, column=1, pady=5, padx=5)
+            ttk.Entry(profile_frame, textvariable=self.profile_vars[profile_name]['subscription_key'], width=50, show='*').grid(row=4, column=1, pady=5, padx=5)
             
-            ttk.Label(profile_frame, text='API Version:').grid(row=4, column=0, sticky=tk.W, pady=5)
+            ttk.Label(profile_frame, text='API Version:').grid(row=5, column=0, sticky=tk.W, pady=5)
             self.profile_vars[profile_name]['api_version'] = tk.StringVar(value=profile_data.get('api_version', ''))
-            ttk.Entry(profile_frame, textvariable=self.profile_vars[profile_name]['api_version'], width=50).grid(row=4, column=1, pady=5, padx=5)
+            ttk.Entry(profile_frame, textvariable=self.profile_vars[profile_name]['api_version'], width=50).grid(row=5, column=1, pady=5, padx=5)
         
         btn_frame = ttk.Frame(main_frame)
         btn_frame.pack(fill=tk.X, pady=10)
@@ -1179,6 +1228,125 @@ class SettingsDialog(tk.Toplevel):
             except:
                 self.general_vars['styles_csv_path'].set(path)
     
+    def add_profile(self):
+        """Add a new profile."""
+        profile_name = simpledialog.askstring('Add Profile', 'Enter profile name:', initialvalue='')
+        if profile_name and profile_name.strip():
+            profile_name = profile_name.strip()
+            if profile_name in self.profile_vars:
+                messagebox.showwarning('Warning', f'Profile "{profile_name}" already exists.')
+                return
+            
+            # Add to profile_vars
+            self.profile_vars[profile_name] = {
+                'is_image_profile': tk.BooleanVar(value=False),
+                'endpoint': tk.StringVar(value=''),
+                'model_name': tk.StringVar(value=''),
+                'deployment': tk.StringVar(value=''),
+                'subscription_key': tk.StringVar(value=''),
+                'api_version': tk.StringVar(value='2024-02-15-preview')
+            }
+            
+            # Add to listbox
+            self.profile_listbox.insert(tk.END, profile_name)
+            self.profile_order.append(profile_name)
+            
+            # Add tab to notebook
+            if hasattr(self, 'notebook'):
+                profile_frame = ttk.Frame(self.notebook, padding=10)
+                self.notebook.add(profile_frame, text=profile_name.replace('_', ' ').title())
+                
+                # Checkbox for image generation profile
+                ttk.Checkbutton(profile_frame, text='Use for Image Generation', 
+                              variable=self.profile_vars[profile_name]['is_image_profile']).grid(row=0, column=0, columnspan=2, sticky=tk.W, pady=(0, 10))
+                
+                ttk.Label(profile_frame, text='Endpoint:').grid(row=1, column=0, sticky=tk.W, pady=5)
+                ttk.Entry(profile_frame, textvariable=self.profile_vars[profile_name]['endpoint'], width=50).grid(row=1, column=1, pady=5, padx=5)
+                
+                ttk.Label(profile_frame, text='Model Name:').grid(row=2, column=0, sticky=tk.W, pady=5)
+                ttk.Entry(profile_frame, textvariable=self.profile_vars[profile_name]['model_name'], width=50).grid(row=2, column=1, pady=5, padx=5)
+                
+                ttk.Label(profile_frame, text='Deployment:').grid(row=3, column=0, sticky=tk.W, pady=5)
+                ttk.Entry(profile_frame, textvariable=self.profile_vars[profile_name]['deployment'], width=50).grid(row=3, column=1, pady=5, padx=5)
+                
+                ttk.Label(profile_frame, text='Subscription Key:').grid(row=4, column=0, sticky=tk.W, pady=5)
+                ttk.Entry(profile_frame, textvariable=self.profile_vars[profile_name]['subscription_key'], width=50, show='*').grid(row=4, column=1, pady=5, padx=5)
+                
+                ttk.Label(profile_frame, text='API Version:').grid(row=5, column=0, sticky=tk.W, pady=5)
+                ttk.Entry(profile_frame, textvariable=self.profile_vars[profile_name]['api_version'], width=50).grid(row=5, column=1, pady=5, padx=5)
+    
+    def remove_profile(self):
+        """Remove selected profile."""
+        selection = self.profile_listbox.curselection()
+        if not selection:
+            messagebox.showwarning('Warning', 'Please select a profile to remove.')
+            return
+        
+        profile_name = self.profile_listbox.get(selection[0])
+        core_profiles = ['text', 'image_gen', 'video_gen', 'transcribe']
+        
+        if profile_name in core_profiles:
+            messagebox.showwarning('Warning', f'Cannot remove core profile "{profile_name}".')
+            return
+        
+        if messagebox.askyesno('Confirm', f'Remove profile "{profile_name}"?'):
+            # Remove from listbox
+            self.profile_listbox.delete(selection[0])
+            # Remove from profile_vars
+            if profile_name in self.profile_vars:
+                del self.profile_vars[profile_name]
+            # Remove from order
+            if profile_name in self.profile_order:
+                self.profile_order.remove(profile_name)
+            
+            # Remove tab from notebook
+            if hasattr(self, 'notebook'):
+                for tab_id in self.notebook.tabs():
+                    if self.notebook.tab(tab_id, 'text').replace(' ', '_').lower() == profile_name.replace('_', ' ').lower():
+                        self.notebook.forget(tab_id)
+                        break
+    
+    def rename_profile(self):
+        """Rename selected profile."""
+        selection = self.profile_listbox.curselection()
+        if not selection:
+            messagebox.showwarning('Warning', 'Please select a profile to rename.')
+            return
+        
+        old_name = self.profile_listbox.get(selection[0])
+        core_profiles = ['text', 'image_gen', 'video_gen', 'transcribe']
+        
+        if old_name in core_profiles:
+            messagebox.showwarning('Warning', f'Cannot rename core profile "{old_name}".')
+            return
+        
+        new_name = simpledialog.askstring('Rename Profile', f'Enter new name for "{old_name}":', initialvalue=old_name)
+        if new_name and new_name.strip() and new_name != old_name:
+            new_name = new_name.strip()
+            if new_name in self.profile_vars:
+                messagebox.showwarning('Warning', f'Profile "{new_name}" already exists.')
+                return
+            
+            # Update profile_vars
+            if old_name in self.profile_vars:
+                self.profile_vars[new_name] = self.profile_vars.pop(old_name)
+            
+            # Update listbox
+            self.profile_listbox.delete(selection[0])
+            self.profile_listbox.insert(selection[0], new_name)
+            
+            # Update order
+            if old_name in self.profile_order:
+                idx = self.profile_order.index(old_name)
+                self.profile_order[idx] = new_name
+            
+            # Update notebook tab
+            if hasattr(self, 'notebook'):
+                for tab_id in self.notebook.tabs():
+                    if self.notebook.tab(tab_id, 'text').replace(' ', '_').lower() == old_name.replace('_', ' ').lower():
+                        self.notebook.tab(tab_id, text=new_name.replace('_', ' ').title())
+                        break
+    
     def save_settings(self):
         general = {
             'personas_path': self.general_vars['personas_path'].get(),
@@ -1189,6 +1357,7 @@ class SettingsDialog(tk.Toplevel):
         profiles = {}
         for profile_name, vars_dict in self.profile_vars.items():
             profiles[profile_name] = {
+                'is_image_profile': vars_dict.get('is_image_profile', tk.BooleanVar(value=False)).get(),
                 'endpoint': vars_dict['endpoint'].get(),
                 'model_name': vars_dict['model_name'].get(),
                 'deployment': vars_dict['deployment'].get(),
@@ -2483,15 +2652,34 @@ class SunoPersona(tk.Tk):
         return call_azure_vision(self.ai_config, processed_paths if processed_paths else image_paths, prompt, system_message=system_message, profile=profile)
     
     def _get_available_image_profiles(self):
-        """Get list of available image generation profiles from config."""
+        """Get list of available image generation profiles from config.
+        
+        Returns profiles that are marked as image generation profiles via the
+        'is_image_profile' flag, or profiles with 'image' in the name or
+        'dall' in the model name (for backward compatibility).
+        """
         if not hasattr(self, 'ai_config') or not self.ai_config:
             return ['image_gen']
         
         profiles = self.ai_config.get('profiles', {})
-        # Return all profile names that exist in config
-        # Typically these would be image_gen and potentially other image-related profiles
-        available = list(profiles.keys())
-        # If no profiles found, default to image_gen
+        available = []
+        
+        for profile_name, profile_data in profiles.items():
+            # Check if explicitly marked as image profile
+            if profile_data.get('is_image_profile', False):
+                available.append(profile_name)
+            # Backward compatibility: check name or model
+            elif 'image' in profile_name.lower() or 'dall' in profile_data.get('model_name', '').lower():
+                available.append(profile_name)
+        
+        # If no profiles found, default to image_gen (if it exists)
+        if not available:
+            if 'image_gen' in profiles:
+                available = ['image_gen']
+            elif profiles:
+                # Fallback to first profile if no image profiles found
+                available = [list(profiles.keys())[0]]
+        
         return available if available else ['image_gen']
     
     def azure_image(self, prompt: str, size: str = '1024x1024', profile: str = 'image_gen', quality: str = 'medium', output_format: str = 'png', output_compression: int = 100) -> dict:
@@ -4604,7 +4792,12 @@ class SunoPersona(tk.Tk):
         self.storyboard_setup_count_var = tk.StringVar(value='6')
         ttk.Spinbox(controls_frame, from_=1, to=12, textvariable=self.storyboard_setup_count_var, width=4).pack(side=tk.LEFT, padx=2)
 
-        ttk.Button(controls_frame, text='Generate Storyboard', command=self.generate_storyboard).pack(side=tk.LEFT, padx=10)
+        # Button row for Generate Storyboard and Export Generated Prompts
+        button_frame = ttk.Frame(main_frame)
+        button_frame.pack(fill=tk.X, pady=(0, 10))
+        ttk.Button(button_frame, text='Generate Storyboard', command=self.generate_storyboard).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text='Generate All Prompts', command=self.generate_all_prompts).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text='Export Generated Prompts', command=self.export_generated_prompts).pack(side=tk.LEFT, padx=5)
 
         # Lyrics handling options (moved to storyboard)
         options_frame = ttk.LabelFrame(main_frame, text='Lyrics Handling', padding=5)
@@ -4964,26 +5157,38 @@ class SunoPersona(tk.Tk):
         if self.current_song is not None:
             storyboard_list = self.current_song.get('storyboard', [])
             updated = []
+            # Track which scenes were updated
+            updated_scene_nums = set()
+            
             for scene in storyboard_list:
                 scene_num = scene.get('scene')
                 if scene_num in regenerated:
+                    # Preserve all existing properties, only update the regenerated fields
                     new = scene.copy()
                     new['prompt'] = regenerated[scene_num].get('prompt', new.get('prompt', ''))
                     new['lyrics'] = regenerated[scene_num].get('lyrics', new.get('lyrics', ''))
                     new['duration'] = regenerated[scene_num].get('duration', new.get('duration', ''))
                     new['timestamp'] = regenerated[scene_num].get('timestamp', new.get('timestamp', ''))
+                    # Note: generated_prompt and other properties are preserved via .copy()
                     updated.append(new)
+                    updated_scene_nums.add(scene_num)
                 else:
+                    # Preserve scene as-is
                     updated.append(scene)
+            
+            # Add any new scenes that weren't in the original list
             for snum, sdata in regenerated.items():
-                if not any(s.get('scene') == snum for s in updated):
-                    updated.append({
+                if snum not in updated_scene_nums:
+                    # Create new scene with all standard fields
+                    new_scene = {
                         'scene': snum,
                         'timestamp': sdata.get('timestamp', ''),
                         'duration': sdata.get('duration', ''),
                         'lyrics': sdata.get('lyrics', ''),
                         'prompt': sdata.get('prompt', '')
-                    })
+                    }
+                    updated.append(new_scene)
+            
             self.current_song['storyboard'] = updated
         
         self.log_debug('INFO', f'Regenerated {len(regenerated)} scene(s) successfully.')
@@ -5862,7 +6067,17 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
         }
         
         if save_song_config(self.current_song_path, config):
-            self.current_song = config
+            # Reload config to get the latest data (including any generated_prompt fields that were preserved)
+            try:
+                config_file = os.path.join(self.current_song_path, 'config.json')
+                if os.path.exists(config_file):
+                    with open(config_file, 'r', encoding='utf-8') as f:
+                        self.current_song = json.load(f)
+                else:
+                    self.current_song = config
+            except Exception as e:
+                self.log_debug('WARNING', f'Failed to reload config after save: {e}')
+                self.current_song = config
             self.log_debug('INFO', 'Song saved successfully')
             # Update play button state after saving
             self.update_play_button()
@@ -7239,29 +7454,77 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
                 self.storyboard_tree.insert('', tk.END, values=(scene_num, timestamp, duration, lyrics, prompt))
     
     def get_storyboard_data(self):
-        """Get storyboard data from treeview."""
+        """Get storyboard data from treeview, preserving all existing properties from config.json."""
         if not hasattr(self, 'storyboard_tree'):
             return []
+        
+        # Reload config.json to get the latest data including any generated_prompt fields
+        # This ensures we preserve properties that were saved after the song was loaded
+        existing_storyboard = {}
+        if self.current_song_path:
+            try:
+                # Reload config.json directly to get latest data
+                config_file = os.path.join(self.current_song_path, 'config.json')
+                if os.path.exists(config_file):
+                    with open(config_file, 'r', encoding='utf-8') as f:
+                        latest_config = json.load(f)
+                        existing_list = latest_config.get('storyboard', [])
+                        for scene in existing_list:
+                            scene_num = scene.get('scene')
+                            if scene_num is not None:
+                                existing_storyboard[scene_num] = scene
+            except Exception as e:
+                # Fallback to current_song if reload fails
+                self.log_debug('WARNING', f'Failed to reload config.json for storyboard merge: {e}')
+                if self.current_song:
+                    existing_list = self.current_song.get('storyboard', [])
+                    for scene in existing_list:
+                        scene_num = scene.get('scene')
+                        if scene_num is not None:
+                            existing_storyboard[scene_num] = scene
+        elif self.current_song:
+            # Fallback if no path available
+            existing_list = self.current_song.get('storyboard', [])
+            for scene in existing_list:
+                scene_num = scene.get('scene')
+                if scene_num is not None:
+                    existing_storyboard[scene_num] = scene
         
         storyboard = []
         for item in self.storyboard_tree.get_children():
             values = self.storyboard_tree.item(item, 'values')
+            
+            # Extract basic fields from treeview
             if len(values) >= 5:
-                storyboard.append({
-                    'scene': int(values[0]) if values[0].isdigit() else len(storyboard) + 1,
-                    'timestamp': values[1],
-                    'duration': values[2],
-                    'lyrics': values[3] if len(values) > 3 else '',
-                    'prompt': values[4] if len(values) > 4 else values[3] if len(values) > 3 else ''
-                })
+                scene_num = int(values[0]) if values[0].isdigit() else len(storyboard) + 1
+                timestamp = values[1]
+                duration = values[2]
+                lyrics = values[3] if len(values) > 3 else ''
+                prompt = values[4] if len(values) > 4 else values[3] if len(values) > 3 else ''
             elif len(values) >= 4:
-                storyboard.append({
-                    'scene': int(values[0]) if str(values[0]).isdigit() else len(storyboard) + 1,
-                    'timestamp': '0:00',
-                    'duration': values[1],
-                    'lyrics': values[2] if len(values) > 2 else '',
-                    'prompt': values[3] if len(values) > 3 else ''
-                })
+                scene_num = int(values[0]) if str(values[0]).isdigit() else len(storyboard) + 1
+                timestamp = '0:00'
+                duration = values[1]
+                lyrics = values[2] if len(values) > 2 else ''
+                prompt = values[3] if len(values) > 3 else ''
+            else:
+                continue
+            
+            # Start with existing scene data if available, or create new dict
+            if scene_num in existing_storyboard:
+                scene_data = existing_storyboard[scene_num].copy()
+            else:
+                scene_data = {}
+            
+            # Update with current treeview values (these are the source of truth for displayed data)
+            scene_data['scene'] = scene_num
+            scene_data['timestamp'] = timestamp
+            scene_data['duration'] = duration
+            scene_data['lyrics'] = lyrics
+            scene_data['prompt'] = prompt
+            
+            storyboard.append(scene_data)
+        
         return storyboard
 
     def format_timestamp(self, seconds_value: float) -> str:
@@ -7652,7 +7915,8 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
         - [00:12] or [0:12] or (00:12) - minutes:seconds
         - [00:12.345] or [0:12.345] - minutes:seconds.milliseconds
         - [00:12:345] - minutes:seconds:milliseconds
-        - 0:12=text or 00:12=text - MM:SS=text format (new format from AI transcription)
+        - 0:12=text or 00:12=text - MM:SS=text format (old AI transcription format)
+        - 0:00=00:01=word - start_time=end_time=word format (new AI transcription format)
         
         Returns list of tuples: (start_time, end_time, lyric_line)
         """
@@ -7666,11 +7930,14 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
         # Format 1: [00:12] or [0:12] or (00:12) - minutes:seconds
         # Format 2: [00:12.345] or [0:12.345] - minutes:seconds.milliseconds
         # Format 3: [00:12:345] - minutes:seconds:milliseconds
-        # Format 4: 0:12=text or 00:12=text - MM:SS=text format (new AI transcription format)
+        # Format 4: 0:12=text or 00:12=text - MM:SS=text format (old AI transcription format)
+        # Format 5: 0:00=00:01=word - start_time=end_time=word format (new AI transcription format)
         bracket_timestamp_pattern = re.compile(r'[\[\(](\d+):(\d+)(?:[:.](\d+))?[\]\)]')
         equals_timestamp_pattern = re.compile(r'^(\d+):(\d+)=(.+)$')
+        double_equals_timestamp_pattern = re.compile(r'^(\d+):(\d+)=(\d+):(\d+)=(.+)$')
         
         lines_with_timestamps = []
+        lines_with_full_timing = []  # Lines with both start and end times
         lines_without_timestamps = []
         
         for line in lines:
@@ -7678,7 +7945,23 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
             if not line:
                 continue
             
-            # First check for MM:SS=text format (new format)
+            # First check for start_time=end_time=word format (new format)
+            double_equals_match = double_equals_timestamp_pattern.match(line)
+            if double_equals_match:
+                start_minutes = int(double_equals_match.group(1))
+                start_seconds = int(double_equals_match.group(2))
+                end_minutes = int(double_equals_match.group(3))
+                end_seconds = int(double_equals_match.group(4))
+                lyric_text = double_equals_match.group(5).strip()
+                # Clean structural markers from lyric text
+                lyric_text = self.clean_lyrics_text(lyric_text)
+                start_time = start_minutes * 60 + start_seconds
+                end_time = end_minutes * 60 + end_seconds
+                if lyric_text:
+                    lines_with_full_timing.append((start_time, end_time, lyric_text))
+                continue
+            
+            # Check for MM:SS=text format (old format)
             equals_match = equals_timestamp_pattern.match(line)
             if equals_match:
                 minutes = int(equals_match.group(1))
@@ -7717,8 +8000,12 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
                 if cleaned_line:
                     lines_without_timestamps.append(cleaned_line)
         
-        # If we have timestamps, use them
-        if lines_with_timestamps:
+        # If we have full timing (start and end), use them directly
+        if lines_with_full_timing:
+            lines_with_full_timing.sort(key=lambda x: x[0])  # Sort by start time
+            lyric_segments = lines_with_full_timing
+        # If we have timestamps (only start), calculate end times
+        elif lines_with_timestamps:
             lines_with_timestamps.sort(key=lambda x: x[0])  # Sort by timestamp
             
             # Create segments with timing
@@ -9291,6 +9578,323 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
         except Exception as e:
             self.log_debug('ERROR', f'Error saving generated prompt for scene {scene_num}: {e}')
 
+    def export_generated_prompts(self):
+        """Export generated prompts to JSON files for each scene that has a generated_prompt."""
+        self.log_debug('DEBUG', '=== export_generated_prompts: Starting export ===')
+        
+        if not self.current_song_path or not self.current_song:
+            self.log_debug('DEBUG', 'export_generated_prompts: No song selected')
+            messagebox.showwarning('Warning', 'No song selected. Please select a song first.')
+            return
+        
+        self.log_debug('DEBUG', f'export_generated_prompts: Song path: {self.current_song_path}')
+        
+        storyboard = self.current_song.get('storyboard', [])
+        self.log_debug('DEBUG', f'export_generated_prompts: Found {len(storyboard)} scenes in storyboard')
+        
+        if not storyboard:
+            self.log_debug('DEBUG', 'export_generated_prompts: No storyboard scenes found')
+            messagebox.showwarning('Warning', 'No storyboard scenes found.')
+            return
+        
+        exported_count = 0
+        skipped_count = 0
+        errors = []
+        
+        # Get seconds per video for calculating scene duration
+        seconds_per_video = int(self.storyboard_seconds_var.get() or '6') if hasattr(self, 'storyboard_seconds_var') else 6
+        self.log_debug('DEBUG', f'export_generated_prompts: Seconds per video: {seconds_per_video}')
+        
+        for idx, scene in enumerate(storyboard, 1):
+            scene_num = scene.get('scene')
+            generated_prompt = scene.get('generated_prompt', '')
+            
+            self.log_debug('DEBUG', f'export_generated_prompts: Processing scene {scene_num} ({idx}/{len(storyboard)})')
+            self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - has generated_prompt: {bool(generated_prompt)}')
+            
+            if not generated_prompt:
+                self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - Skipping (no generated_prompt)')
+                skipped_count += 1
+                continue
+            
+            try:
+                safe_scene = str(scene_num).replace(':', '_').replace('/', '_').replace('\\', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace("'", '_').replace('<', '_').replace('>', '_').replace('|', '_')
+                json_filename = os.path.join(self.current_song_path, f'storyboard_scene_{safe_scene}.json')
+                self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - JSON filename: {json_filename}')
+                self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - generated_prompt length: {len(generated_prompt)} chars')
+                
+                # Build the prompt with lyrics if applicable
+                final_prompt = generated_prompt
+                lyrics = scene.get('lyrics', '')
+                self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - has lyrics: {bool(lyrics)}, lyrics length: {len(lyrics) if lyrics else 0} chars')
+                
+                # Check if lyrics exist and generated_prompt starts with "REFERENCE CHARACTER"
+                prompt_starts_with_ref = generated_prompt.strip().startswith('REFERENCE CHARACTER')
+                self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - prompt starts with REFERENCE CHARACTER: {prompt_starts_with_ref}')
+                
+                if lyrics and prompt_starts_with_ref:
+                    # Parse scene start time from timestamp
+                    scene_timestamp = scene.get('timestamp', '0:00')
+                    scene_start_seconds = self._parse_timestamp_to_seconds(scene_timestamp)
+                    scene_end_seconds = scene_start_seconds + seconds_per_video
+                    self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - timestamp: {scene_timestamp}, start_seconds: {scene_start_seconds}, end_seconds: {scene_end_seconds}')
+                    
+                    # Check if lyrics are in timestamp format, if not, try to get from extracted_lyrics
+                    lyrics_with_timestamps = lyrics
+                    if not re.search(r'\d+:\d+=\d+:\d+=', lyrics):
+                        # Lyrics are plain text, try to get timed lyrics from extracted_lyrics
+                        self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - Lyrics are plain text, looking up timestamps from extracted_lyrics')
+                        extracted_lyrics = self.current_song.get('extracted_lyrics', '')
+                        if extracted_lyrics:
+                            lyrics_with_timestamps = self._extract_timed_lyrics_for_scene(lyrics, extracted_lyrics, scene_start_seconds, scene_end_seconds)
+                            self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - Extracted timed lyrics length: {len(lyrics_with_timestamps) if lyrics_with_timestamps else 0} chars')
+                        else:
+                            self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - No extracted_lyrics available, cannot convert plain text to timed format')
+                            lyrics_with_timestamps = ''
+                    
+                    # Process lyrics: convert time indices from absolute to relative (starting from 0)
+                    processed_lyrics = self._process_lyrics_for_lip_sync(lyrics_with_timestamps, scene_start_seconds, seconds_per_video)
+                    self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - processed_lyrics length: {len(processed_lyrics) if processed_lyrics else 0} chars')
+                    
+                    if processed_lyrics:
+                        final_prompt += "\n\nIMPORTANT: You shall synchronize the lyrics from the time index in the video so that lips sync works."
+                        final_prompt += "\nThis overrides other commands in this prompt, here are Words and timeindex:"
+                        final_prompt += "\n\n" + processed_lyrics
+                        self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - Added processed lyrics to prompt')
+                    else:
+                        self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - No processed lyrics to add')
+                else:
+                    if not lyrics:
+                        self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - Skipping lyrics processing (no lyrics)')
+                    if not prompt_starts_with_ref:
+                        self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - Skipping lyrics processing (prompt does not start with REFERENCE CHARACTER)')
+                
+                # Create JSON structure
+                export_data = {
+                    'generated_prompt': final_prompt
+                }
+                self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - Final prompt length: {len(final_prompt)} chars')
+                
+                # Write JSON file
+                with open(json_filename, 'w', encoding='utf-8') as f:
+                    json.dump(export_data, f, indent=2, ensure_ascii=False)
+                
+                exported_count += 1
+                self.log_debug('INFO', f'Exported generated prompt for scene {scene_num} to {json_filename}')
+                self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - Export successful')
+                
+            except Exception as e:
+                error_msg = f'Error exporting scene {scene_num}: {e}'
+                errors.append(error_msg)
+                self.log_debug('ERROR', error_msg)
+                import traceback
+                self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - Exception traceback:\n{traceback.format_exc()}')
+        
+        # Show result message
+        self.log_debug('DEBUG', f'=== export_generated_prompts: Summary ===')
+        self.log_debug('DEBUG', f'export_generated_prompts: Exported: {exported_count}, Skipped: {skipped_count}, Errors: {len(errors)}')
+        
+        if exported_count > 0:
+            if errors:
+                messagebox.showwarning('Partial Success', 
+                    f'Exported {exported_count} scene(s) successfully.\n\nErrors:\n' + '\n'.join(errors))
+            else:
+                messagebox.showinfo('Success', f'Exported {exported_count} scene(s) successfully.')
+        else:
+            messagebox.showwarning('Warning', f'No scenes with generated_prompt found to export. (Skipped {skipped_count} scenes without generated_prompt)')
+    
+    def _extract_timed_lyrics_for_scene(self, plain_lyrics: str, extracted_lyrics: str, scene_start_seconds: float, scene_end_seconds: float) -> str:
+        """Extract timed lyrics from extracted_lyrics that fall within the scene time range.
+        
+        Args:
+            plain_lyrics: Plain text lyrics from the scene (for reference, not used for matching)
+            extracted_lyrics: Full extracted lyrics with timestamps (e.g., "0:32=00:42=hit")
+            scene_start_seconds: Scene start time in seconds
+            scene_end_seconds: Scene end time in seconds
+            
+        Returns:
+            Timed lyrics string in format "0:32=00:42=hit" that fall within scene bounds
+        """
+        if not extracted_lyrics:
+            return ''
+        
+        # Parse extracted_lyrics into timed entries
+        lines = extracted_lyrics.strip().split('\n')
+        double_equals_pattern = re.compile(r'^(\d+):(\d+)=(\d+):(\d+)=(.+)$')
+        
+        matched_entries = []
+        
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            
+            match = double_equals_pattern.match(line)
+            if match:
+                start_minutes = int(match.group(1))
+                start_seconds = int(match.group(2))
+                end_minutes = int(match.group(3))
+                end_seconds = int(match.group(4))
+                word = match.group(5).strip()
+                
+                absolute_start = start_minutes * 60 + start_seconds
+                absolute_end = end_minutes * 60 + end_seconds
+                
+                # Include lyrics that overlap with the scene time range
+                # (start before scene ends and end after scene starts)
+                if absolute_start < scene_end_seconds and absolute_end > scene_start_seconds:
+                    matched_entries.append(line)
+        
+        result = '\n'.join(matched_entries)
+        return result
+    
+    def _parse_timestamp_to_seconds(self, timestamp: str) -> float:
+        """Parse timestamp string (MM:SS format) to seconds.
+        
+        Args:
+            timestamp: Timestamp string in MM:SS format
+            
+        Returns:
+            Seconds as float
+        """
+        try:
+            parts = timestamp.split(':')
+            if len(parts) == 2:
+                minutes = int(parts[0])
+                seconds = int(parts[1])
+                return minutes * 60 + seconds
+            return 0.0
+        except Exception:
+            return 0.0
+    
+    def _process_lyrics_for_lip_sync(self, lyrics: str, scene_start_seconds: float, scene_duration: int) -> str:
+        """Process lyrics to convert time indices from absolute to relative (starting from 0).
+        
+        Args:
+            lyrics: Lyrics text with timestamps in format 0:32=00:42=hit
+            scene_start_seconds: Scene start time in seconds (absolute)
+            scene_duration: Scene duration in seconds
+            
+        Returns:
+            Processed lyrics string with relative timestamps starting from 0
+        """
+        if not lyrics:
+            return ''
+        
+        lines = lyrics.strip().split('\n')
+        processed_lines = []
+        
+        # Pattern to match: 0:32=00:42=word or 0:32=00:42=word (start=end=word)
+        double_equals_pattern = re.compile(r'^(\d+):(\d+)=(\d+):(\d+)=(.+)$')
+        
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            
+            # Check for start_time=end_time=word format
+            match = double_equals_pattern.match(line)
+            if match:
+                start_minutes = int(match.group(1))
+                start_seconds = int(match.group(2))
+                end_minutes = int(match.group(3))
+                end_seconds = int(match.group(4))
+                word = match.group(5).strip()
+                
+                # Calculate absolute start time in seconds
+                absolute_start = start_minutes * 60 + start_seconds
+                absolute_end = end_minutes * 60 + end_seconds
+                
+                # Convert to relative time (starting from 0 for this scene)
+                relative_start = absolute_start - scene_start_seconds
+                relative_end = absolute_end - scene_start_seconds
+                
+                # Only include if the word starts within scene bounds (0 to scene_duration)
+                # If word starts before scene (negative relative_start), clamp to 0
+                if relative_start < 0:
+                    # Word starts before scene but ends during scene - include it at time 0
+                    clamped_start = 0.0
+                elif relative_start >= scene_duration:
+                    # Word starts after scene ends - exclude it
+                    continue
+                else:
+                    clamped_start = relative_start
+                
+                # Format as MM:SS (relative time starting from 0)
+                rel_minutes = int(clamped_start // 60)
+                rel_seconds = int(clamped_start % 60)
+                processed_line = f"{rel_minutes}:{rel_seconds:02d}={word}"
+                processed_lines.append(processed_line)
+        
+        result = '\n'.join(processed_lines)
+        return result
+
+    def generate_all_prompts(self):
+        """Generate prompts for all storyboard scenes and save them to config.json."""
+        if not self.current_song_path or not self.current_song:
+            messagebox.showwarning('Warning', 'No song selected. Please select a song first.')
+            return
+        
+        storyboard = self.current_song.get('storyboard', [])
+        if not storyboard:
+            messagebox.showwarning('Warning', 'No storyboard scenes found. Please generate storyboard first.')
+            return
+        
+        response = messagebox.askyesno('Generate All Prompts', 
+            f'Generate prompts for all {len(storyboard)} scenes? This may take a while.')
+        if not response:
+            return
+        
+        # Create progress dialog
+        progress_dialog = ProgressDialog(self, len(storyboard), 'Generating Storyboard Prompts')
+        progress_dialog.update()
+        
+        generated_count = 0
+        errors = []
+        
+        for idx, scene in enumerate(storyboard, 1):
+            if progress_dialog.is_cancelled():
+                self.log_debug('INFO', 'Prompt generation cancelled by user')
+                break
+            
+            scene_num = scene.get('scene')
+            base_prompt = scene.get('prompt', '')
+            lyrics = scene.get('lyrics', '')
+            
+            if not base_prompt:
+                continue
+            
+            try:
+                progress_dialog.update_progress(idx, f'Generating prompt for scene {scene_num} ({idx}/{len(storyboard)})...')
+                
+                # Build the final prompt (this includes persona detection, reference images, etc.)
+                # Don't include embed_lyrics note here - it will be applied when using the prompt
+                final_prompt = self.build_scene_image_prompt(str(scene_num), base_prompt, lyrics)
+                
+                # Save the generated prompt to config.json (without embed_lyrics note)
+                self._save_storyboard_generated_prompt(str(scene_num), final_prompt)
+                
+                generated_count += 1
+                self.log_debug('INFO', f'Generated and saved prompt for scene {scene_num}')
+                
+            except Exception as e:
+                error_msg = f'Error generating prompt for scene {scene_num}: {e}'
+                errors.append(error_msg)
+                self.log_debug('ERROR', error_msg)
+        
+        # Close progress dialog
+        progress_dialog.destroy()
+        
+        # Show result message
+        if generated_count > 0:
+            if errors:
+                messagebox.showwarning('Partial Success', 
+                    f'Generated {generated_count} prompt(s) successfully.\n\nErrors:\n' + '\n'.join(errors))
+            else:
+                messagebox.showinfo('Success', f'Generated {generated_count} prompt(s) successfully and saved to config.json.')
+        else:
+            messagebox.showwarning('Warning', 'No prompts were generated.')
+
     def generate_storyboard_image(self, scene_num: str, prompt: str, show_success_message: bool = True, lyrics: str = None):
         """Generate image for a storyboard scene.
         
@@ -9313,10 +9917,34 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
         if image_exists:
             self.log_debug('INFO', f'Scene {scene_num} image already exists, will show preview dialog: {image_filename}')
 
-        final_prompt = self.build_scene_image_prompt(scene_num, prompt, lyrics)
+        # Check if a generated_prompt exists in config.json for this scene
+        final_prompt = None
+        if self.current_song:
+            storyboard = self.current_song.get('storyboard', [])
+            scene_num_int = int(scene_num) if str(scene_num).isdigit() else None
+            
+            # Find the scene in the storyboard
+            for scene in storyboard:
+                scene_value = scene.get('scene')
+                # Handle both int and string scene numbers
+                if (scene_num_int is not None and scene_value == scene_num_int) or str(scene_value) == str(scene_num):
+                    stored_prompt = scene.get('generated_prompt', '')
+                    if stored_prompt:
+                        final_prompt = stored_prompt
+                        self.log_debug('INFO', f'Using stored generated_prompt for scene {scene_num}')
+                        break
+        
+        # If no stored prompt, build it
+        if not final_prompt:
+            final_prompt = self.build_scene_image_prompt(scene_num, prompt, lyrics)
+        
+        # Apply embed_lyrics setting (for both stored and newly built prompts)
         embed_enabled = bool(self.embed_lyrics_var.get()) if hasattr(self, 'embed_lyrics_var') else True
         if not embed_enabled:
-            final_prompt += "\n\nDO NOT embed lyrics as text in the scene. No visible text anywhere. Focus on visuals only."
+            embed_note = "\n\nDO NOT embed lyrics as text in the scene. No visible text anywhere. Focus on visuals only."
+            # Only add if not already present (to avoid duplication)
+            if embed_note.strip() not in final_prompt:
+                final_prompt += embed_note
         self.log_debug('INFO', f'Generating image for scene {scene_num}...')
         self.config(cursor='wait')
         self.update()
