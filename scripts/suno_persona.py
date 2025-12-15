@@ -2331,6 +2331,92 @@ class SunoPersona(tk.Tk):
             if preset.get('is_default'):
                 return preset.get('key', 'default')
         return presets[0].get('key', 'default')
+    
+    def _find_default_persona_front_image(self) -> str | None:
+        """Find a default persona's Front image to use as reference for new personas.
+        
+        Looks for:
+        1. A persona named "Default" (case-insensitive)
+        2. The first persona that has a Front image in the default preset
+        
+        Returns:
+            Path to Front image if found, None otherwise
+        """
+        if not hasattr(self, 'personas_path') or not os.path.exists(self.personas_path):
+            return None
+        
+        # First, try to find a persona named "Default"
+        default_persona_names = ['Default', 'default', 'DEFAULT']
+        for item in os.listdir(self.personas_path):
+            item_path = os.path.join(self.personas_path, item)
+            if not os.path.isdir(item_path) or item.startswith('_'):
+                continue
+            
+            config_file = os.path.join(item_path, 'config.json')
+            if not os.path.exists(config_file):
+                continue
+            
+            try:
+                config = load_persona_config(item_path)
+                persona_name = config.get('name', '').strip()
+                if persona_name in default_persona_names or item.lower() == 'default':
+                    # Found default persona, check for Front image
+                    safe_name = self._safe_filename(persona_name) if persona_name else item
+                    default_preset_key = 'default'
+                    # Try to get default preset from config
+                    presets = config.get('image_presets', [])
+                    for preset in presets:
+                        if preset.get('is_default'):
+                            default_preset_key = preset.get('key', 'default')
+                            break
+                    
+                    # Check default preset path
+                    if default_preset_key == 'default':
+                        front_path = os.path.join(item_path, f'{safe_name}-Front.png')
+                    else:
+                        front_path = os.path.join(item_path, 'image_presets', default_preset_key, f'{safe_name}-Front.png')
+                    
+                    if os.path.exists(front_path):
+                        self.log_debug('INFO', f'Found default persona Front image: {front_path}')
+                        return front_path
+            except Exception:
+                continue
+        
+        # If no "Default" persona found, look for any persona with a Front image
+        for item in os.listdir(self.personas_path):
+            item_path = os.path.join(self.personas_path, item)
+            if not os.path.isdir(item_path) or item.startswith('_'):
+                continue
+            
+            config_file = os.path.join(item_path, 'config.json')
+            if not os.path.exists(config_file):
+                continue
+            
+            try:
+                config = load_persona_config(item_path)
+                persona_name = config.get('name', '').strip()
+                safe_name = self._safe_filename(persona_name) if persona_name else item
+                
+                # Check default preset path
+                default_preset_key = 'default'
+                presets = config.get('image_presets', [])
+                for preset in presets:
+                    if preset.get('is_default'):
+                        default_preset_key = preset.get('key', 'default')
+                        break
+                
+                if default_preset_key == 'default':
+                    front_path = os.path.join(item_path, f'{safe_name}-Front.png')
+                else:
+                    front_path = os.path.join(item_path, 'image_presets', default_preset_key, f'{safe_name}-Front.png')
+                
+                if os.path.exists(front_path):
+                    self.log_debug('INFO', f'Found persona Front image to use as default reference: {front_path}')
+                    return front_path
+            except Exception:
+                continue
+        
+        return None
 
     def _get_preset_record(self, key: str) -> dict:
         """Return a preset record, ensuring it exists."""
@@ -2757,6 +2843,7 @@ class SunoPersona(tk.Tk):
         self.refresh_image_preset_controls()
         self.load_persona_info()
         self._load_preset_prompts_into_ui()
+        self._load_image_profile_selections()
         self.clear_album_form()
         self.refresh_songs_list()
         self.refresh_album_selector()
@@ -2813,6 +2900,10 @@ class SunoPersona(tk.Tk):
             os.makedirs(new_persona_path, exist_ok=True)
             os.makedirs(os.path.join(new_persona_path, 'AI-Songs'), exist_ok=True)
             
+            # Get default image profile
+            image_profiles = self._get_available_image_profiles()
+            default_image_profile = 'image_gen' if 'image_gen' in image_profiles else (image_profiles[0] if image_profiles else 'image_gen')
+            
             config = {
                 'name': result[0],
                 'age': '',
@@ -2827,7 +2918,9 @@ class SunoPersona(tk.Tk):
                 'image_presets': [
                     {'key': 'default', 'label': 'Main', 'is_default': True}
                 ],
-                'current_image_preset': 'default'
+                'current_image_preset': 'default',
+                'reference_image_profile': default_image_profile,
+                'profile_image_profile': default_image_profile
             }
             
             save_persona_config(new_persona_path, config)
@@ -3010,10 +3103,13 @@ class SunoPersona(tk.Tk):
         
         ttk.Label(btn_frame, text='API Profile:', font=('TkDefaultFont', 8)).pack(side=tk.LEFT, padx=(10, 2))
         image_profiles = self._get_available_image_profiles()
-        self.reference_image_profile_var = tk.StringVar(value='image_gen' if 'image_gen' in image_profiles else (image_profiles[0] if image_profiles else 'image_gen'))
+        default_ref_profile = 'image_gen' if 'image_gen' in image_profiles else (image_profiles[0] if image_profiles else 'image_gen')
+        self.reference_image_profile_var = tk.StringVar(value=default_ref_profile)
         reference_image_profile_combo = ttk.Combobox(btn_frame, textvariable=self.reference_image_profile_var, 
                                                      values=image_profiles, state='readonly', width=15)
         reference_image_profile_combo.pack(side=tk.LEFT, padx=2)
+        # Save profile selection when changed
+        self.reference_image_profile_var.trace_add('write', lambda *args: self._save_image_profile_selections())
         
         ttk.Button(btn_frame, text='Regenerate Front', command=lambda: self.generate_single_reference_view('Front')).pack(side=tk.RIGHT, padx=5)
         ttk.Button(btn_frame, text='Regenerate Side', command=lambda: self.generate_single_reference_view('Side')).pack(side=tk.RIGHT, padx=5)
@@ -3040,10 +3136,13 @@ class SunoPersona(tk.Tk):
         
         ttk.Label(prompt_toolbar, text='API Profile:', font=('TkDefaultFont', 8)).pack(side=tk.LEFT, padx=(12, 2))
         image_profiles = self._get_available_image_profiles()
-        self.profile_image_profile_var = tk.StringVar(value='image_gen' if 'image_gen' in image_profiles else (image_profiles[0] if image_profiles else 'image_gen'))
+        default_profile_profile = 'image_gen' if 'image_gen' in image_profiles else (image_profiles[0] if image_profiles else 'image_gen')
+        self.profile_image_profile_var = tk.StringVar(value=default_profile_profile)
         profile_image_profile_combo = ttk.Combobox(prompt_toolbar, textvariable=self.profile_image_profile_var, 
                                                    values=image_profiles, state='readonly', width=15)
         profile_image_profile_combo.pack(side=tk.LEFT, padx=2)
+        # Save profile selection when changed
+        self.profile_image_profile_var.trace_add('write', lambda *args: self._save_image_profile_selections())
         
         ttk.Button(prompt_toolbar, text='Generate Profile Images', command=self.generate_profile_images).pack(side=tk.RIGHT, padx=(6, 0))
         
@@ -3510,6 +3609,12 @@ class SunoPersona(tk.Tk):
         if hasattr(self, 'image_preset_var'):
             config['current_image_preset'] = self.image_preset_var.get() or self._get_default_image_preset_key()
         
+        # Save API profile selections
+        if hasattr(self, 'reference_image_profile_var'):
+            config['reference_image_profile'] = self.reference_image_profile_var.get()
+        if hasattr(self, 'profile_image_profile_var'):
+            config['profile_image_profile'] = self.profile_image_profile_var.get()
+        
         if save_persona_config(self.current_persona_path, config):
             self.current_persona = config
             self.log_debug('INFO', 'Persona saved successfully')
@@ -3517,6 +3622,49 @@ class SunoPersona(tk.Tk):
         else:
             messagebox.showerror('Error', 'Failed to save persona.')
             self.log_debug('ERROR', 'Failed to save persona')
+    
+    def _load_image_profile_selections(self):
+        """Load saved API profile selections from persona config."""
+        if not self.current_persona:
+            return
+        
+        image_profiles = self._get_available_image_profiles()
+        default_profile = 'image_gen' if 'image_gen' in image_profiles else (image_profiles[0] if image_profiles else 'image_gen')
+        
+        # Load reference image profile
+        if hasattr(self, 'reference_image_profile_var'):
+            saved_ref_profile = self.current_persona.get('reference_image_profile', default_profile)
+            # Validate the saved profile exists in available profiles
+            if saved_ref_profile in image_profiles:
+                self.reference_image_profile_var.set(saved_ref_profile)
+            else:
+                self.reference_image_profile_var.set(default_profile)
+        
+        # Load profile image profile
+        if hasattr(self, 'profile_image_profile_var'):
+            saved_profile_profile = self.current_persona.get('profile_image_profile', default_profile)
+            # Validate the saved profile exists in available profiles
+            if saved_profile_profile in image_profiles:
+                self.profile_image_profile_var.set(saved_profile_profile)
+            else:
+                self.profile_image_profile_var.set(default_profile)
+    
+    def _save_image_profile_selections(self):
+        """Save API profile selections to persona config."""
+        if not self.current_persona_path or not self.current_persona:
+            return
+        
+        config = dict(self.current_persona)
+        
+        # Save API profile selections
+        if hasattr(self, 'reference_image_profile_var'):
+            config['reference_image_profile'] = self.reference_image_profile_var.get()
+        if hasattr(self, 'profile_image_profile_var'):
+            config['profile_image_profile'] = self.profile_image_profile_var.get()
+        
+        # Save without showing message (silent save)
+        if save_persona_config(self.current_persona_path, config):
+            self.current_persona = config
     
     def reset_persona(self):
         """Reset persona info to saved values from config.json."""
@@ -4043,27 +4191,69 @@ class SunoPersona(tk.Tk):
         safe_name = self._safe_persona_basename()
         front_image_path = None
         
+        # Check if this is the first Front image (no Front exists yet)
+        current_front_path = os.path.join(base_path, f'{safe_name}-Front.png')
+        is_first_front = not os.path.exists(current_front_path)
+        
         # Optionally extract face/identity description from default preset Front to keep persona consistent
         default_preset_key = self._get_default_image_preset_key() if hasattr(self, '_get_default_image_preset_key') else 'default'
         default_base_path = self.get_persona_image_base_path(default_preset_key)
         default_front_path = os.path.join(default_base_path, f'{safe_name}-Front.png')
         default_front_description = ''
-        if os.path.exists(default_front_path) and default_preset_key != preset_key:
-            self.log_debug('INFO', f'Analyzing default preset Front image for identity anchor: {default_front_path}')
-            try:
-                analyze_prompt = (
-                    "Analyze this reference image and describe the character's exact facial structure, hair, and overall appearance. "
-                    "Provide a concise but complete identity description to reuse in another style preset. "
-                    "Exclude scene/background; focus on face, hair, and visible outfit silhouette."
-                )
-                analyze_default = self.azure_vision([default_front_path], analyze_prompt, profile='text')
-                if analyze_default.get('success'):
-                    default_front_description = analyze_default.get('content', '').strip()
-                    self.log_debug('INFO', 'Default Front identity extracted for reuse in new preset.')
-                else:
-                    self.log_debug('WARNING', f'Failed to analyze default Front image: {analyze_default.get("error", "Unknown error")}')
-            except Exception as e:
-                self.log_debug('WARNING', f'Error analyzing default Front image: {e}')
+        
+        # If this is the first Front image, try to use default persona's Front as reference
+        if is_first_front:
+            default_persona_front = self._find_default_persona_front_image()
+            if default_persona_front and os.path.exists(default_persona_front):
+                self.log_debug('INFO', f'Using default persona Front image as reference for first Front: {default_persona_front}')
+                try:
+                    analyze_prompt = (
+                        "Analyze this reference image and describe the character's exact facial structure, hair, skin color, and overall appearance. "
+                        "Provide a concise but complete identity description focusing on face, hair, and skin tone that must be matched exactly. "
+                        "Exclude scene/background; focus on face, hair, skin color, and visible outfit silhouette."
+                    )
+                    analyze_default = self.azure_vision([default_persona_front], analyze_prompt, profile='text')
+                    if analyze_default.get('success'):
+                        default_front_description = analyze_default.get('content', '').strip()
+                        self.log_debug('INFO', 'Default persona Front identity extracted for first Front generation.')
+                    else:
+                        self.log_debug('WARNING', f'Failed to analyze default persona Front image: {analyze_default.get("error", "Unknown error")}')
+                except Exception as e:
+                    self.log_debug('WARNING', f'Error analyzing default persona Front image: {e}')
+        
+        # ALWAYS use default preset Front image as reference when generating for a custom preset
+        if default_preset_key != preset_key and os.path.exists(default_front_path):
+            if not default_front_description:
+                self.log_debug('INFO', f'Analyzing default preset Front image for identity anchor: {default_front_path}')
+                try:
+                    analyze_prompt = (
+                        "Analyze this reference image and describe the character's exact facial structure, hair, skin color, and overall appearance. "
+                        "Provide a concise but complete identity description focusing on face, hair, and skin tone that must be matched exactly. "
+                        "Exclude scene/background; focus on face, hair, skin color, and visible outfit silhouette."
+                    )
+                    analyze_default = self.azure_vision([default_front_path], analyze_prompt, profile='text')
+                    if analyze_default.get('success'):
+                        default_front_description = analyze_default.get('content', '').strip()
+                        self.log_debug('INFO', 'Default preset Front identity extracted for reuse in custom preset.')
+                    else:
+                        self.log_debug('WARNING', f'Failed to analyze default preset Front image: {analyze_default.get("error", "Unknown error")}')
+                except Exception as e:
+                    self.log_debug('WARNING', f'Error analyzing default preset Front image: {e}')
+            else:
+                # If we already have description from default persona, still prioritize default preset Front
+                self.log_debug('INFO', f'Using default preset Front image as reference (overriding default persona reference): {default_front_path}')
+                try:
+                    analyze_prompt = (
+                        "Analyze this reference image and describe the character's exact facial structure, hair, skin color, and overall appearance. "
+                        "Provide a concise but complete identity description focusing on face, hair, and skin tone that must be matched exactly. "
+                        "Exclude scene/background; focus on face, hair, skin color, and visible outfit silhouette."
+                    )
+                    analyze_default = self.azure_vision([default_front_path], analyze_prompt, profile='text')
+                    if analyze_default.get('success'):
+                        default_front_description = analyze_default.get('content', '').strip()
+                        self.log_debug('INFO', 'Default preset Front identity extracted (overriding default persona).')
+                except Exception as e:
+                    self.log_debug('WARNING', f'Error analyzing default preset Front image: {e}')
         
         # Step 1: Generate Front image first
         self.log_debug('INFO', 'Generating Front reference image...')
@@ -4078,7 +4268,16 @@ class SunoPersona(tk.Tk):
                 "OVERRIDE any portrait/waist-up/head-and-shoulders/cropped instructions: MUST show entire figure head-to-toe with shoes and feet visible on floor, "
                 "leave margin above head and below feet, do NOT crop ankles or shoes"
             )
-            identity_snippet = f"IDENTITY ANCHOR FROM DEFAULT PRESET: {default_front_description}. " if default_front_description else ""
+            if default_front_description:
+                if default_preset_key != preset_key:
+                    # Always use default preset Front as reference for custom presets
+                    identity_snippet = f"REFERENCE CHARACTER FROM DEFAULT PRESET FRONT IMAGE (MUST MATCH EXACTLY - face, skin color, hair): {default_front_description}. "
+                elif is_first_front:
+                    identity_snippet = f"REFERENCE CHARACTER FROM DEFAULT PERSONA (MUST MATCH EXACTLY - face, skin color, hair): {default_front_description}. "
+                else:
+                    identity_snippet = f"IDENTITY ANCHOR FROM DEFAULT PRESET: {default_front_description}. "
+            else:
+                identity_snippet = ""
             prompt = f"{view_specific}, {identity_snippet}{base_prompt}, pure white background, "
             prompt += "FULL BODY VISIBLE from head to toe, feet and shoes clearly visible on floor, entire figure in frame, "
             prompt += "full-length portrait, generous margin above head and below feet, no cropping, no cut-off body parts, no close-up, no zoom-in, "
@@ -4126,9 +4325,12 @@ class SunoPersona(tk.Tk):
         
         character_description = ""
         try:
-            analyze_prompt = "Analyze this Front reference image and provide a detailed description of the character's appearance, including: "
-            analyze_prompt += "exact clothing details, colors, textures, styling, hair, accessories, pose, lighting style, and all visual characteristics. "
-            analyze_prompt += "Output ONLY a detailed character description that can be used to generate matching Side and Back views with the same appearance."
+            analyze_prompt = "Analyze this Front reference image and provide a detailed description of the character's appearance. CRITICAL: You must include: "
+            analyze_prompt += "EXACT SKIN COLOR AND TONE (describe precisely - e.g., dark brown, medium tan, light olive, etc.), "
+            analyze_prompt += "facial features (face shape, eye color, nose, lips, bone structure), "
+            analyze_prompt += "hair (color, texture, style, length), "
+            analyze_prompt += "exact clothing details, colors, textures, styling, accessories, pose, lighting style, and all visual characteristics. "
+            analyze_prompt += "Output ONLY a detailed character description that can be used to generate matching Side and Back views with the EXACT SAME skin color, facial features, and appearance."
             
             analyze_result = self.azure_vision([front_image_path], analyze_prompt, profile='text')
             
@@ -4172,14 +4374,17 @@ class SunoPersona(tk.Tk):
                 # Create prompt that uses the character description from Front image
                 if character_description:
                     # Use the analyzed character description to ensure visual consistency
-                    image_prompt = f"{character_description}, {view_specific}, pure white background, "
+                    # CRITICAL: Emphasize matching skin color and facial features
+                    image_prompt = f"REFERENCE CHARACTER FROM FRONT IMAGE (MUST MATCH EXACTLY): {character_description}. "
+                    image_prompt += f"CRITICAL REQUIREMENT: The {view.lower()} view MUST have the EXACT SAME skin color, facial features, hair color, and overall appearance as the Front image. "
+                    image_prompt += f"{view_specific}, pure white background, "
                 else:
                     # Fallback to base prompt if analysis failed
                     image_prompt = f"{base_prompt}, {view_specific}, pure white background, "
                 
                 image_prompt += "FULL BODY VISIBLE from head to toe, feet and shoes clearly visible on floor, entire figure in frame, "
                 image_prompt += "full-length portrait, generous margin above head and below feet, no cropping, no cut-off body parts, no close-up, no zoom-in, "
-                image_prompt += "Match the exact same character appearance, clothing, styling, and visual details from the Front reference image, "
+                image_prompt += "Match the EXACT SAME character appearance, skin color, facial features, clothing, styling, and visual details from the Front reference image, "
                 image_prompt += "professional reference photo, studio photography, clean minimalist composition, "
                 image_prompt += "even studio lighting with subtle dramatic shadows, high quality professional photography, "
                 image_prompt += "no background elements, sharp focus, professional portrait photography style, reference sheet style, full-body shot"
@@ -4287,10 +4492,45 @@ class SunoPersona(tk.Tk):
         
         try:
             if view == 'Front':
+                # Check if this is the first Front image (no Front exists yet)
+                is_first_front = not os.path.exists(current_front_path)
+                
                 identity_snippet = ''
-                if os.path.exists(default_front_path) and default_preset_key != preset_key:
-                    identity_snippet = analyze_identity(default_front_path)
-                identity_text = f"IDENTITY ANCHOR FROM DEFAULT PRESET: {identity_snippet}. " if identity_snippet else ''
+                # If this is the first Front, try to use default persona's Front as reference
+                if is_first_front:
+                    default_persona_front = self._find_default_persona_front_image()
+                    if default_persona_front and os.path.exists(default_persona_front):
+                        self.log_debug('INFO', f'Using default persona Front image as reference for first Front: {default_persona_front}')
+                        analyze_prompt = (
+                            "Analyze this reference image and describe the character's exact facial structure, hair, skin color, and overall appearance. "
+                            "Provide a concise but complete identity description focusing on face, hair, and skin tone that must be matched exactly. "
+                            "Exclude scene/background; focus on face, hair, skin color, and visible outfit silhouette."
+                        )
+                        analyze_result = self.azure_vision([default_persona_front], analyze_prompt, profile='text')
+                        if analyze_result.get('success'):
+                            identity_snippet = analyze_result.get('content', '').strip()
+                            self.log_debug('INFO', 'Default persona Front identity extracted for first Front generation.')
+                
+                # ALWAYS use default preset Front if generating for a custom preset
+                if default_preset_key != preset_key and os.path.exists(default_front_path):
+                    if not identity_snippet:
+                        identity_snippet = analyze_identity(default_front_path)
+                        self.log_debug('INFO', 'Using default preset Front image as reference for custom preset.')
+                    else:
+                        # Override with default preset Front (takes priority)
+                        identity_snippet = analyze_identity(default_front_path)
+                        self.log_debug('INFO', 'Default preset Front image overriding default persona reference for custom preset.')
+                
+                if identity_snippet:
+                    if default_preset_key != preset_key:
+                        # Always use default preset Front as reference for custom presets
+                        identity_text = f"REFERENCE CHARACTER FROM DEFAULT PRESET FRONT IMAGE (MUST MATCH EXACTLY - face, skin color, hair): {identity_snippet}. "
+                    elif is_first_front:
+                        identity_text = f"REFERENCE CHARACTER FROM DEFAULT PERSONA (MUST MATCH EXACTLY - face, skin color, hair): {identity_snippet}. "
+                    else:
+                        identity_text = f"IDENTITY ANCHOR FROM DEFAULT PRESET: {identity_snippet}. "
+                else:
+                    identity_text = ''
                 prompt = f"{build_view_specific('Front')}, {identity_text}{base_prompt}, pure white background, "
                 prompt += "FULL BODY VISIBLE from head to toe, feet and shoes clearly visible on floor, entire figure in frame, "
                 prompt += "full-length portrait, generous margin above head and below feet, no cropping, no cut-off body parts, no close-up, no zoom-in, "
@@ -4324,11 +4564,13 @@ class SunoPersona(tk.Tk):
             # Analyze current front for identity/appearance
             character_description = ''
             try:
-                analyze_prompt = (
-                    "Analyze this Front reference image and provide a detailed description of the character's appearance, including: "
-                    "exact clothing details, colors, textures, styling, hair, accessories, pose, lighting style, and all visual characteristics. "
-                    "Output ONLY a detailed character description that can be used to generate matching Side and Back views with the same appearance."
-                )
+                analyze_prompt = "Analyze this Front reference image and provide a detailed description of the character's appearance. CRITICAL: You must include: "
+                analyze_prompt += "EXACT SKIN COLOR AND TONE (describe precisely - e.g., dark brown, medium tan, light olive, etc.), "
+                analyze_prompt += "facial features (face shape, eye color, nose, lips, bone structure), "
+                analyze_prompt += "hair (color, texture, style, length), "
+                analyze_prompt += "exact clothing details, colors, textures, styling, accessories, pose, lighting style, and all visual characteristics. "
+                analyze_prompt += "Output ONLY a detailed character description that can be used to generate matching Side and Back views with the EXACT SAME skin color, facial features, and appearance."
+                
                 analyze_result = self.azure_vision([current_front_path], analyze_prompt, profile='text')
                 if analyze_result.get('success'):
                     character_description = analyze_result.get('content', '').strip()
@@ -4342,11 +4584,14 @@ class SunoPersona(tk.Tk):
                 messagebox.showerror('Error', 'Failed to extract character details from Front image. Please regenerate the Front view and try again.')
                 return
             
-            image_prompt = f"{character_description}, {build_view_specific(view)}, pure white background, "
+            # CRITICAL: Emphasize matching skin color and facial features
+            image_prompt = f"REFERENCE CHARACTER FROM FRONT IMAGE (MUST MATCH EXACTLY): {character_description}. "
+            image_prompt += f"CRITICAL REQUIREMENT: The {view.lower()} view MUST have the EXACT SAME skin color, facial features, hair color, and overall appearance as the Front image. "
+            image_prompt += f"{build_view_specific(view)}, pure white background, "
             
             image_prompt += "FULL BODY VISIBLE from head to toe, feet and shoes clearly visible on floor, entire figure in frame, "
             image_prompt += "full-length portrait, generous margin above head and below feet, no cropping, no cut-off body parts, no close-up, no zoom-in, "
-            image_prompt += "Match the exact same character appearance, clothing, styling, and visual details from the Front reference image, "
+            image_prompt += "Match the EXACT SAME character appearance, skin color, facial features, clothing, styling, and visual details from the Front reference image, "
             image_prompt += "professional reference photo, studio photography, clean minimalist composition, "
             image_prompt += "even studio lighting with subtle dramatic shadows, high quality professional photography, "
             image_prompt += "no background elements, sharp focus, professional portrait photography style, reference sheet style, full-body shot"
