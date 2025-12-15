@@ -5063,6 +5063,8 @@ class SunoPersona(tk.Tk):
         ttk.Button(button_frame, text='Generate Storyboard', command=self.generate_storyboard).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text='Generate All Prompts', command=self.generate_all_prompts).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text='Export Generated Prompts', command=self.export_generated_prompts).pack(side=tk.LEFT, padx=5)
+        self.include_lyrics_in_export_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(button_frame, text='Include Lyrics in Export', variable=self.include_lyrics_in_export_var).pack(side=tk.LEFT, padx=5)
 
         # Lyrics handling options (moved to storyboard)
         options_frame = ttk.LabelFrame(main_frame, text='Lyrics Handling', padding=5)
@@ -9893,11 +9895,15 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
                 lyrics = scene.get('lyrics', '')
                 self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - has lyrics: {bool(lyrics)}, lyrics length: {len(lyrics) if lyrics else 0} chars')
                 
+                # Check if lyrics should be included (checkbox enabled)
+                include_lyrics = self.include_lyrics_in_export_var.get() if hasattr(self, 'include_lyrics_in_export_var') else False
+                self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - include_lyrics checkbox: {include_lyrics}')
+                
                 # Check if lyrics exist and generated_prompt starts with "REFERENCE CHARACTER"
                 prompt_starts_with_ref = generated_prompt.strip().startswith('REFERENCE CHARACTER')
                 self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - prompt starts with REFERENCE CHARACTER: {prompt_starts_with_ref}')
                 
-                if lyrics and prompt_starts_with_ref:
+                if lyrics and prompt_starts_with_ref and include_lyrics:
                     # Parse scene start time from timestamp
                     scene_timestamp = scene.get('timestamp', '0:00')
                     scene_start_seconds = self._parse_timestamp_to_seconds(scene_timestamp)
@@ -9929,9 +9935,11 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
                     else:
                         self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - No processed lyrics to add')
                 else:
-                    if not lyrics:
+                    if not include_lyrics:
+                        self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - Skipping lyrics processing (include_lyrics checkbox disabled)')
+                    elif not lyrics:
                         self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - Skipping lyrics processing (no lyrics)')
-                    if not prompt_starts_with_ref:
+                    elif not prompt_starts_with_ref:
                         self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - Skipping lyrics processing (prompt does not start with REFERENCE CHARACTER)')
                 
                 # Create JSON structure
