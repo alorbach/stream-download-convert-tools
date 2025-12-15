@@ -2482,6 +2482,18 @@ class SunoPersona(tk.Tk):
                 processed_paths.append(path)
         return call_azure_vision(self.ai_config, processed_paths if processed_paths else image_paths, prompt, system_message=system_message, profile=profile)
     
+    def _get_available_image_profiles(self):
+        """Get list of available image generation profiles from config."""
+        if not hasattr(self, 'ai_config') or not self.ai_config:
+            return ['image_gen']
+        
+        profiles = self.ai_config.get('profiles', {})
+        # Return all profile names that exist in config
+        # Typically these would be image_gen and potentially other image-related profiles
+        available = list(profiles.keys())
+        # If no profiles found, default to image_gen
+        return available if available else ['image_gen']
+    
     def azure_image(self, prompt: str, size: str = '1024x1024', profile: str = 'image_gen', quality: str = 'medium', output_format: str = 'png', output_compression: int = 100) -> dict:
         """Wrapper to call Azure Image generation and log the prompt."""
         self.log_prompt_debug('Azure Image prompt', prompt, None)
@@ -4277,7 +4289,10 @@ class SunoPersona(tk.Tk):
         ttk.Label(scrollable_frame, text='Lyrics:', font=('TkDefaultFont', 9, 'bold')).grid(row=4, column=0, sticky=tk.NW, pady=5)
         self.lyrics_text = scrolledtext.ScrolledText(scrollable_frame, height=6, wrap=tk.WORD, width=60)
         self.lyrics_text.grid(row=4, column=1, columnspan=2, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
-        ttk.Button(scrollable_frame, text='Generate', command=self.generate_lyrics).grid(row=4, column=3, padx=5, pady=5, sticky=tk.N)
+        lyrics_btn_frame = ttk.Frame(scrollable_frame)
+        lyrics_btn_frame.grid(row=4, column=3, padx=5, pady=5, sticky=tk.N)
+        ttk.Button(lyrics_btn_frame, text='Generate', command=self.generate_lyrics).pack(fill=tk.X, pady=(0, 4))
+        ttk.Button(lyrics_btn_frame, text='Copy Distro Lyrics', command=self.copy_distro_lyrics).pack(fill=tk.X)
         
         ttk.Label(scrollable_frame, text='Song Style:', font=('TkDefaultFont', 9, 'bold')).grid(row=5, column=0, sticky=tk.NW, pady=5)
         self.song_style_text = scrolledtext.ScrolledText(scrollable_frame, height=3, wrap=tk.WORD, width=60)
@@ -4326,6 +4341,13 @@ class SunoPersona(tk.Tk):
         album_cover_format_combo = ttk.Combobox(album_cover_toolbar, textvariable=self.album_cover_format_var, 
                                                values=['PNG', 'JPEG'], state='readonly', width=8)
         album_cover_format_combo.pack(side=tk.LEFT, padx=2)
+        
+        ttk.Label(album_cover_toolbar, text='API Profile:', font=('TkDefaultFont', 8)).pack(side=tk.LEFT, padx=(10, 2))
+        image_profiles = self._get_available_image_profiles()
+        self.album_cover_profile_var = tk.StringVar(value='image_gen' if 'image_gen' in image_profiles else (image_profiles[0] if image_profiles else 'image_gen'))
+        album_cover_profile_combo = ttk.Combobox(album_cover_toolbar, textvariable=self.album_cover_profile_var, 
+                                                 values=image_profiles, state='readonly', width=15)
+        album_cover_profile_combo.pack(side=tk.LEFT, padx=2)
         
         self.album_cover_text = scrolledtext.ScrolledText(album_cover_frame, height=6, wrap=tk.WORD, width=60)
         self.album_cover_text.pack(fill=tk.BOTH, expand=True)
@@ -4531,6 +4553,7 @@ class SunoPersona(tk.Tk):
         
         ttk.Button(controls_frame, text='Extract Lyrics from MP3', command=self.extract_and_display_lyrics).pack(side=tk.LEFT, padx=5)
         ttk.Button(controls_frame, text='Copy to Lyrics Field', command=self.copy_extracted_to_lyrics).pack(side=tk.LEFT, padx=5)
+        ttk.Button(controls_frame, text='Sync with original Lyrics', command=self.sync_extracted_with_original_lyrics).pack(side=tk.LEFT, padx=5)
         
         # Extracted lyrics display
         lyrics_frame = ttk.LabelFrame(main_frame, text='Extracted Lyrics (with timestamps)', padding=5)
@@ -4565,6 +4588,13 @@ class SunoPersona(tk.Tk):
                                                 '4:3 (1365x1024)', '9:16 (1024x1792)', '21:9 (2048x1024)'],
                                         state='readonly', width=18)
         image_size_combo.pack(side=tk.LEFT, padx=5)
+        
+        ttk.Label(controls_frame, text='API Profile:', font=('TkDefaultFont', 9, 'bold')).pack(side=tk.LEFT, padx=(10, 5))
+        image_profiles = self._get_available_image_profiles()
+        self.storyboard_image_profile_var = tk.StringVar(value='image_gen' if 'image_gen' in image_profiles else (image_profiles[0] if image_profiles else 'image_gen'))
+        storyboard_image_profile_combo = ttk.Combobox(controls_frame, textvariable=self.storyboard_image_profile_var, 
+                                                      values=image_profiles, state='readonly', width=15)
+        storyboard_image_profile_combo.pack(side=tk.LEFT, padx=5)
 
         ttk.Label(controls_frame, text='Persona Scenes %:', font=('TkDefaultFont', 9, 'bold')).pack(side=tk.LEFT, padx=(10, 5))
         self.persona_scene_percent_var = tk.StringVar(value='40')
@@ -5585,6 +5615,217 @@ class SunoPersona(tk.Tk):
         self.log_debug('INFO', 'Copied extracted lyrics to lyrics field')
         messagebox.showinfo('Success', 'Copied extracted lyrics to lyrics field.')
     
+    def sync_extracted_with_original_lyrics(self):
+        """Sync extracted lyrics with original lyrics using AI to fix wrong word detections."""
+        if not hasattr(self, 'extracted_lyrics_text'):
+            messagebox.showwarning('Warning', 'Extracted lyrics text field not available.')
+            return
+        
+        extracted_lyrics = self.extracted_lyrics_text.get('1.0', tk.END).strip()
+        if not extracted_lyrics:
+            messagebox.showwarning('Warning', 'No extracted lyrics to sync.')
+            return
+        
+        original_lyrics = self.lyrics_text.get('1.0', tk.END).strip() if hasattr(self, 'lyrics_text') else ''
+        if not original_lyrics:
+            messagebox.showwarning('Warning', 'No original lyrics found in lyrics field. Please add original lyrics first.')
+            return
+        
+        self.log_debug('INFO', 'Syncing extracted lyrics with original lyrics using AI...')
+        self.config(cursor='wait')
+        self.update()
+        
+        try:
+            # Helper function to extract text only (without timestamps) for comparison
+            def extract_text_only(lyrics_with_timestamps):
+                # Remove timestamp patterns like [00:12.34], 0:12=, etc.
+                text = re.sub(r'\[?\d+:\d+(?:\.\d+)?\]?', '', lyrics_with_timestamps)
+                text = re.sub(r'\d+:\d+=', '', text)
+                # Remove extra whitespace
+                text = ' '.join(text.split())
+                return text.lower()
+            
+            # Helper function to split lyrics into chunks
+            def split_lyrics_into_chunks(lyrics_text, chunk_size=60):
+                """Split lyrics into chunks of approximately chunk_size lines."""
+                lines = lyrics_text.split('\n')
+                chunks = []
+                current_chunk = []
+                current_line_count = 0
+                
+                for line in lines:
+                    current_chunk.append(line)
+                    current_line_count += 1
+                    
+                    if current_line_count >= chunk_size:
+                        chunks.append('\n'.join(current_chunk))
+                        current_chunk = []
+                        current_line_count = 0
+                
+                # Add remaining lines as last chunk
+                if current_chunk:
+                    chunks.append('\n'.join(current_chunk))
+                
+                return chunks
+            
+            # Helper function to process a single chunk
+            def process_chunk(chunk_extracted, chunk_index, total_chunks):
+                prompt = f"""Review the extracted lyrics (with timestamps) and compare them with the original lyrics. Fix any wrong word detections while preserving the exact timestamp format.
+
+EXTRACTED LYRICS (with timestamps) - Chunk {chunk_index + 1} of {total_chunks}:
+{chunk_extracted}
+
+ORIGINAL LYRICS (reference):
+{original_lyrics}
+
+Instructions:
+1. Compare the extracted lyrics with the original lyrics
+2. Fix any wrong word detections in the extracted lyrics
+3. Preserve the exact timestamp format (e.g., [00:12.34] or 0:12=text or similar)
+4. Keep the timing information intact - only correct the words
+5. Return the corrected extracted lyrics with timestamps in the same format as the input
+
+IMPORTANT: Return your response as JSON in this exact format:
+{{
+  "success": true,
+  "corrected_lyrics": "the corrected lyrics with timestamps here"
+}}
+
+If you cannot process this chunk (e.g., too long), set "success": false and include an "error" field with the reason."""
+                
+                system_message = "You are a lyrics correction assistant. Your task is to fix wrong word detections in extracted lyrics while preserving timestamp formatting exactly. Always return JSON format."
+                
+                result = self.azure_ai(prompt, system_message=system_message, profile='text', max_tokens=8000, temperature=0.3)
+                
+                response_text = (result.get('content') or '').strip()
+                if not response_text:
+                    return {'success': False, 'error': 'AI did not return a response'}
+                
+                # Try to parse JSON response
+                try:
+                    # Try to extract JSON from response (might be wrapped in markdown code blocks)
+                    # Look for JSON object starting with { and containing "success"
+                    json_start = response_text.find('{')
+                    if json_start != -1:
+                        # Find matching closing brace
+                        brace_count = 0
+                        json_end = json_start
+                        for i in range(json_start, len(response_text)):
+                            if response_text[i] == '{':
+                                brace_count += 1
+                            elif response_text[i] == '}':
+                                brace_count -= 1
+                                if brace_count == 0:
+                                    json_end = i + 1
+                                    break
+                        
+                        if json_end > json_start:
+                            json_str = response_text[json_start:json_end]
+                            response_json = json.loads(json_str)
+                        else:
+                            # Try parsing the whole response as JSON
+                            response_json = json.loads(response_text)
+                    else:
+                        # Try parsing the whole response as JSON
+                        response_json = json.loads(response_text)
+                    
+                    if not response_json.get('success', False):
+                        error_msg = response_json.get('error', 'Unknown error from AI')
+                        return {'success': False, 'error': error_msg}
+                    
+                    corrected = response_json.get('corrected_lyrics', '').strip()
+                    if not corrected:
+                        return {'success': False, 'error': 'AI returned success but no corrected lyrics'}
+                    
+                    return {'success': True, 'corrected_lyrics': corrected}
+                    
+                except json.JSONDecodeError:
+                    # If JSON parsing fails, check if it's an error message
+                    if 'exceed' in response_text.lower() or 'too long' in response_text.lower() or 'split' in response_text.lower():
+                        return {'success': False, 'error': 'Response too long - needs chunking'}
+                    # Try to use the response as-is if it looks like lyrics
+                    if any(char in response_text for char in ['=', '[', ':', '\n']):
+                        return {'success': True, 'corrected_lyrics': response_text}
+                    return {'success': False, 'error': 'Could not parse AI response as JSON or lyrics'}
+            
+            # Check if lyrics need to be chunked (estimate: if more than ~50 lines)
+            extracted_lines = extracted_lyrics.split('\n')
+            needs_chunking = len(extracted_lines) > 50
+            
+            if needs_chunking:
+                # Split into chunks and process each
+                chunks = split_lyrics_into_chunks(extracted_lyrics, chunk_size=50)
+                self.log_debug('INFO', f'Splitting lyrics into {len(chunks)} chunks for processing')
+                
+                corrected_chunks = []
+                total_words_changed = 0
+                
+                for i, chunk in enumerate(chunks):
+                    self.log_debug('INFO', f'Processing chunk {i + 1} of {len(chunks)}')
+                    chunk_result = process_chunk(chunk, i, len(chunks))
+                    
+                    if not chunk_result.get('success', False):
+                        error_msg = chunk_result.get('error', 'Unknown error')
+                        messagebox.showerror('Error', f'Failed to process chunk {i + 1} of {len(chunks)}:\n{error_msg}')
+                        self.log_debug('ERROR', f'Chunk {i + 1} failed: {error_msg}')
+                        return
+                    
+                    corrected_chunks.append(chunk_result['corrected_lyrics'])
+                
+                # Combine all corrected chunks
+                corrected_lyrics = '\n'.join(corrected_chunks)
+            else:
+                # Process as single chunk
+                result = process_chunk(extracted_lyrics, 0, 1)
+                
+                if not result.get('success', False):
+                    error_msg = result.get('error', 'Unknown error')
+                    messagebox.showerror('Error', f'Failed to sync lyrics:\n{error_msg}')
+                    self.log_debug('ERROR', f'Sync failed: {error_msg}')
+                    return
+                
+                corrected_lyrics = result['corrected_lyrics']
+            
+            if not corrected_lyrics:
+                messagebox.showerror('Error', 'AI did not return corrected lyrics.')
+                self.log_debug('ERROR', 'AI did not return corrected lyrics')
+                return
+            
+            # Count word differences between original and corrected extracted lyrics
+            original_text = extract_text_only(extracted_lyrics)
+            corrected_text = extract_text_only(corrected_lyrics)
+            
+            # Count word differences
+            original_words = set(original_text.split())
+            corrected_words = set(corrected_text.split())
+            words_added = len(corrected_words - original_words)
+            words_removed = len(original_words - corrected_words)
+            words_changed = words_added + words_removed
+            
+            # Show confirmation dialog with statistics
+            stats_msg = f"AI review completed.\n\n"
+            stats_msg += f"Words added: {words_added}\n"
+            stats_msg += f"Words removed: {words_removed}\n"
+            stats_msg += f"Total changes: {words_changed}\n\n"
+            stats_msg += f"Merge the corrected extracted lyrics?"
+            
+            response = messagebox.askyesno('Sync Lyrics', stats_msg)
+            
+            if response:
+                # Update extracted lyrics with corrected version
+                self.extracted_lyrics_text.delete('1.0', tk.END)
+                self.extracted_lyrics_text.insert('1.0', corrected_lyrics)
+                self.log_debug('INFO', f'Merged corrected extracted lyrics ({words_changed} words changed)')
+                messagebox.showinfo('Success', f'Successfully merged corrected extracted lyrics.\n{words_changed} words were fixed.')
+            else:
+                self.log_debug('INFO', 'User cancelled merging corrected extracted lyrics')
+                
+        except Exception as e:
+            messagebox.showerror('Error', f'Failed to sync lyrics: {e}')
+            self.log_debug('ERROR', f'Failed to sync lyrics: {e}')
+        finally:
+            self.config(cursor='')
+    
     def save_song(self):
         """Save song info to config.json."""
         if not self.current_song_path:
@@ -6303,6 +6544,69 @@ class SunoPersona(tk.Tk):
         except Exception as e:
             messagebox.showerror('Error', f'Error generating lyrics: {e}')
             self.log_debug('ERROR', f'Error generating lyrics: {e}')
+        finally:
+            self.config(cursor='')
+
+    def copy_distro_lyrics(self):
+        """Format lyrics for distribution platforms and copy to clipboard."""
+        lyrics = self.lyrics_text.get('1.0', tk.END).strip() if hasattr(self, 'lyrics_text') else ''
+        if not lyrics:
+            messagebox.showwarning('Warning', 'No lyrics found. Please add lyrics first.')
+            return
+        
+        self.log_debug('INFO', 'Formatting lyrics for distribution...')
+        self.config(cursor='wait')
+        self.update()
+        
+        try:
+            prompt = f"""Format the following song lyrics for distribution platforms like DistroKid.
+
+RAW LYRICS:
+{lyrics}
+
+INSTRUCTIONS:
+1. Remove section labels like [Intro], [Verse 1], [Chorus], [Bridge], [Outro], etc.
+2. Remove stage directions, annotations, and metadata
+3. Capitalize the first letter of each line using standard sentence capitalization
+4. Remove punctuation at the end of lines (periods, commas, etc.)
+5. If a line is intentionally shouted (all caps), normalize it to standard capitalization
+6. Write out repeated sections fully - do not use shorthand like "chorus x2"
+7. Remove blank lines except for single blank lines between logical sections (verses, hooks, bridges)
+8. Keep one sentence or phrase per line - split very long lines if needed
+9. Remove filler words like "yeah", "oh", "uh" unless they are clearly part of the sung lyrics
+10. Convert stylized separators (dashes, em dashes) into plain words or spacing
+11. Preserve the lyrical meaning, tone, and structure
+12. Do not censor explicit language unless it was bleeped in the original
+13. Preserve intentional line breaks that affect the flow
+
+OUTPUT:
+Return ONLY the formatted lyrics text. Do not include any explanations, error messages, or commentary. If the lyrics cannot be formatted, return them as-is with minimal formatting applied."""
+            
+            system_message = "You are a lyrics formatting assistant. Format the provided lyrics according to the instructions and return only the formatted lyrics text. Do not include error messages, explanations, or validation comments - just return the formatted lyrics."
+            
+            result = self.azure_ai(prompt, system_message=system_message, profile='text', max_tokens=8000, temperature=0.3)
+            
+            if result['success']:
+                formatted_lyrics = result['content'].strip()
+                if not formatted_lyrics:
+                    messagebox.showerror('Error', 'AI did not return formatted lyrics.')
+                    self.log_debug('ERROR', 'AI did not return formatted lyrics')
+                    return
+                
+                # Copy to clipboard
+                self.clipboard_clear()
+                self.clipboard_append(formatted_lyrics)
+                self.update()
+                
+                self.log_debug('INFO', 'Formatted lyrics copied to clipboard')
+                messagebox.showinfo('Success', 'Distribution-ready lyrics have been copied to clipboard.')
+            else:
+                messagebox.showerror('Error', f'Failed to format lyrics: {result.get("error", "Unknown error")}')
+                self.log_debug('ERROR', f'Failed to format lyrics: {result.get("error", "Unknown error")}')
+                
+        except Exception as e:
+            messagebox.showerror('Error', f'Error formatting lyrics: {e}')
+            self.log_debug('ERROR', f'Error formatting lyrics: {e}')
         finally:
             self.config(cursor='')
 
@@ -9018,9 +9322,14 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
         self.update()
 
         image_size = self.get_storyboard_image_size()
+        
+        # Get selected profile for storyboard images
+        selected_profile = 'image_gen'
+        if hasattr(self, 'storyboard_image_profile_var'):
+            selected_profile = self.storyboard_image_profile_var.get() or 'image_gen'
 
         try:
-            result = self.azure_image(final_prompt, size=image_size, profile='image_gen')
+            result = self.azure_image(final_prompt, size=image_size, profile=selected_profile)
 
             if result['success']:
                 img_bytes = result.get('image_bytes', b'')
@@ -9164,8 +9473,13 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
         image_size = self.get_album_cover_image_size()
         image_format = self.get_album_cover_format()
         
+        # Get selected profile for album cover
+        selected_profile = 'image_gen'
+        if hasattr(self, 'album_cover_profile_var'):
+            selected_profile = self.album_cover_profile_var.get() or 'image_gen'
+        
         try:
-            result = self.azure_image(prompt, size=image_size, profile='image_gen', output_format=image_format)
+            result = self.azure_image(prompt, size=image_size, profile=selected_profile, output_format=image_format)
         finally:
             self.config(cursor='')
         
