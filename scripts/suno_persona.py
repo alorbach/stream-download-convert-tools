@@ -3007,6 +3007,14 @@ class SunoPersona(tk.Tk):
         ttk.Button(btn_frame, text='Refresh Images', command=self.refresh_persona_images).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_frame, text='Generate Reference Images', command=self.generate_reference_images).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_frame, text='Generate From Reference Images', command=self.generate_from_reference_images).pack(side=tk.LEFT, padx=5)
+        
+        ttk.Label(btn_frame, text='API Profile:', font=('TkDefaultFont', 8)).pack(side=tk.LEFT, padx=(10, 2))
+        image_profiles = self._get_available_image_profiles()
+        self.reference_image_profile_var = tk.StringVar(value='image_gen' if 'image_gen' in image_profiles else (image_profiles[0] if image_profiles else 'image_gen'))
+        reference_image_profile_combo = ttk.Combobox(btn_frame, textvariable=self.reference_image_profile_var, 
+                                                     values=image_profiles, state='readonly', width=15)
+        reference_image_profile_combo.pack(side=tk.LEFT, padx=2)
+        
         ttk.Button(btn_frame, text='Regenerate Front', command=lambda: self.generate_single_reference_view('Front')).pack(side=tk.RIGHT, padx=5)
         ttk.Button(btn_frame, text='Regenerate Side', command=lambda: self.generate_single_reference_view('Side')).pack(side=tk.RIGHT, padx=5)
         ttk.Button(btn_frame, text='Regenerate Back', command=lambda: self.generate_single_reference_view('Back')).pack(side=tk.RIGHT, padx=5)
@@ -3029,6 +3037,13 @@ class SunoPersona(tk.Tk):
         self.profile_image_count_var = tk.IntVar(value=2)
         tk.Spinbox(prompt_toolbar, from_=1, to=10, width=5, textvariable=self.profile_image_count_var).pack(side=tk.LEFT)
         ttk.Label(prompt_toolbar, text='(1-10)').pack(side=tk.LEFT, padx=(4, 0))
+        
+        ttk.Label(prompt_toolbar, text='API Profile:', font=('TkDefaultFont', 8)).pack(side=tk.LEFT, padx=(12, 2))
+        image_profiles = self._get_available_image_profiles()
+        self.profile_image_profile_var = tk.StringVar(value='image_gen' if 'image_gen' in image_profiles else (image_profiles[0] if image_profiles else 'image_gen'))
+        profile_image_profile_combo = ttk.Combobox(prompt_toolbar, textvariable=self.profile_image_profile_var, 
+                                                   values=image_profiles, state='readonly', width=15)
+        profile_image_profile_combo.pack(side=tk.LEFT, padx=2)
         
         ttk.Button(prompt_toolbar, text='Generate Profile Images', command=self.generate_profile_images).pack(side=tk.RIGHT, padx=(6, 0))
         
@@ -3969,7 +3984,8 @@ class SunoPersona(tk.Tk):
             variation_prompt = f"{final_prompt}\n\nPROFILE VARIATION {i+1}: keep the same character identity while varying camera angle, lighting, and subtle expression."
             
             try:
-                result = self.azure_image(variation_prompt, size='1024x1024', profile='image_gen')
+                selected_profile = self.profile_image_profile_var.get() if hasattr(self, 'profile_image_profile_var') else 'image_gen'
+                result = self.azure_image(variation_prompt, size='1024x1024', profile=selected_profile)
                 if result['success']:
                     img_bytes = result.get('image_bytes', b'')
                     if img_bytes:
@@ -4072,7 +4088,8 @@ class SunoPersona(tk.Tk):
             prompt += "sharp focus, professional portrait photography style, reference sheet style, full-body shot"
             
             # Use a supported tall aspect ratio to reduce cropping
-            result = self.azure_image(prompt, size='1024x1536', profile='image_gen')
+            selected_profile = self.reference_image_profile_var.get() if hasattr(self, 'reference_image_profile_var') else 'image_gen'
+            result = self.azure_image(prompt, size='1024x1536', profile=selected_profile)
             
             if result['success']:
                 img_bytes = result.get('image_bytes', b'')
@@ -4168,7 +4185,8 @@ class SunoPersona(tk.Tk):
                 image_prompt += "no background elements, sharp focus, professional portrait photography style, reference sheet style, full-body shot"
                 
                 # Use a supported tall aspect ratio to reduce cropping
-                result_img = self.azure_image(image_prompt, size='1024x1536', profile='image_gen')
+                selected_profile = self.reference_image_profile_var.get() if hasattr(self, 'reference_image_profile_var') else 'image_gen'
+                result_img = self.azure_image(image_prompt, size='1024x1536', profile=selected_profile)
                 
                 if result_img['success']:
                     img_bytes = result_img.get('image_bytes', b'')
@@ -4281,7 +4299,8 @@ class SunoPersona(tk.Tk):
                 prompt += "no background elements, no props except those described in the base prompt, "
                 prompt += "sharp focus, professional portrait photography style, reference sheet style, full-body shot"
                 
-                result = self.azure_image(prompt, size='1024x1536', profile='image_gen')
+                selected_profile = self.reference_image_profile_var.get() if hasattr(self, 'reference_image_profile_var') else 'image_gen'
+                result = self.azure_image(prompt, size='1024x1536', profile=selected_profile)
                 if result.get('success'):
                     img_bytes = result.get('image_bytes', b'')
                     if img_bytes:
@@ -4332,7 +4351,8 @@ class SunoPersona(tk.Tk):
             image_prompt += "even studio lighting with subtle dramatic shadows, high quality professional photography, "
             image_prompt += "no background elements, sharp focus, professional portrait photography style, reference sheet style, full-body shot"
             
-            result_img = self.azure_image(image_prompt, size='1024x1536', profile='image_gen')
+            selected_profile = self.reference_image_profile_var.get() if hasattr(self, 'reference_image_profile_var') else 'image_gen'
+            result_img = self.azure_image(image_prompt, size='1024x1536', profile=selected_profile)
             if result_img.get('success'):
                 img_bytes = result_img.get('image_bytes', b'')
                 if img_bytes:

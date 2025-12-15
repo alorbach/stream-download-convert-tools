@@ -50,72 +50,16 @@ if exist "%ROOT_DIR%\requirements.txt" (
 )
 
 echo.
-echo [INFO] Available Audio/Video Tools:
-echo.
-echo 1. Audio Tools Unified
-echo 2. YouTube Downloader
-echo 3. Video to MP3 Converter  
-echo 4. Audio Modifier
-echo 5. MP3 to Video Converter
-echo 6. Video Editor
-echo 7. Exit
+echo [INFO] Launching Launcher GUI...
 echo.
 
-:menu
-set /p choice="Please select a tool (1-7): "
+REM Launch the GUI launcher
+"%PYTHON_EXE%" "%ROOT_DIR%\scripts\launcher_gui.py"
 
-if "%choice%"=="1" goto audio_unified
-if "%choice%"=="2" goto youtube_downloader
-if "%choice%"=="3" goto video_converter
-if "%choice%"=="4" goto audio_modifier
-if "%choice%"=="5" goto mp3_to_video_converter
-if "%choice%"=="6" goto video_editor
-if "%choice%"=="7" goto exit
-echo [ERROR] Invalid choice. Please select 1-7.
-goto menu
+if errorlevel 1 (
+    echo [ERROR] Failed to launch GUI launcher.
+    pause
+    exit /b 1
+)
 
-:youtube_downloader
-echo.
-echo [INFO] Launching YouTube Downloader...
-call "%ROOT_DIR%\launchers\youtube_downloader.bat"
-goto end
-
-:video_converter
-echo.
-echo [INFO] Launching Video to MP3 Converter...
-call "%ROOT_DIR%\launchers\video_to_mp3_converter.bat"
-goto end
-
-:audio_modifier
-echo.
-echo [INFO] Launching Audio Modifier...
-call "%ROOT_DIR%\launchers\audio_modifier.bat"
-goto end
-
-:audio_unified
-echo.
-echo [INFO] Launching Audio Tools Unified...
-call "%ROOT_DIR%\launchers\audio_tools_unified.bat"
-goto end
-
-:mp3_to_video_converter
-echo.
-echo [INFO] Launching MP3 to Video Converter...
-call "%ROOT_DIR%\launchers\mp3_to_video_converter.bat"
-goto end
-
-:video_editor
-echo.
-echo [INFO] Launching Video Editor...
-call "%ROOT_DIR%\launchers\video_editor.bat"
-goto end
-
-:exit
-echo.
-echo [INFO] Goodbye!
-goto end
-
-:end
-echo.
-pause
 endlocal

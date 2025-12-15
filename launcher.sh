@@ -46,67 +46,13 @@ else
 fi
 
 echo ""
-echo "[INFO] Available Audio/Video Tools:"
-echo ""
-echo "1. Audio Tools Unified"
-echo "2. YouTube Downloader"
-echo "3. Video to MP3 Converter"
-echo "4. Audio Modifier"
-echo "5. MP3 to Video Converter"
-echo "6. Video Editor"
-echo "7. Exit"
+echo "[INFO] Launching Launcher GUI..."
 echo ""
 
-while true; do
-    read -p "Please select a tool (1-7): " choice
-    
-    case $choice in
-        1)
-            echo ""
-            echo "[INFO] Launching Audio Tools Unified..."
-            bash "$ROOT_DIR/launchers/audio_tools_unified.sh"
-            break
-            ;;
-        2)
-            echo ""
-            echo "[INFO] Launching YouTube Downloader..."
-            bash "$ROOT_DIR/launchers/youtube_downloader.sh"
-            break
-            ;;
-        3)
-            echo ""
-            echo "[INFO] Launching Video to MP3 Converter..."
-            bash "$ROOT_DIR/launchers/video_to_mp3_converter.sh"
-            break
-            ;;
-        4)
-            echo ""
-            echo "[INFO] Launching Audio Modifier..."
-            bash "$ROOT_DIR/launchers/audio_modifier.sh"
-            break
-            ;;
-        5)
-            echo ""
-            echo "[INFO] Launching MP3 to Video Converter..."
-            bash "$ROOT_DIR/launchers/mp3_to_video_converter.sh"
-            break
-            ;;
-        6)
-            echo ""
-            echo "[INFO] Launching Video Editor..."
-            bash "$ROOT_DIR/launchers/video_editor.sh"
-            break
-            ;;
-        7)
-            echo ""
-            echo "[INFO] Goodbye!"
-            exit 0
-            ;;
-        *)
-            echo "[ERROR] Invalid choice. Please select 1-7."
-            ;;
-    esac
-done
+# Launch the GUI launcher
+"$PYTHON_EXE" "$ROOT_DIR/scripts/launcher_gui.py"
 
-echo ""
-read -p "Press Enter to continue..."
+if [ $? -ne 0 ]; then
+    echo "[ERROR] Failed to launch GUI launcher."
+    exit 1
+fi
