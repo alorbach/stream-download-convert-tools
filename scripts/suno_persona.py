@@ -2294,6 +2294,16 @@ class SunoPersona(tk.Tk):
         cleaned = re.sub(r'\s+([,;])', r'\1', cleaned)
         return cleaned.strip(' ,;')
 
+    def _remove_parenthetical_content(self, text: str) -> str:
+        """Remove parenthetical content (e.g., ' - (devotional folk meditative)') from song names."""
+        if not text:
+            return text
+        # Remove patterns like " - (content)" or " (content)" at the end
+        # This handles both " - (content)" and " (content)" patterns
+        cleaned = re.sub(r'\s*-\s*\([^)]*\)\s*$', '', text)
+        cleaned = re.sub(r'\s*\([^)]*\)\s*$', '', cleaned)
+        return cleaned.strip()
+
     def _safe_filename(self, name: str) -> str:
         """Return a filesystem-safe string for filenames."""
         return name.replace(' ', '-').replace(':', '_').replace('/', '_').replace('\\', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace("'", '_').replace('<', '_').replace('>', '_').replace('|', '_')
@@ -6846,7 +6856,10 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
         for sid in songs:
             spath = os.path.join(self.current_persona_path, 'AI-Songs', sid)
             scfg = load_song_config(spath)
-            song_titles.append(scfg.get('song_name', sid))
+            raw_title = scfg.get('song_name', sid)
+            # Remove parenthetical content from song titles
+            clean_title = self._remove_parenthetical_content(raw_title)
+            song_titles.append(clean_title if clean_title else raw_title)
 
         merged_style = self._get_sanitized_style_text()
         storyboard_theme = self.storyboard_theme_text.get('1.0', tk.END).strip() if hasattr(self, 'storyboard_theme_text') else ''
@@ -6880,6 +6893,7 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
             "\nReturn only the album cover image prompt text."
             "\nMANDATORY TYPOGRAPHY: Render the full album title and persona/artist name verbatim, with no truncation, no abbreviation, and no ellipsis. Text must be fully readable in the final cover."
             "\nTEXT LAYOUT RULES: Reserve clear space so the full title and artist fit without clipping. Do not crop or cut off any characters. Adjust composition/scale to keep 100% of the text visible and readable. No ellipsis, no partial words."
+            "\nIMPORTANT: If any song names contain parenthetical content (e.g., ' - (devotional folk meditative)'), ignore it completely. Do not include any parenthetical descriptions or style keywords in the album cover prompt. Use only the core song titles without any parenthetical additions."
         )
 
         try:
@@ -7729,13 +7743,16 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
         # Build base prompt
         artist_name = self.current_persona.get('name', '')
         prompt = f"Generate an album cover prompt for '{song_name}' by the AI persona '{artist_name}'."
-        prompt += f"\n\nFull Song Name: {full_song_name}"
+        # Remove parenthetical content from full_song_name for prompt generation
+        clean_full_song_name = self._remove_parenthetical_content(full_song_name) if full_song_name else ''
+        prompt += f"\n\nFull Song Name: {clean_full_song_name if clean_full_song_name else full_song_name}"
         prompt += f"\n\nMerged Style: {merged_style}"
         if storyboard_theme:
             prompt += f"\n\nSTORYBOARD THEME (MANDATORY - primary art direction): {storyboard_theme}"
             prompt += "\nUse this storyboard theme 100% as the core visual aesthetic. All album cover decisions must align with it."
         # Ensure title/artist appear on the cover
-        album_title = full_song_name if full_song_name else song_name
+        # Use cleaned version without parenthetical content for album title
+        album_title = clean_full_song_name if clean_full_song_name else (full_song_name if full_song_name else song_name)
         if album_title or artist_name:
             prompt += "\n\nMANDATORY TEXT ELEMENTS:"
             if album_title:
@@ -7770,6 +7787,9 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
             "\n- Place the persona wherever the scene reads best (left/right third, foreground or background, over-shoulder, partial silhouette, small-in-frame, or cropped)."
             "\n- Choose the strongest composition for this scene; only center if the scene explicitly benefits from it."
         )
+        
+        # Instruction to ignore parenthetical content
+        prompt += "\n\nIMPORTANT: If the song name contains parenthetical content (e.g., ' - (devotional folk meditative)'), ignore it completely. Do not include any parenthetical descriptions or style keywords in the album cover prompt. Use only the core song title without any parenthetical additions."
         
         # If reference images exist, use vision API to analyze them
         if reference_images:
