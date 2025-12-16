@@ -4859,9 +4859,12 @@ TECHNICAL REQUIREMENTS:
         song_details_tab = ttk.Frame(details_notebook)
         descriptions_tab = ttk.Frame(details_notebook)
         storyboard_tab = ttk.Frame(details_notebook)
+        distribution_tab = ttk.Frame(details_notebook)
         details_notebook.add(song_details_tab, text='Song Details')
         details_notebook.add(descriptions_tab, text='Song Description')
         details_notebook.add(storyboard_tab, text='Storyboard')
+        details_notebook.add(distribution_tab, text='Distribution')
+        self.create_distribution_tab(distribution_tab)
 
         canvas = tk.Canvas(song_details_tab)
         scrollbar = ttk.Scrollbar(song_details_tab, orient="vertical", command=canvas.yview)
@@ -5635,6 +5638,218 @@ TECHNICAL REQUIREMENTS:
         
         self.log_debug('INFO', f'Regenerated {len(regenerated)} scene(s) successfully.')
 
+    def create_distribution_tab(self, parent):
+        """Create the Distribution tab for song distribution settings."""
+        main_frame = ttk.Frame(parent, padding=10)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Spotify Category dropdown
+        category_frame = ttk.Frame(main_frame)
+        category_frame.grid(row=0, column=0, columnspan=2, sticky=tk.W+tk.E, pady=5, padx=5)
+        
+        ttk.Label(category_frame, text='Spotify Category:', font=('TkDefaultFont', 9, 'bold')).grid(row=0, column=0, sticky=tk.W, padx=(0, 5))
+        
+        spotify_genres = [
+            'Afrobeat',
+            'Afropop',
+            'Alternative',
+            'Big Band',
+            'Blues',
+            "Children's Music",
+            'Christian/Gospel',
+            'Classical',
+            'Comedy',
+            'Country',
+            'Dance',
+            'Electronic',
+            'Fitness & Workout',
+            'Folk',
+            'French Pop',
+            'German Folk',
+            'German Pop',
+            'Hip Hop/Rap',
+            'Holiday',
+            'J-Pop',
+            'Jazz',
+            'K-Pop',
+            'Latin',
+            'Latin Urban',
+            'Metal',
+            'New Age',
+            'Pop',
+            'Punk',
+            'R&B/Soul',
+            'Reggae',
+            'Rock',
+            'Singer/Songwriter',
+            'Soundtrack',
+            'Spoken Word',
+            'Vocal',
+            'World'
+        ]
+        
+        self.spotify_category_var = tk.StringVar()
+        spotify_category_combo = ttk.Combobox(category_frame, textvariable=self.spotify_category_var, 
+                                             values=spotify_genres, state='readonly', width=30)
+        spotify_category_combo.grid(row=0, column=1, sticky=tk.W, padx=5)
+        
+        ttk.Button(category_frame, text='AI Decide', command=self.ai_suggest_spotify_category).grid(row=0, column=2, padx=5)
+        
+        # Secondary Spotify Category dropdown
+        secondary_category_frame = ttk.Frame(main_frame)
+        secondary_category_frame.grid(row=1, column=0, columnspan=2, sticky=tk.W+tk.E, pady=5, padx=5)
+        
+        ttk.Label(secondary_category_frame, text='Spotify Category (Secondary):', font=('TkDefaultFont', 9, 'bold')).grid(row=0, column=0, sticky=tk.W, padx=(0, 5))
+        
+        self.spotify_category_secondary_var = tk.StringVar()
+        spotify_category_secondary_combo = ttk.Combobox(secondary_category_frame, textvariable=self.spotify_category_secondary_var, 
+                                                        values=spotify_genres, state='readonly', width=30)
+        spotify_category_secondary_combo.grid(row=0, column=1, sticky=tk.W, padx=5)
+        
+        category_frame.columnconfigure(1, weight=1)
+        secondary_category_frame.columnconfigure(1, weight=1)
+        main_frame.columnconfigure(0, weight=1)
+
+    def ai_suggest_spotify_category(self):
+        """Use AI to analyze the song and suggest the appropriate Spotify category."""
+        if not self.current_song:
+            messagebox.showwarning('Warning', 'Please select a song first.')
+            return
+        
+        song_name = self.song_name_var.get().strip() if hasattr(self, 'song_name_var') else ''
+        song_style = self.song_style_text.get('1.0', tk.END).strip() if hasattr(self, 'song_style_text') else ''
+        merged_style = self.merged_style_text.get('1.0', tk.END).strip() if hasattr(self, 'merged_style_text') else ''
+        lyrics = self.lyrics_text.get('1.0', tk.END).strip() if hasattr(self, 'lyrics_text') else ''
+        
+        # Get persona genre tags if available
+        genre_tags = []
+        if self.current_persona:
+            genre_tags = self.current_persona.get('genre_tags', [])
+            if isinstance(genre_tags, list):
+                genre_tags_text = ', '.join([t for t in genre_tags if t])
+            else:
+                genre_tags_text = str(genre_tags or '')
+        else:
+            genre_tags_text = ''
+        
+        spotify_genres = [
+            'Afrobeat', 'Afropop', 'Alternative', 'Big Band', 'Blues', "Children's Music",
+            'Christian/Gospel', 'Classical', 'Comedy', 'Country', 'Dance', 'Electronic',
+            'Fitness & Workout', 'Folk', 'French Pop', 'German Folk', 'German Pop',
+            'Hip Hop/Rap', 'Holiday', 'J-Pop', 'Jazz', 'K-Pop', 'Latin', 'Latin Urban',
+            'Metal', 'New Age', 'Pop', 'Punk', 'R&B/Soul', 'Reggae', 'Rock',
+            'Singer/Songwriter', 'Soundtrack', 'Spoken Word', 'Vocal', 'World'
+        ]
+        
+        system_message = (
+            "You are a music categorization expert. Analyze the provided song information "
+            "and determine the most appropriate Spotify category/genre. "
+            "Return ONLY the exact category name from the provided list, nothing else."
+        )
+        
+        prompt = (
+            "Analyze this song and determine the most appropriate Spotify category.\n\n"
+            f"Song Name: {song_name}\n"
+            f"Song Style: {song_style}\n"
+            f"Merged Style: {merged_style}\n"
+        )
+        
+        if genre_tags_text:
+            prompt += f"Genre Tags: {genre_tags_text}\n"
+        
+        if lyrics:
+            # Include a sample of lyrics (first 500 chars) for context
+            lyrics_sample = lyrics[:500] + ('...' if len(lyrics) > 500 else '')
+            prompt += f"Lyrics Sample: {lyrics_sample}\n"
+        
+        prompt += (
+            "\nAvailable Spotify Categories:\n"
+            + ', '.join(spotify_genres) +
+            "\n\nReturn the most appropriate PRIMARY category and optionally a SECONDARY category. "
+            "Format your response as: PRIMARY: [category name]\nSECONDARY: [category name] (or leave blank if not needed). "
+            "If you only provide one category, it will be used as the primary."
+        )
+        
+        self.config(cursor='wait')
+        self.update()
+        
+        try:
+            result = self.azure_ai(prompt, system_message=system_message, profile='text', max_tokens=100, temperature=0.3)
+            
+            if result.get('success'):
+                ai_text = (result.get('content') or '').strip()
+                
+                # Extract primary and secondary categories from AI response
+                suggested_primary = None
+                suggested_secondary = None
+                
+                # Try to parse "PRIMARY: [category]" and "SECONDARY: [category]" format
+                lines = ai_text.split('\n')
+                for line in lines:
+                    line_lower = line.lower().strip()
+                    if 'primary:' in line_lower:
+                        category_text = line_lower.split('primary:')[1].strip()
+                        suggested_primary = self._find_matching_category(category_text, spotify_genres)
+                    elif 'secondary:' in line_lower:
+                        category_text = line_lower.split('secondary:')[1].strip()
+                        if category_text and category_text not in ['', 'none', 'n/a']:
+                            suggested_secondary = self._find_matching_category(category_text, spotify_genres)
+                
+                # If format parsing didn't work, try to find categories in the text
+                if not suggested_primary:
+                    # Look for the first matching category as primary
+                    for genre in spotify_genres:
+                        if genre.lower() in ai_text.lower():
+                            suggested_primary = genre
+                            break
+                
+                if not suggested_secondary and suggested_primary:
+                    # Look for a second matching category as secondary
+                    remaining_text = ai_text.lower().replace(suggested_primary.lower(), '', 1)
+                    for genre in spotify_genres:
+                        if genre.lower() in remaining_text and genre != suggested_primary:
+                            suggested_secondary = genre
+                            break
+                
+                if suggested_primary:
+                    self.spotify_category_var.set(suggested_primary)
+                    self.log_debug('INFO', f'AI suggested primary Spotify category: {suggested_primary}')
+                    
+                    if suggested_secondary:
+                        self.spotify_category_secondary_var.set(suggested_secondary)
+                        self.log_debug('INFO', f'AI suggested secondary Spotify category: {suggested_secondary}')
+                        messagebox.showinfo('Success', f'AI suggested categories:\nPrimary: {suggested_primary}\nSecondary: {suggested_secondary}')
+                    else:
+                        messagebox.showinfo('Success', f'AI suggested primary category: {suggested_primary}')
+                else:
+                    self.log_debug('WARNING', f'AI response did not match any category. Response: {ai_text}')
+                    messagebox.showwarning('Warning', f'Could not determine category from AI response.\n\nAI said: {ai_text}\n\nPlease select manually.')
+            else:
+                error_msg = result.get('error', 'Unknown error')
+                self.log_debug('ERROR', f'AI category suggestion failed: {error_msg}')
+                messagebox.showerror('Error', f'Failed to get AI suggestion: {error_msg}')
+        except Exception as exc:
+            self.log_debug('ERROR', f'AI category suggestion exception: {exc}')
+            messagebox.showerror('Error', f'Failed to get AI suggestion: {exc}')
+        finally:
+            self.config(cursor='')
+    
+    def _find_matching_category(self, text: str, spotify_genres: list) -> str | None:
+        """Find a matching Spotify category from text."""
+        text_lower = text.lower().strip()
+        
+        # Try exact match first
+        for genre in spotify_genres:
+            if genre.lower() == text_lower:
+                return genre
+        
+        # Try partial match
+        for genre in spotify_genres:
+            if genre.lower() in text_lower or text_lower in genre.lower():
+                return genre
+        
+        return None
+
     def on_storyboard_select(self, event=None):
         """Show full prompt for the first selected storyboard scene."""
         if not hasattr(self, 'storyboard_tree') or not hasattr(self, 'storyboard_preview_text'):
@@ -6103,6 +6318,12 @@ TECHNICAL REQUIREMENTS:
                 self.storyboard_image_size_var.set(self.current_song.get('storyboard_image_size', '3:2 (1536x1024)'))
             self.load_storyboard()
         
+        # Load Spotify Category
+        if hasattr(self, 'spotify_category_var'):
+            self.spotify_category_var.set(self.current_song.get('spotify_category', ''))
+        if hasattr(self, 'spotify_category_secondary_var'):
+            self.spotify_category_secondary_var.set(self.current_song.get('spotify_category_secondary', ''))
+        
         # Check if MP3 file exists and enable/disable play button
         self.update_play_button()
     
@@ -6136,6 +6357,10 @@ TECHNICAL REQUIREMENTS:
             self.embed_lyrics_var.set(True)
         if hasattr(self, 'embed_keywords_var'):
             self.embed_keywords_var.set(False)
+        if hasattr(self, 'spotify_category_var'):
+            self.spotify_category_var.set('')
+        if hasattr(self, 'spotify_category_secondary_var'):
+            self.spotify_category_secondary_var.set('')
         self.scene_final_prompts = {}
     
     def get_mp3_filepath(self) -> str:
@@ -6505,7 +6730,9 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
             'embed_lyrics_in_prompt': bool(self.embed_lyrics_var.get()) if hasattr(self, 'embed_lyrics_var') else True,
             'embed_keywords_in_prompt': bool(self.embed_keywords_var.get()) if hasattr(self, 'embed_keywords_var') else False,
             'storyboard_setup_count': int(self.storyboard_setup_count_var.get() or 6) if hasattr(self, 'storyboard_setup_count_var') else 6,
-            'persona_image_preset': self.song_persona_preset_var.get().strip() if hasattr(self, 'song_persona_preset_var') and self.song_persona_preset_var.get() else self.current_persona.get('current_image_preset', 'default') if self.current_persona else 'default'
+            'persona_image_preset': self.song_persona_preset_var.get().strip() if hasattr(self, 'song_persona_preset_var') and self.song_persona_preset_var.get() else self.current_persona.get('current_image_preset', 'default') if self.current_persona else 'default',
+            'spotify_category': self.spotify_category_var.get().strip() if hasattr(self, 'spotify_category_var') else '',
+            'spotify_category_secondary': self.spotify_category_secondary_var.get().strip() if hasattr(self, 'spotify_category_secondary_var') else ''
         }
         
         if save_song_config(self.current_song_path, config):
