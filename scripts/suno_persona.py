@@ -2693,9 +2693,37 @@ class SunoPersona(tk.Tk):
         return keywords[:3]
 
     def _extract_major_keyword(self, text: str) -> str:
-        """Extract a simple major keyword from text (lyrics or prompt)."""
+        """Extract a simple major keyword from text (lyrics or prompt) using AI."""
         if not text:
             return ''
+        
+        # Try AI extraction first
+        try:
+            prompt = f"""Extract the single most important keyword from the following text. 
+The keyword should be the main theme, subject, or central concept.
+
+Text:
+{text}
+
+Return only the single most important keyword, nothing else. Just one word."""
+            
+            system_message = "You are a keyword extraction assistant. Extract the single most important keyword from the given text. Return only the keyword, no explanation or additional text."
+            
+            result = self.azure_ai(prompt, system_message=system_message, profile='text', max_tokens=50, temperature=0.3)
+            
+            if result.get('success') and result.get('content'):
+                keyword = result.get('content', '').strip()
+                # Clean up the response - remove quotes, extra whitespace, and take first word if multiple
+                keyword = keyword.strip('"\'')
+                keyword = keyword.split()[0] if keyword.split() else ''
+                # Remove any trailing punctuation
+                keyword = re.sub(r'[^\w\s-]', '', keyword)
+                if keyword and len(keyword) > 2:
+                    return keyword.lower()
+        except Exception as e:
+            self.log_debug('DEBUG', f'AI keyword extraction failed, falling back to rule-based: {e}')
+        
+        # Fallback to rule-based extraction if AI fails
         clean = re.sub(r'[^a-zA-Z0-9\s]', ' ', text)
         words = [w.lower() for w in clean.split() if len(w) > 3]
         stop = {'this', 'that', 'with', 'from', 'into', 'over', 'under', 'about', 'above', 'below', 'there', 'here', 'they', 'them', 'were', 'your', 'yours', 'their', 'the', 'and', 'for', 'into', 'onto', 'upon', 'have', 'will', 'shall', 'would', 'could', 'should', 'ever', 'never'}
@@ -3114,6 +3142,7 @@ class SunoPersona(tk.Tk):
         ttk.Button(btn_frame, text='Regenerate Front', command=lambda: self.generate_single_reference_view('Front')).pack(side=tk.RIGHT, padx=5)
         ttk.Button(btn_frame, text='Regenerate Side', command=lambda: self.generate_single_reference_view('Side')).pack(side=tk.RIGHT, padx=5)
         ttk.Button(btn_frame, text='Regenerate Back', command=lambda: self.generate_single_reference_view('Back')).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(btn_frame, text='Delete All Reference Images', command=self.delete_persona_reference_images).pack(side=tk.RIGHT, padx=5)
 
         # Profile image generator (lives here so prompts sit with persona reference context)
         profile_frame = ttk.LabelFrame(main_frame, text='Profile Image Generator', padding=8)
@@ -4201,8 +4230,16 @@ class SunoPersona(tk.Tk):
         default_front_path = os.path.join(default_base_path, f'{safe_name}-Front.png')
         default_front_description = ''
         
-        # If this is the first Front image, try to use default persona's Front as reference
-        if is_first_front:
+        # CRITICAL: For initial Front image in default preset, use ONLY base_prompt, NO reference images
+        is_initial_default_front = is_first_front and preset_key == default_preset_key
+        
+        if is_initial_default_front:
+            # Initial Front image for default profile - use ONLY base_prompt, NO reference images
+            self.log_debug('INFO', 'Generating initial Front image for default profile - using ONLY base image prompt, NO reference images')
+            default_front_description = ''  # Explicitly set to empty to ensure no reference is used
+        elif is_first_front:
+            # For regenerations or custom presets, use reference images as before
+            # If this is the first Front image, try to use default persona's Front as reference
             default_persona_front = self._find_default_persona_front_image()
             if default_persona_front and os.path.exists(default_persona_front):
                 self.log_debug('INFO', f'Using default persona Front image as reference for first Front: {default_persona_front}')
@@ -4261,30 +4298,54 @@ class SunoPersona(tk.Tk):
         self.update()
         
         try:
-            view_specific = (
-                "full-body portrait, facing camera straight-on (not profile or 3/4), "
-                "shoulders squared, eyes looking into camera, standing upright, long shot, "
-                "camera distance set to capture entire height, subject centered, no turning away, "
-                "OVERRIDE any portrait/waist-up/head-and-shoulders/cropped instructions: MUST show entire figure head-to-toe with shoes and feet visible on floor, "
-                "leave margin above head and below feet, do NOT crop ankles or shoes"
-            )
-            if default_front_description:
-                if default_preset_key != preset_key:
-                    # Always use default preset Front as reference for custom presets
-                    identity_snippet = f"REFERENCE CHARACTER FROM DEFAULT PRESET FRONT IMAGE (MUST MATCH EXACTLY - face, skin color, hair): {default_front_description}. "
-                elif is_first_front:
-                    identity_snippet = f"REFERENCE CHARACTER FROM DEFAULT PERSONA (MUST MATCH EXACTLY - face, skin color, hair): {default_front_description}. "
-                else:
-                    identity_snippet = f"IDENTITY ANCHOR FROM DEFAULT PRESET: {default_front_description}. "
+            # For initial Front image in default preset, use NO reference (identity_snippet stays empty)
+            if is_initial_default_front:
+                identity_snippet = ""  # Explicitly empty - use ONLY base_prompt
+                # Restructure prompt to prioritize base_image_prompt and critical requirements
+                prompt = f"""CRITICAL REQUIREMENTS (MUST FOLLOW EXACTLY):
+1. FULL BODY VISIBILITY: Show entire figure from head to toe with feet and shoes clearly visible on floor. Do NOT crop ankles, feet, or shoes. Leave generous margin above head and below feet.
+2. BACKGROUND: Pure white background only - no beige, no off-white, no textures, no elements.
+3. PRIMARY CHARACTER DESCRIPTION (THIS CONTROLS POSE, COMPOSITION, AND STYLING - FOLLOW EXACTLY):
+{base_prompt}
+
+VIEW REQUIREMENTS (secondary to character description above):
+- Full-body portrait, facing camera straight-on (not profile or 3/4)
+- Eyes looking into camera
+- Long shot to capture entire height
+- Subject centered, no turning away
+- Full-length portrait, entire figure in frame
+- No cropping, no cut-off body parts, no close-up, no zoom-in
+
+TECHNICAL REQUIREMENTS:
+- Professional reference photo, studio photography, clean minimalist composition
+- Even studio lighting with subtle dramatic shadows, high quality professional photography
+- No background elements, no props except those described in the character description above
+- Sharp focus, professional portrait photography style, reference sheet style, full-body shot"""
             else:
-                identity_snippet = ""
-            prompt = f"{view_specific}, {identity_snippet}{base_prompt}, pure white background, "
-            prompt += "FULL BODY VISIBLE from head to toe, feet and shoes clearly visible on floor, entire figure in frame, "
-            prompt += "full-length portrait, generous margin above head and below feet, no cropping, no cut-off body parts, no close-up, no zoom-in, "
-            prompt += "professional reference photo, studio photography, clean minimalist composition, "
-            prompt += "even studio lighting with subtle dramatic shadows, high quality professional photography, "
-            prompt += "no background elements, no props except those described in the base prompt, "
-            prompt += "sharp focus, professional portrait photography style, reference sheet style, full-body shot"
+                view_specific = (
+                    "full-body portrait, facing camera straight-on (not profile or 3/4), "
+                    "shoulders squared, eyes looking into camera, standing upright, long shot, "
+                    "camera distance set to capture entire height, subject centered, no turning away, "
+                    "OVERRIDE any portrait/waist-up/head-and-shoulders/cropped instructions: MUST show entire figure head-to-toe with shoes and feet visible on floor, "
+                    "leave margin above head and below feet, do NOT crop ankles or shoes"
+                )
+                if default_front_description:
+                    if default_preset_key != preset_key:
+                        # Always use default preset Front as reference for custom presets
+                        identity_snippet = f"REFERENCE CHARACTER FROM DEFAULT PRESET FRONT IMAGE (MUST MATCH EXACTLY - face, skin color, hair): {default_front_description}. "
+                    elif is_first_front:
+                        identity_snippet = f"REFERENCE CHARACTER FROM DEFAULT PERSONA (MUST MATCH EXACTLY - face, skin color, hair): {default_front_description}. "
+                    else:
+                        identity_snippet = f"IDENTITY ANCHOR FROM DEFAULT PRESET: {default_front_description}. "
+                else:
+                    identity_snippet = ""
+                prompt = f"{view_specific}, {identity_snippet}{base_prompt}, pure white background, "
+                prompt += "FULL BODY VISIBLE from head to toe, feet and shoes clearly visible on floor, entire figure in frame, "
+                prompt += "full-length portrait, generous margin above head and below feet, no cropping, no cut-off body parts, no close-up, no zoom-in, "
+                prompt += "professional reference photo, studio photography, clean minimalist composition, "
+                prompt += "even studio lighting with subtle dramatic shadows, high quality professional photography, "
+                prompt += "no background elements, no props except those described in the base prompt, "
+                prompt += "sharp focus, professional portrait photography style, reference sheet style, full-body shot"
             
             # Use a supported tall aspect ratio to reduce cropping
             selected_profile = self.reference_image_profile_var.get() if hasattr(self, 'reference_image_profile_var') else 'image_gen'
@@ -4415,6 +4476,53 @@ class SunoPersona(tk.Tk):
         self.refresh_persona_images()
         messagebox.showinfo('Success', 'Reference images generation completed. Front generated first, then Side and Back matched to Front.')
 
+    def delete_persona_reference_images(self):
+        """Delete all persona reference images (Front, Side, Back) for the current preset."""
+        if not self.current_persona:
+            messagebox.showwarning('Warning', 'Please select a persona first.')
+            return
+        
+        preset_key = self.image_preset_var.get() if hasattr(self, 'image_preset_var') else self.current_persona.get('current_image_preset', 'default')
+        base_path = self.get_persona_image_base_path(preset_key)
+        safe_name = self._safe_persona_basename()
+        
+        images_to_delete = []
+        views = ['Front', 'Side', 'Back']
+        for view in views:
+            image_path = os.path.join(base_path, f'{safe_name}-{view}.png')
+            if os.path.exists(image_path):
+                images_to_delete.append((view, image_path))
+        
+        if not images_to_delete:
+            messagebox.showinfo('Info', 'No reference images found to delete.')
+            return
+        
+        image_list = '\n'.join([f'- {view}: {os.path.basename(path)}' for view, path in images_to_delete])
+        preset_label = preset_key if preset_key != 'default' else 'default preset'
+        response = messagebox.askyesno(
+            'Confirm Delete',
+            f'Delete all reference images for "{self.current_persona.get("name", "persona")}" ({preset_label})?\n\n{image_list}\n\nThis action cannot be undone.',
+            icon='warning'
+        )
+        
+        if response:
+            deleted_count = 0
+            failed = []
+            for view, image_path in images_to_delete:
+                try:
+                    os.remove(image_path)
+                    deleted_count += 1
+                    self.log_debug('INFO', f'Deleted {view} image: {image_path}')
+                except Exception as e:
+                    failed.append(f'{view}: {str(e)}')
+                    self.log_debug('ERROR', f'Failed to delete {view} image: {e}')
+            
+            if failed:
+                messagebox.showerror('Error', f'Deleted {deleted_count} image(s), but failed to delete:\n' + '\n'.join(failed))
+            else:
+                messagebox.showinfo('Success', f'Successfully deleted {deleted_count} reference image(s).')
+                self.refresh_persona_images()
+    
     def generate_single_reference_view(self, view: str):
         """Regenerate a single reference view (Front, Side, or Back) for the current persona."""
         view = (view or '').strip().title()
@@ -4425,22 +4533,37 @@ class SunoPersona(tk.Tk):
             messagebox.showwarning('Warning', 'Please select a persona first.')
             return
         
-        preset_base_prompt, preset_custom_prompt = self._get_active_preset_prompts()
-        base_prompt = preset_base_prompt or self.current_persona.get('base_image_prompt', '')
-        if not base_prompt:
-            messagebox.showwarning('Warning', 'Please set a Base Image Prompt first.')
-            return
-        if preset_custom_prompt:
-            base_prompt = f"{base_prompt}\n\nCUSTOM SCENE DETAILS: {preset_custom_prompt}"
-        
         preset_key = self.image_preset_var.get() if hasattr(self, 'image_preset_var') else self.current_persona.get('current_image_preset', 'default')
+        default_preset_key = self._get_default_image_preset_key() if hasattr(self, '_get_default_image_preset_key') else 'default'
         base_path = self.get_persona_image_base_path(preset_key)
         os.makedirs(base_path, exist_ok=True)
         self.current_persona['current_image_preset'] = preset_key
-        self._save_preset_prompts_from_ui(preset_key)
         safe_name = self._safe_persona_basename()
+        current_front_path = os.path.join(base_path, f'{safe_name}-Front.png')
         
-        default_preset_key = self._get_default_image_preset_key() if hasattr(self, '_get_default_image_preset_key') else 'default'
+        # Check if this is the initial Front image for default preset
+        is_first_front = not os.path.exists(current_front_path)
+        is_initial_default_front = is_first_front and preset_key == default_preset_key
+        
+        # CRITICAL: For initial Front image in default preset, use persona's base_image_prompt directly, NOT preset's profile_prompt
+        if is_initial_default_front:
+            # Use persona's base_image_prompt directly for initial Front image
+            base_prompt = self.current_persona.get('base_image_prompt', '').strip()
+            if not base_prompt:
+                messagebox.showwarning('Warning', 'Please set a Base Image Prompt first.')
+                return
+            self.log_debug('INFO', 'Using persona base_image_prompt directly for initial Front image (ignoring preset profile_prompt)')
+        else:
+            # For regenerations or custom presets, use preset prompts with fallback
+            preset_base_prompt, preset_custom_prompt = self._get_active_preset_prompts()
+            base_prompt = preset_base_prompt or self.current_persona.get('base_image_prompt', '')
+            if not base_prompt:
+                messagebox.showwarning('Warning', 'Please set a Base Image Prompt first.')
+                return
+            if preset_custom_prompt:
+                base_prompt = f"{base_prompt}\n\nCUSTOM SCENE DETAILS: {preset_custom_prompt}"
+            self._save_preset_prompts_from_ui(preset_key)
+        
         default_base_path = self.get_persona_image_base_path(default_preset_key)
         default_front_path = os.path.join(default_base_path, f'{safe_name}-Front.png')
         
@@ -4465,15 +4588,25 @@ class SunoPersona(tk.Tk):
                 return ''
         
         # Build shared view-specific text
-        def build_view_specific(vname):
+        def build_view_specific(vname, is_initial_default=False):
             if vname == 'Front':
-                return (
-                    "full-body portrait, facing camera straight-on (not profile or 3/4), "
-                    "shoulders squared, eyes looking into camera, standing upright, long shot, "
-                    "camera distance set to capture entire height, subject centered, no turning away, "
-                    "OVERRIDE any portrait/waist-up/head-and-shoulders/cropped instructions: MUST show entire figure head-to-toe with shoes and feet visible on floor, "
-                    "leave margin above head and below feet, do NOT crop ankles or shoes"
-                )
+                if is_initial_default:
+                    # For initial Front image, use minimal view instructions to let base_image_prompt control the pose/composition
+                    return (
+                        "full-body portrait, facing camera straight-on (not profile or 3/4), "
+                        "eyes looking into camera, long shot, "
+                        "camera distance set to capture entire height, subject centered, no turning away, "
+                        "MUST show entire figure head-to-toe, "
+                        "leave margin above head and below feet, do NOT crop ankles or shoes"
+                    )
+                else:
+                    return (
+                        "full-body portrait, facing camera straight-on (not profile or 3/4), "
+                        "shoulders squared, eyes looking into camera, standing upright, long shot, "
+                        "camera distance set to capture entire height, subject centered, no turning away, "
+                        "OVERRIDE any portrait/waist-up/head-and-shoulders/cropped instructions: MUST show entire figure head-to-toe with shoes and feet visible on floor, "
+                        "leave margin above head and below feet, do NOT crop ankles or shoes"
+                    )
             if vname == 'Side':
                 return (
                     "full-body side profile, facing right, standing upright, long shot, "
@@ -4492,52 +4625,84 @@ class SunoPersona(tk.Tk):
         
         try:
             if view == 'Front':
-                # Check if this is the first Front image (no Front exists yet)
-                is_first_front = not os.path.exists(current_front_path)
+                # Check if this is the first Front image (no Front exists yet) - already checked above
+                # is_first_front already set above
+                
+                # CRITICAL: For initial Front image in default preset, use ONLY base_prompt, NO reference images
+                # is_initial_default_front already set above
                 
                 identity_snippet = ''
-                # If this is the first Front, try to use default persona's Front as reference
-                if is_first_front:
-                    default_persona_front = self._find_default_persona_front_image()
-                    if default_persona_front and os.path.exists(default_persona_front):
-                        self.log_debug('INFO', f'Using default persona Front image as reference for first Front: {default_persona_front}')
-                        analyze_prompt = (
-                            "Analyze this reference image and describe the character's exact facial structure, hair, skin color, and overall appearance. "
-                            "Provide a concise but complete identity description focusing on face, hair, and skin tone that must be matched exactly. "
-                            "Exclude scene/background; focus on face, hair, skin color, and visible outfit silhouette."
-                        )
-                        analyze_result = self.azure_vision([default_persona_front], analyze_prompt, profile='text')
-                        if analyze_result.get('success'):
-                            identity_snippet = analyze_result.get('content', '').strip()
-                            self.log_debug('INFO', 'Default persona Front identity extracted for first Front generation.')
+                identity_text = ''
                 
-                # ALWAYS use default preset Front if generating for a custom preset
-                if default_preset_key != preset_key and os.path.exists(default_front_path):
-                    if not identity_snippet:
-                        identity_snippet = analyze_identity(default_front_path)
-                        self.log_debug('INFO', 'Using default preset Front image as reference for custom preset.')
-                    else:
-                        # Override with default preset Front (takes priority)
-                        identity_snippet = analyze_identity(default_front_path)
-                        self.log_debug('INFO', 'Default preset Front image overriding default persona reference for custom preset.')
-                
-                if identity_snippet:
-                    if default_preset_key != preset_key:
-                        # Always use default preset Front as reference for custom presets
-                        identity_text = f"REFERENCE CHARACTER FROM DEFAULT PRESET FRONT IMAGE (MUST MATCH EXACTLY - face, skin color, hair): {identity_snippet}. "
-                    elif is_first_front:
-                        identity_text = f"REFERENCE CHARACTER FROM DEFAULT PERSONA (MUST MATCH EXACTLY - face, skin color, hair): {identity_snippet}. "
-                    else:
-                        identity_text = f"IDENTITY ANCHOR FROM DEFAULT PRESET: {identity_snippet}. "
+                if is_initial_default_front:
+                    # Initial Front image for default profile - use ONLY base_prompt, NO reference images
+                    self.log_debug('INFO', 'Generating initial Front image for default profile - using ONLY base image prompt, NO reference images')
                 else:
-                    identity_text = ''
-                prompt = f"{build_view_specific('Front')}, {identity_text}{base_prompt}, pure white background, "
-                prompt += "FULL BODY VISIBLE from head to toe, feet and shoes clearly visible on floor, entire figure in frame, "
-                prompt += "full-length portrait, generous margin above head and below feet, no cropping, no cut-off body parts, no close-up, no zoom-in, "
-                prompt += "professional reference photo, studio photography, clean minimalist composition, "
-                prompt += "even studio lighting with subtle dramatic shadows, high quality professional photography, "
-                prompt += "no background elements, no props except those described in the base prompt, "
-                prompt += "sharp focus, professional portrait photography style, reference sheet style, full-body shot"
+                    # For regenerations or custom presets, use reference images as before
+                    # If this is the first Front, try to use default persona's Front as reference
+                    if is_first_front:
+                        default_persona_front = self._find_default_persona_front_image()
+                        if default_persona_front and os.path.exists(default_persona_front):
+                            self.log_debug('INFO', f'Using default persona Front image as reference for first Front: {default_persona_front}')
+                            analyze_prompt = (
+                                "Analyze this reference image and describe the character's exact facial structure, hair, skin color, and overall appearance. "
+                                "Provide a concise but complete identity description focusing on face, hair, and skin tone that must be matched exactly. "
+                                "Exclude scene/background; focus on face, hair, skin color, and visible outfit silhouette."
+                            )
+                            analyze_result = self.azure_vision([default_persona_front], analyze_prompt, profile='text')
+                            if analyze_result.get('success'):
+                                identity_snippet = analyze_result.get('content', '').strip()
+                                self.log_debug('INFO', 'Default persona Front identity extracted for first Front generation.')
+                    
+                    # ALWAYS use default preset Front if generating for a custom preset
+                    if default_preset_key != preset_key and os.path.exists(default_front_path):
+                        if not identity_snippet:
+                            identity_snippet = analyze_identity(default_front_path)
+                            self.log_debug('INFO', 'Using default preset Front image as reference for custom preset.')
+                        else:
+                            # Override with default preset Front (takes priority)
+                            identity_snippet = analyze_identity(default_front_path)
+                            self.log_debug('INFO', 'Default preset Front image overriding default persona reference for custom preset.')
+                    
+                    if identity_snippet:
+                        if default_preset_key != preset_key:
+                            # Always use default preset Front as reference for custom presets
+                            identity_text = f"REFERENCE CHARACTER FROM DEFAULT PRESET FRONT IMAGE (MUST MATCH EXACTLY - face, skin color, hair): {identity_snippet}. "
+                        elif is_first_front:
+                            identity_text = f"REFERENCE CHARACTER FROM DEFAULT PERSONA (MUST MATCH EXACTLY - face, skin color, hair): {identity_snippet}. "
+                        else:
+                            identity_text = f"IDENTITY ANCHOR FROM DEFAULT PRESET: {identity_snippet}. "
+                # Restructure prompt to prioritize base_image_prompt and critical requirements
+                if is_initial_default_front:
+                    # For initial Front image, base_image_prompt is PRIMARY - it controls pose, composition, and styling
+                    prompt = f"""CRITICAL REQUIREMENTS (MUST FOLLOW EXACTLY):
+1. FULL BODY VISIBILITY: Show entire figure from head to toe with feet and shoes clearly visible on floor. Do NOT crop ankles, feet, or shoes. Leave generous margin above head and below feet.
+2. BACKGROUND: Pure white background only - no beige, no off-white, no textures, no elements.
+3. PRIMARY CHARACTER DESCRIPTION (THIS CONTROLS POSE, COMPOSITION, AND STYLING - FOLLOW EXACTLY):
+{base_prompt}
+
+VIEW REQUIREMENTS (secondary to character description above):
+- Full-body portrait, facing camera straight-on (not profile or 3/4)
+- Eyes looking into camera
+- Long shot to capture entire height
+- Subject centered, no turning away
+- Full-length portrait, entire figure in frame
+- No cropping, no cut-off body parts, no close-up, no zoom-in
+
+TECHNICAL REQUIREMENTS:
+- Professional reference photo, studio photography, clean minimalist composition
+- Even studio lighting with subtle dramatic shadows, high quality professional photography
+- No background elements, no props except those described in the character description above
+- Sharp focus, professional portrait photography style, reference sheet style, full-body shot"""
+                else:
+                    # For regenerations, use standard structure
+                    prompt = f"{build_view_specific('Front', is_initial_default_front)}, {identity_text}{base_prompt}, pure white background, "
+                    prompt += "FULL BODY VISIBLE from head to toe, feet and shoes clearly visible on floor, entire figure in frame, "
+                    prompt += "full-length portrait, generous margin above head and below feet, no cropping, no cut-off body parts, no close-up, no zoom-in, "
+                    prompt += "professional reference photo, studio photography, clean minimalist composition, "
+                    prompt += "even studio lighting with subtle dramatic shadows, high quality professional photography, "
+                    prompt += "no background elements, no props except those described in the base prompt, "
+                    prompt += "sharp focus, professional portrait photography style, reference sheet style, full-body shot"
                 
                 selected_profile = self.reference_image_profile_var.get() if hasattr(self, 'reference_image_profile_var') else 'image_gen'
                 result = self.azure_image(prompt, size='1024x1536', profile=selected_profile)
@@ -8735,44 +8900,54 @@ Vibe: {vibe if vibe else 'N/A'}
 {scene_lyrics_block}
 </LYRICS>
 <RULES priority="high-to-low">
-1. NARRATIVE ARC: Build a visual story following the song's emotional journey (intro-build-climax-resolution). Each scene advances the narrative.
+1. CONTINUOUS STORY NARRATIVE: Create a FLOWING, CONNECTED story across ALL scenes. This is not just individual lyric visualizations - it's ONE continuous narrative journey.
+   - Each scene must build on the previous scene and set up the next scene
+   - Create visual continuity: objects, locations, or elements from earlier scenes should reappear or evolve in later scenes
+   - Build a story thread that connects beginning to end - like chapters in a book
+   - Scenes should feel like a sequence, not isolated moments
+   - Use visual callbacks: reference elements from previous scenes (a broken drum, a crossroads, a neon sign) to create narrative flow
+   - The story should progress logically: discovery → conflict → struggle → resolution
+   - Think of it as a visual journey where each scene is a step forward in the story
 
-2. SCENE DISTRIBUTION:
+2. NARRATIVE ARC: Build a visual story following the song's emotional journey (intro-build-climax-resolution). Each scene advances the narrative AND connects to the overall story thread.
+
+3. SCENE DISTRIBUTION:
    - ~{no_persona_percent}% abstract/environmental scenes (mark with "[NO CHARACTERS]" at start)
    - ~{persona_scene_percent}% persona scenes (never consecutive)
    - Abstract scenes: purely environmental, symbolic, atmospheric - zero human figures
+   - STORY CHARACTERS: You may introduce 1-2 story characters (distinct from the persona) that fit naturally into the narrative. These characters should serve the story, match the theme, and appear organically as part of the continuous narrative. Use them sparingly and purposefully - they should enhance the story, not distract from it. Mark scenes with story characters (not persona) clearly.
 
-3. DISTINCT SETUPS: Use only {storyboard_setup_count} unique visual setups (industry sweet spot is 3-4).
+4. DISTINCT SETUPS: Use only {storyboard_setup_count} unique visual setups (industry sweet spot is 3-4).
    - A setup = location + lighting + base composition. You may "cheat" by re-lighting a corner to create multiple looks.
    - Reuse these setups by changing shot type, angle, lens, blocking, props, and motion. Do NOT introduce new locations beyond the {storyboard_setup_count} setups.
    - Highlight high-energy sections (hooks/chorus) by swapping to the most striking setup; return to calmer setups for verses/outro.
    - Assign EACH setup its own base color palette family (e.g., warm amber/gold, teal+orange, indigo+silver, coral+violet, sepia+turquoise). Keep a setup’s base palette when revisiting it (small lighting/accent shifts are fine), but ensure different setups use different hue families. If the global theme leans green, only one setup may stay green; the others must use clearly different palettes (warm/cool/neon/dusk contrasts). This prevents all scenes from defaulting to the same green tone.
 
-4. VISUAL VARIETY: Every scene must differ significantly:
+5. VISUAL VARIETY: Every scene must differ significantly:
    - Rotate shot types: extreme close-up, medium, wide, aerial, macro
    - Alternate: dark/light, warm/cool, organic/geometric, static/dynamic
    - Vary: angles, lighting, textures, settings, color palettes
 
-5. PERSONA VARIETY: When persona appears, change everything:
+6. PERSONA VARIETY: When persona appears, change everything:
    - Different pose, expression, camera angle, lighting, setting each time
    - Brief mention only - focus on scene, not persona details
 
-6. LYRICS INTEGRATION:"""
+7. LYRICS INTEGRATION:"""
             prompt += lyrics_rule
             
             prompt += f"""
 
-7. GLOBAL THEME:
+8. GLOBAL THEME:
    - Begin EVERY scene description with the theme prefix: {storyboard_theme if storyboard_theme else '[If no theme is set, skip this prefix]'}
    - Treat this as the overall image aesthetic; keep visuals aligned with it across all scenes
 
-8. CONTENT SAFETY (use these alternatives):
+9. CONTENT SAFETY (use these alternatives):
    - "black" -> "dark", "shadowy", "charcoal"
    - "void" -> "vast emptiness", "expansive darkness"  
    - "praying" -> "pleading", "hoping", "seeking"
    - Avoid violent/forceful language - use artistic alternatives
 
-9. COMPOSITION FOR PERSONA (when present):
+10. COMPOSITION FOR PERSONA (when present):
    - Embed the persona into the environment; do NOT default to centering them
    - Place them where the scene reads best (left/right third, foreground or background, over-shoulder, partial silhouette, small-in-frame, or cropped)
    - Choose the strongest composition for the shot; only center if it clearly benefits the scene
@@ -8800,18 +8975,20 @@ SCENE 2: {seconds_per_video} seconds
 Begin with SCENE 1:"""
             
             # Enhanced system message with clear role and constraints
-            system_message = f"""You are a professional music video storyboard director creating {num_scenes} scene prompts.
+            system_message = f"""You are a professional music video storyboard director creating {num_scenes} scene prompts that tell ONE CONTINUOUS, FLOWING STORY.
 
 ABSOLUTE RULES:
 1. Output ONLY scene prompts in format: "SCENE X: [duration] seconds\\n[prompt]"
 2. Generate ALL {num_scenes} scenes - no stopping, no questions
-3. 60-70% of scenes must be [NO CHARACTERS] - purely environmental/abstract
-4. Use only {storyboard_setup_count} distinct setups (location + lighting). Rotate through them; do NOT introduce new setups beyond this count.
-5. Every scene must be visually distinct from all others (change shot type/angle/light/palette). No two consecutive scenes may share the same palette + setup combination; change palette OR lighting OR shot type between adjacent scenes.
-6. Keep modern pacing: think 2-4 second shots; refresh visuals on section changes (verse/chorus/bridge) using the strongest setups for hooks.
-7. If hitting response limits, batch output (scenes 1-14, then 15-28, etc.)
+3. CONTINUOUS NARRATIVE: Create a flowing story where each scene builds on the previous one. Think of it as a visual journey - scenes should connect and progress like chapters in a story. Use visual callbacks (objects, locations, elements from earlier scenes) to create narrative continuity. The story should flow from beginning to end as ONE connected narrative, not isolated moments.
+4. STORY CHARACTERS: You may introduce 1-2 story characters (distinct from the persona) that fit naturally into the narrative. These characters should serve the story purpose, match the theme/aesthetic, and appear organically as the story progresses. Use them sparingly and purposefully - they should enhance the narrative flow, not distract. Examples: a mysterious figure, a lost soul, a companion, an antagonist, a symbolic character. When introducing story characters, describe them briefly and ensure they fit the visual aesthetic and story theme.
+5. 60-70% of scenes must be [NO CHARACTERS] - purely environmental/abstract
+6. Use only {storyboard_setup_count} distinct setups (location + lighting). Rotate through them; do NOT introduce new setups beyond this count.
+7. Every scene must be visually distinct from all others (change shot type/angle/light/palette). No two consecutive scenes may share the same palette + setup combination; change palette OR lighting OR shot type between adjacent scenes.
+8. Keep modern pacing: think 2-4 second shots; refresh visuals on section changes (verse/chorus/bridge) using the strongest setups for hooks.
+9. If hitting response limits, batch output (scenes 1-14, then 15-28, etc.)
 """
-            next_rule_num = 8
+            next_rule_num = 10
             if storyboard_theme:
                 system_message += f"{next_rule_num}. Every scene prompt must START with this theme prefix before anything else: {storyboard_theme}\n"
                 next_rule_num += 1
@@ -9040,15 +9217,24 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
             prompt += scene_lyrics_info
         
         prompt += f"STORYBOARD THEME: '{full_song_name if full_song_name else song_name}'\n"
-        prompt += "FOCUS ON THE SONG THEME, LYRICS, AND MOOD - not the persona. Use the song title and lyrics as the primary inspiration.\n"
+        prompt += "FOCUS ON THE SONG THEME, LYRICS, AND MOOD - not the persona. Use the song title and lyrics as the primary inspiration.\n\n"
+        prompt += "CRITICAL - CONTINUOUS NARRATIVE: This is part of a larger story. Create scenes that flow and connect:\n"
+        prompt += "- Each scene should build on previous scenes and set up future scenes\n"
+        prompt += "- Use visual callbacks: reference objects, locations, or elements from earlier scenes to create narrative continuity\n"
+        prompt += "- Think of this as ONE continuous story journey, not isolated moments\n"
+        prompt += "- If this is a later batch (scenes 15+), reference elements from earlier scenes (the broken drum, the crossroads, the neon sign, etc.) to maintain story flow\n"
+        prompt += "- The story should progress logically: each scene is a step forward in the narrative\n\n"
+        prompt += "STORY CHARACTERS: You may introduce 1-2 story characters (distinct from the persona) that fit naturally into the narrative. These characters should serve the story purpose, match the theme/aesthetic, and appear organically as the story progresses. Use them sparingly and purposefully - they should enhance the narrative flow, not distract. Examples: a mysterious figure, a lost soul, a companion, an antagonist, a symbolic character. When introducing story characters, describe them briefly and ensure they fit the visual aesthetic and story theme. If story characters were introduced in earlier scenes, you may reference or continue their story thread.\n\n"
         prompt += f"The persona ({persona_name}) should only appear in about {persona_scene_percent}% of scenes. When the persona appears, keep descriptions brief - just mention '{persona_name}' or 'the artist'. Do NOT repeat full persona descriptions.\n"
-        prompt += "CRITICAL: When a prompt says 'No persona present', 'No characters', or 'No human figures', the generated image MUST NOT include ANY human figures. These scenes should be purely environmental, abstract, symbolic, or atmospheric visuals.\n"
+        prompt += "CRITICAL: When a prompt says 'No persona present. No characters. No human figures. No artist. No people.', the generated image MUST NOT include ANY human figures. These scenes should be purely environmental, abstract, symbolic, or atmospheric visuals. However, story characters (distinct from persona) may appear in scenes if they serve the narrative - just ensure they are clearly story characters, not the persona.\n"
         prompt += "CONTENT SAFETY: All scene prompts MUST be safe for content moderation. Use creative alternatives: 'dark' instead of 'black', 'empty space' instead of 'void', 'curving' instead of 'bending under force', 'pleading' instead of 'praying'. Focus on visual poetry and atmosphere.\n\n"
         if scene_lyrics_info:
+            if batch_start > 1:
+                prompt += f"STORY CONTINUITY NOTE: You are generating scenes {batch_start}-{batch_end} of a {total_scenes}-scene story. Previous scenes have established the narrative world, locations, and story elements. Continue the story thread - reference or evolve elements from earlier scenes to maintain narrative flow.\n\n"
             prompt += f"CRITICAL: Generate ONLY scenes {batch_start} through {batch_end}. For EACH scene, you MUST:\n"
             prompt += "1. Include the exact lyrics that play during that scene's time period (from LYRICS TIMING section above)\n"
             prompt += "2. Format: SCENE X: [duration] seconds\nLYRICS FOR THIS SCENE: \"[exact lyrics text]\"\nCRITICAL INSTRUCTIONS FOR THIS SCENE:\n"
-            prompt += "   a. MOST SCENES (60-70%) MUST NOT include the persona. If this is a scene WITHOUT the persona, you MUST start the scene prompt with 'No persona present. No characters. No human figures. No artist. No people.' and create a purely abstract, environmental, symbolic, or atmospheric visual that represents the lyrics WITHOUT any human presence.\n"
+            prompt += "   a. MOST SCENES (60-70%) MUST NOT include the persona. If this is a scene WITHOUT the persona AND without story characters, you MUST start the scene prompt with 'No persona present. No characters. No human figures. No artist. No people.' and create a purely abstract, environmental, symbolic, or atmospheric visual that represents the lyrics WITHOUT any human presence. However, if a story character (distinct from persona) fits naturally into this scene and serves the narrative, you may include them - but mark it clearly as a story character scene, not a persona scene.\n"
             prompt += "   b. The image must visually represent and incorporate the lyrics above - include visual elements that match what the lyrics describe\n"
             prompt += "   c. The lyrics text MUST be embedded and integrated into the scene and background, merging seamlessly with the surroundings. The lyrics should appear as part of the environment - written on surfaces, integrated into textures, blended into the background, appearing on signs/walls/objects in the scene, or woven into the visual design itself. They should NOT appear as a floating text overlay, but rather as an organic part of the scene that merges with the background and surroundings\n"
             prompt += "   d. Format the image prompt to include: [visual description] + \"with the lyrics text '[exact lyrics]' embedded INTO THE ENVIRONMENT ONLY (e.g., carved into walls, glowing in neon signs, written on objects, formed by patterns, integrated into textures) - NO text overlays, NO bottom bars, NO subtitles, NO floating text\"\n"
@@ -9739,52 +9925,76 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
                 finally:
                     self.config(cursor='')
 
-        # If persona is present, enrich prompt with reference image analysis
-        if persona_in_scene and self.current_persona and self.current_persona_path:
-            preset_key = self._get_song_persona_preset_key()
-            base_path = self.get_persona_image_base_path(preset_key)
-            safe_name = self._safe_persona_basename()
-            front_image_path = os.path.join(base_path, f'{safe_name}-Front.png')
-            if os.path.exists(front_image_path):
-                try:
-                    from PIL import Image
-                    original_img = Image.open(front_image_path)
-                    new_width = original_img.width // 2
-                    new_height = original_img.height // 2
-                    downscaled_img = original_img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+        # If persona is present, enrich prompt with reference image analysis and persona visual characteristics
+        if persona_in_scene and self.current_persona:
+            visual_aesthetic = self.current_persona.get('visual_aesthetic', '').strip()
+            base_image_prompt = self.current_persona.get('base_image_prompt', '').strip()
+            
+            if self.current_persona_path:
+                preset_key = self._get_song_persona_preset_key()
+                base_path = self.get_persona_image_base_path(preset_key)
+                safe_name = self._safe_persona_basename()
+                front_image_path = os.path.join(base_path, f'{safe_name}-Front.png')
+                if os.path.exists(front_image_path):
+                    try:
+                        from PIL import Image
+                        original_img = Image.open(front_image_path)
+                        new_width = original_img.width // 2
+                        new_height = original_img.height // 2
+                        downscaled_img = original_img.resize((new_width, new_height), Image.Resampling.LANCZOS)
 
-                    temp_dir = os.path.join(self.current_song_path if self.current_song_path else os.path.dirname(front_image_path), 'temp')
-                    os.makedirs(temp_dir, exist_ok=True)
-                    reference_image_path = os.path.join(temp_dir, f'{safe_name}-Front-downscaled.png')
-                    downscaled_img.save(reference_image_path, 'PNG')
+                        temp_dir = os.path.join(self.current_song_path if self.current_song_path else os.path.dirname(front_image_path), 'temp')
+                        os.makedirs(temp_dir, exist_ok=True)
+                        reference_image_path = os.path.join(temp_dir, f'{safe_name}-Front-downscaled.png')
+                        downscaled_img.save(reference_image_path, 'PNG')
 
-                    self.config(cursor='wait')
-                    self.update()
-                    vision_prompt = (
-                        "Analyze this persona reference image in extreme detail. Provide a comprehensive description of the character's appearance, "
-                        "including physical features, clothing, styling, colors, accessories, pose, and all visual characteristics. "
-                        "This description will be used to ensure the scene image features the exact same character."
-                    )
-                    vision_system = (
-                        "You are an image analysis assistant. Provide a highly detailed, objective description of the character's visual appearance "
-                        "from the reference image. Focus on all visual characteristics that should be preserved in the scene image."
-                    )
-                    vision_result = self.azure_vision([reference_image_path], vision_prompt, system_message=vision_system, profile='text')
-                    if vision_result['success']:
-                        character_description = vision_result['content'].strip()
-                        prompt = (
-                            f"REFERENCE CHARACTER DESCRIPTION (from Front Persona Image - MUST MATCH EXACTLY):\n{character_description}\n\n"
-                            f"{prompt}\n\n"
-                            "CRITICAL REQUIREMENT: The character in this scene MUST be visually identical to the reference character description above. "
-                            "Match all physical features, clothing, styling, colors, accessories, and visual characteristics exactly. "
-                            "The character appearance must be consistent with the reference image."
+                        self.config(cursor='wait')
+                        self.update()
+                        vision_prompt = (
+                            "Analyze this persona reference image in extreme detail. Provide a comprehensive description of the character's appearance, "
+                            "including physical features, clothing, styling, colors, accessories, pose, and all visual characteristics. "
+                            "This description will be used to ensure the scene image features the exact same character."
                         )
-                    else:
-                        prompt += "\n\nIMPORTANT: Use the Front Persona Image as reference. The scene must feature this exact character with matching appearance, styling, and visual characteristics."
-                except Exception as e:
-                    self.log_debug('WARNING', f'Failed to prepare persona reference for scene {scene_num}: {e}')
-                finally:
-                    self.config(cursor='')
+                        vision_system = (
+                            "You are an image analysis assistant. Provide a highly detailed, objective description of the character's visual appearance "
+                            "from the reference image. Focus on all visual characteristics that should be preserved in the scene image."
+                        )
+                        vision_result = self.azure_vision([reference_image_path], vision_prompt, system_message=vision_system, profile='text')
+                        if vision_result['success']:
+                            character_description = vision_result['content'].strip()
+                            prompt = (
+                                f"REFERENCE CHARACTER DESCRIPTION (from Front Persona Image - MUST MATCH EXACTLY):\n{character_description}\n\n"
+                                f"{prompt}\n\n"
+                                "CRITICAL REQUIREMENT: The character in this scene MUST be visually identical to the reference character description above. "
+                                "Match all physical features, clothing, styling, colors, accessories, and visual characteristics exactly. "
+                                "The character appearance must be consistent with the reference image."
+                            )
+                        else:
+                            prompt += "\n\nIMPORTANT: Use the Front Persona Image as reference. The scene must feature this exact character with matching appearance, styling, and visual characteristics."
+                        
+                        # Add persona visual characteristics from base_image_prompt and visual_aesthetic
+                        persona_visual_parts = []
+                        if visual_aesthetic:
+                            persona_visual_parts.append(f"Persona Visual Aesthetic: {visual_aesthetic}")
+                        if base_image_prompt:
+                            persona_visual_parts.append(f"Persona Base Image Prompt (Character Visual Description): {base_image_prompt}")
+                        if persona_visual_parts:
+                            prompt += "\n\n" + "\n".join(persona_visual_parts)
+                            prompt += "\n\nIMPORTANT: The character in this scene must fully incorporate ALL visual characteristics from the persona's Visual Aesthetic and Base Image Prompt descriptions above."
+                    except Exception as e:
+                        self.log_debug('WARNING', f'Failed to prepare persona reference for scene {scene_num}: {e}')
+                    finally:
+                        self.config(cursor='')
+            else:
+                # No reference image path, but persona is in scene - add visual characteristics directly
+                persona_visual_parts = []
+                if visual_aesthetic:
+                    persona_visual_parts.append(f"Persona Visual Aesthetic: {visual_aesthetic}")
+                if base_image_prompt:
+                    persona_visual_parts.append(f"Persona Base Image Prompt (Character Visual Description): {base_image_prompt}")
+                if persona_visual_parts:
+                    prompt += "\n\n" + "\n".join(persona_visual_parts)
+                    prompt += "\n\nIMPORTANT: The character in this scene must fully incorporate ALL visual characteristics from the persona's Visual Aesthetic and Base Image Prompt descriptions above."
 
         if lyrics_text and '[NO LYRICS]' not in lyrics_text.upper():
             if embed_lyrics_enabled:
