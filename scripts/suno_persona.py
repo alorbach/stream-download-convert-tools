@@ -6999,11 +6999,57 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
         else:
             messagebox.showerror('Error', f'Failed to generate video prompt: {result.get("error", "Unknown error")}')
     
+    def _ask_language(self, title='Select Language'):
+        """Show a dialog to select language (English or German). Returns 'en' or 'de', or None if cancelled."""
+        dialog = tk.Toplevel(self)
+        dialog.title(title)
+        dialog.geometry('300x200')
+        dialog.transient(self)
+        dialog.grab_set()
+        
+        result = [None]
+        
+        main_frame = ttk.Frame(dialog, padding=20)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        ttk.Label(main_frame, text='Select Language:', font=('TkDefaultFont', 9, 'bold')).pack(pady=(0, 10))
+        
+        lang_var = tk.StringVar(value='en')
+        
+        lang_frame = ttk.Frame(main_frame)
+        lang_frame.pack(pady=10)
+        
+        ttk.Radiobutton(lang_frame, text='English (Default)', variable=lang_var, value='en').pack(anchor=tk.W, pady=2)
+        ttk.Radiobutton(lang_frame, text='German', variable=lang_var, value='de').pack(anchor=tk.W, pady=2)
+        
+        def ok_clicked():
+            result[0] = lang_var.get()
+            dialog.destroy()
+        
+        def cancel_clicked():
+            dialog.destroy()
+        
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(pady=(10, 0))
+        ttk.Button(btn_frame, text='OK', command=ok_clicked).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text='Cancel', command=cancel_clicked).pack(side=tk.LEFT, padx=5)
+        
+        dialog.bind('<Return>', lambda e: ok_clicked())
+        dialog.bind('<Escape>', lambda e: cancel_clicked())
+        
+        self.wait_window(dialog)
+        return result[0]
+    
     def generate_full_song_name(self):
         """Generate full song name via AI prompt: [Song Name] - [Persona Name] - (3 keywords)."""
         if not self.current_persona:
             messagebox.showwarning('Warning', 'Please select a persona first.')
             return
+        
+        # Ask for language selection
+        language = self._ask_language('Select Language for Song Name')
+        if language is None:
+            return  # User cancelled
         
         song_name = self.song_name_var.get().strip()
         persona_name = self.current_persona.get('name', '')
@@ -7049,6 +7095,8 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
         
         lyrics_trim = _trim_text(lyrics_text, 200)
         
+        language_instruction = "Generate the song name in English." if language == 'en' else "Generate the song name in German."
+        
         system_message = (
             "You format AI-generated song titles. Return exactly one line in the form:\n"
             "Song Title - Persona Name - (kw1, kw2, kw3)\n"
@@ -7058,6 +7106,7 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
             "Separate keywords with space inside parentheses. "
             "Do not invent band/artist names. "
             "Do not leave the answer blank. "
+            f"{language_instruction} "
             "Output only the final title line, nothing else."
         )
         
@@ -7067,8 +7116,10 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
             f"Persona Name: {persona_name}\n"
             f"Song Style: {song_style}\n"
             f"Merged Style: {merged_style}\n"
+            f"Language: {'English' if language == 'en' else 'German'}\n"
             "Find threesingle-word style descriptors based on Style words (no names, no instruments, no production terms). "
             "If you cannot find three, reuse the strongest until you have three. "
+            f"{language_instruction} "
             "Return exactly: Song Name - Persona Name - (kw1, kw2, kw3)"
         )
         
@@ -7115,6 +7166,11 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
             messagebox.showwarning('Warning', 'Please select a persona first.')
             return
         
+        # Ask for language selection
+        language = self._ask_language('Select Language for Lyrics')
+        if language is None:
+            return  # User cancelled
+        
         song_name = self.song_name_var.get().strip()
         lyric_ideas = self.lyric_ideas_text.get('1.0', tk.END).strip()
         lyrics_style = (self.current_persona.get('lyrics_style') or '').strip()
@@ -7135,10 +7191,13 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
             messagebox.showwarning('Warning', 'Please enter a song name.')
             return
         
+        language_instruction = "Generate all lyrics in English." if language == 'en' else "Generate all lyrics in German."
+        
         system_message = (
             "You are the selected ARTIST_PERSONA. Fully embody the persona voice, "
             "era influence, delivery style, and genre fusion. Use strong internal rhymes, "
             "anthemic hooks, and AI/cyberpunk/dark futurism imagery when relevant. "
+            f"{language_instruction} "
             "Return lyrics only with the requested section headings—no explanations."
         )
         
@@ -7148,6 +7207,7 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
             f"GENRE_STYLE: {style_text or 'Original / unspecified'}",
             f"THEME / TOPIC: {theme_or_topic}",
             f"MOOD: {mood_text}",
+            f"LANGUAGE: {'English' if language == 'en' else 'German'}",
             "REFERENCE_VIBE: (stylistic only, do not copy melodies)",
             "SONG_STRUCTURE: [Intro] [Verse 1] [Pre-Chorus] [Chorus / Hook] [Verse 2] [Bridge] [Final Hook] [Outro]",
             "",
@@ -7162,11 +7222,12 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
             lyric_ideas or "(none provided; infer from theme and persona)",
             "",
             "Output requirements:",
+            f"- {language_instruction}",
             "- Produce full original lyrics; no melodic copying.",
             "- Follow the structure with clear section headers exactly as written.",
             "- Hooks must be chant-worthy; Final Hook should feel bigger/darker.",
             "- Keep Pre-Chorus and Bridge short but impactful (may be brief).",
-            "- Use AI, machine, dark futurism, cyberpunk, destruction, and data metaphors when they fit.",
+            "- Use keywords metaphors when they fit.",
             "- Strong internal rhymes; occasional multisyllabic phrasing.",
             "- Return lyrics only, no commentary."
         ]
