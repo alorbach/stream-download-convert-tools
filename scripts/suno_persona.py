@@ -783,6 +783,120 @@ class AIPromptDialog(tk.Toplevel):
         self.destroy()
 
 
+class PromptImprovementDialog(tk.Toplevel):
+    """Dialog for requesting prompt improvements."""
+    
+    def __init__(self, parent, prompt_type: str, current_prompt: str = ''):
+        super().__init__(parent)
+        self.title(f'Improve {prompt_type} Prompt')
+        self.geometry('700x500')
+        self.transient(parent)
+        self.grab_set()
+        
+        self.result = None
+        
+        self.create_widgets(prompt_type, current_prompt)
+        
+        self.update_idletasks()
+        x = parent.winfo_x() + (parent.winfo_width() // 2) - (self.winfo_width() // 2)
+        y = parent.winfo_y() + (parent.winfo_height() // 2) - (self.winfo_height() // 2)
+        self.geometry(f"+{x}+{y}")
+        
+        self.improvement_request_text.focus_set()
+    
+    def create_widgets(self, prompt_type: str, current_prompt: str):
+        main_frame = ttk.Frame(self, padding=10)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        ttk.Label(main_frame, text=f'Improve {prompt_type} Prompt', font=('TkDefaultFont', 10, 'bold')).pack(anchor=tk.W, pady=(0, 10))
+        
+        ttk.Label(main_frame, text='Current prompt:', font=('TkDefaultFont', 8, 'bold')).pack(anchor=tk.W, pady=(5, 2))
+        current_preview = scrolledtext.ScrolledText(main_frame, height=6, wrap=tk.WORD, state=tk.DISABLED, font=('Consolas', 8))
+        current_preview.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        current_preview.config(state=tk.NORMAL)
+        current_preview.insert('1.0', current_prompt)
+        current_preview.config(state=tk.DISABLED)
+        
+        ttk.Label(main_frame, text='What changes would you like to make?', font=('TkDefaultFont', 8, 'bold')).pack(anchor=tk.W, pady=(5, 2))
+        ttk.Label(main_frame, text='(e.g., "Make it more dramatic", "Add more color", "Change the mood to be darker")', 
+                 font=('TkDefaultFont', 7), foreground='gray').pack(anchor=tk.W, pady=(0, 5))
+        self.improvement_request_text = scrolledtext.ScrolledText(main_frame, height=6, wrap=tk.WORD, font=('Consolas', 9))
+        self.improvement_request_text.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(fill=tk.X, pady=(5, 0))
+        ttk.Button(btn_frame, text='Improve', command=self.ok_clicked).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text='Cancel', command=self.cancel_clicked).pack(side=tk.LEFT, padx=5)
+        
+        self.bind('<Escape>', lambda e: self.cancel_clicked())
+    
+    def ok_clicked(self):
+        improvement_request = self.improvement_request_text.get('1.0', tk.END).strip()
+        if not improvement_request:
+            messagebox.showwarning('Warning', 'Please enter what changes you would like to make.')
+            return
+        self.result = improvement_request
+        self.destroy()
+    
+    def cancel_clicked(self):
+        self.result = None
+        self.destroy()
+
+
+class ImprovedPromptResultDialog(tk.Toplevel):
+    """Dialog to show improved prompt and ask if user wants to save it."""
+    
+    def __init__(self, parent, improved_prompt: str, original_prompt: str = ''):
+        super().__init__(parent)
+        self.title('Improved Prompt')
+        self.geometry('800x600')
+        self.transient(parent)
+        self.grab_set()
+        
+        self.result = False  # True = save, False = cancel
+        
+        self.create_widgets(improved_prompt, original_prompt)
+        
+        self.update_idletasks()
+        x = parent.winfo_x() + (parent.winfo_width() // 2) - (self.winfo_width() // 2)
+        y = parent.winfo_y() + (parent.winfo_height() // 2) - (self.winfo_height() // 2)
+        self.geometry(f"+{x}+{y}")
+    
+    def create_widgets(self, improved_prompt: str, original_prompt: str = ''):
+        main_frame = ttk.Frame(self, padding=10)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        ttk.Label(main_frame, text='Improved Prompt Generated', font=('TkDefaultFont', 10, 'bold')).pack(anchor=tk.W, pady=(0, 10))
+        
+        if original_prompt:
+            ttk.Label(main_frame, text='Original prompt:', font=('TkDefaultFont', 8, 'bold')).pack(anchor=tk.W, pady=(5, 2))
+            original_preview = scrolledtext.ScrolledText(main_frame, height=4, wrap=tk.WORD, state=tk.DISABLED, font=('Consolas', 8))
+            original_preview.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+            original_preview.config(state=tk.NORMAL)
+            original_preview.insert('1.0', original_prompt)
+            original_preview.config(state=tk.DISABLED)
+        
+        ttk.Label(main_frame, text='Improved prompt:', font=('TkDefaultFont', 8, 'bold')).pack(anchor=tk.W, pady=(5, 2))
+        self.improved_text = scrolledtext.ScrolledText(main_frame, height=12, wrap=tk.WORD, font=('Consolas', 9))
+        self.improved_text.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        self.improved_text.insert('1.0', improved_prompt)
+        
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(fill=tk.X, pady=(5, 0))
+        ttk.Button(btn_frame, text='Save', command=self.save_clicked).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text='Cancel', command=self.cancel_clicked).pack(side=tk.LEFT, padx=5)
+        
+        self.bind('<Escape>', lambda e: self.cancel_clicked())
+    
+    def save_clicked(self):
+        self.result = True
+        self.destroy()
+    
+    def cancel_clicked(self):
+        self.result = False
+        self.destroy()
+
+
 class StyleSelectionDialog(tk.Toplevel):
     """Popup to select one or more styles from the style library."""
 
@@ -2044,6 +2158,18 @@ def get_mp3_filename(full_song_name: str) -> str:
 class SunoPersona(tk.Tk):
     def __init__(self):
         super().__init__()
+        
+        # Set UTF-8 encoding for stdout/stderr on Windows to prevent encoding errors
+        if sys.platform == 'win32':
+            try:
+                if hasattr(sys.stdout, 'reconfigure'):
+                    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+                if hasattr(sys.stderr, 'reconfigure'):
+                    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+            except Exception:
+                # If reconfiguration fails, continue anyway
+                pass
+        
         self.title('Suno Persona Manager')
         self.geometry('1400x1100')
         # Set maximum height (width can be flexible, height limited)
@@ -2148,16 +2274,54 @@ class SunoPersona(tk.Tk):
         """Log a debug/info message."""
         import datetime
         timestamp = datetime.datetime.now().strftime('%H:%M:%S')
+        
+        # Ensure message is a proper string and handle encoding issues
+        if isinstance(message, bytes):
+            try:
+                message = message.decode('utf-8')
+            except UnicodeDecodeError:
+                try:
+                    message = message.decode('latin-1')
+                except UnicodeDecodeError:
+                    message = message.decode('utf-8', errors='replace')
+        elif not isinstance(message, str):
+            message = str(message)
+        
         formatted_message = f'[{timestamp}] [{level}] {message}\n'
         
         self.debug_text.config(state=tk.NORMAL)
         self.debug_text.insert(tk.END, formatted_message)
         self.debug_text.see(tk.END)
         self.debug_text.config(state=tk.DISABLED)
-        # Also echo to console for full visibility
+        # Also echo to console for full visibility with proper encoding handling
         try:
-            print(formatted_message, end='')
+            # On Windows, ensure UTF-8 encoding for console output
+            if sys.platform == 'win32':
+                # Try to set console to UTF-8 if possible
+                try:
+                    import sys
+                    if hasattr(sys.stdout, 'reconfigure'):
+                        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+                    elif hasattr(sys.stdout, 'buffer'):
+                        # Write directly to buffer with UTF-8 encoding
+                        sys.stdout.buffer.write(formatted_message.encode('utf-8', errors='replace'))
+                        sys.stdout.buffer.flush()
+                    else:
+                        # Fallback: try to encode safely
+                        safe_message = formatted_message.encode('utf-8', errors='replace').decode('utf-8', errors='replace')
+                        print(safe_message, end='')
+                except Exception:
+                    # Final fallback: try to print with error handling
+                    try:
+                        safe_message = formatted_message.encode('ascii', errors='replace').decode('ascii')
+                        print(safe_message, end='')
+                    except Exception:
+                        pass
+            else:
+                # On non-Windows, use regular print
+                print(formatted_message, end='')
         except Exception:
+            # Silently fail if console output fails
             pass
     
     def log_prompt_debug(self, title: str, prompt: str | None, system_message: str | None = None):
@@ -4956,6 +5120,7 @@ TECHNICAL REQUIREMENTS:
         album_cover_toolbar = ttk.Frame(album_cover_frame)
         album_cover_toolbar.pack(fill=tk.X, padx=2, pady=2)
         ttk.Button(album_cover_toolbar, text='Generate Prompt', command=self.generate_album_cover).pack(side=tk.LEFT, padx=2)
+        ttk.Button(album_cover_toolbar, text='Improve', command=self.improve_album_cover_prompt).pack(side=tk.LEFT, padx=2)
         ttk.Button(album_cover_toolbar, text='Run', command=self.run_image_model).pack(side=tk.LEFT, padx=2)
         ttk.Button(album_cover_toolbar, text='Preview', command=self.preview_last_song_cover).pack(side=tk.LEFT, padx=2)
         
@@ -5113,6 +5278,7 @@ TECHNICAL REQUIREMENTS:
         cover_bar.pack(fill=tk.X, pady=(0, 2))
         ttk.Label(cover_bar, text='Album Cover:', font=('TkDefaultFont', 9, 'bold')).pack(side=tk.LEFT)
         ttk.Button(cover_bar, text='Generate Prompt', command=self.generate_album_cover_prompt_album).pack(side=tk.LEFT, padx=4)
+        ttk.Button(cover_bar, text='Improve', command=self.improve_album_cover_prompt_album).pack(side=tk.LEFT, padx=4)
         ttk.Button(cover_bar, text='Run Cover Image', command=self.run_album_cover_image).pack(side=tk.LEFT, padx=4)
         ttk.Button(cover_bar, text='Preview', command=self.preview_last_album_cover).pack(side=tk.LEFT, padx=4)
 
@@ -5346,7 +5512,8 @@ TECHNICAL REQUIREMENTS:
                 lyrics = values[3]
                 prompt = values[4]  # Prompt is in 5th column
                 if prompt:
-                    final_prompt = self.scene_final_prompts.get(str(scene_num)) or self.build_scene_image_prompt(scene_num, prompt, lyrics)
+                    # Use get_scene_final_prompt to check saved generated_prompt first
+                    final_prompt = self.get_scene_final_prompt(str(scene_num), prompt, lyrics)
                     safe_prompt = self.sanitize_lyrics_for_prompt(final_prompt)
                     prompts.append(f"Scene {scene_num}:\n{safe_prompt}")
             elif len(values) >= 3:
@@ -5818,19 +5985,15 @@ TECHNICAL REQUIREMENTS:
                     if suggested_secondary:
                         self.spotify_category_secondary_var.set(suggested_secondary)
                         self.log_debug('INFO', f'AI suggested secondary Spotify category: {suggested_secondary}')
-                        messagebox.showinfo('Success', f'AI suggested categories:\nPrimary: {suggested_primary}\nSecondary: {suggested_secondary}')
                     else:
-                        messagebox.showinfo('Success', f'AI suggested primary category: {suggested_primary}')
+                        self.log_debug('INFO', f'AI suggested only primary category: {suggested_primary}')
                 else:
                     self.log_debug('WARNING', f'AI response did not match any category. Response: {ai_text}')
-                    messagebox.showwarning('Warning', f'Could not determine category from AI response.\n\nAI said: {ai_text}\n\nPlease select manually.')
             else:
                 error_msg = result.get('error', 'Unknown error')
                 self.log_debug('ERROR', f'AI category suggestion failed: {error_msg}')
-                messagebox.showerror('Error', f'Failed to get AI suggestion: {error_msg}')
         except Exception as exc:
             self.log_debug('ERROR', f'AI category suggestion exception: {exc}')
-            messagebox.showerror('Error', f'Failed to get AI suggestion: {exc}')
         finally:
             self.config(cursor='')
     
@@ -5865,7 +6028,8 @@ TECHNICAL REQUIREMENTS:
         if len(values) < 5:
             return
         scene_num, timestamp, duration, lyrics, prompt = values[0], values[1], values[2], values[3], values[4]
-        final_prompt = self.scene_final_prompts.get(str(scene_num)) or self.build_scene_image_prompt(scene_num, prompt, lyrics)
+        # Use get_scene_final_prompt to check saved generated_prompt first
+        final_prompt = self.get_scene_final_prompt(str(scene_num), prompt, lyrics)
         text = f"Scene {scene_num} @ {timestamp} ({duration})\n"
         if lyrics:
             text += f"Lyrics: {lyrics}\n"
@@ -6381,6 +6545,33 @@ TECHNICAL REQUIREMENTS:
         mp3_filename = get_mp3_filename(full_song_name)
         return os.path.join(self.current_song_path, mp3_filename)
 
+    def backup_file_if_exists(self, filepath: str) -> str | None:
+        """Create a backup of a file if it exists.
+        
+        Args:
+            filepath: Path to the file to backup
+            
+        Returns:
+            Path to the backup file if backup was created, None otherwise
+        """
+        if not os.path.exists(filepath):
+            return None
+        
+        try:
+            import datetime
+            # Create backup filename with timestamp
+            base, ext = os.path.splitext(filepath)
+            timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+            backup_path = f"{base}_backup_{timestamp}{ext}"
+            
+            # Copy file to backup location
+            shutil.copy2(filepath, backup_path)
+            self.log_debug('INFO', f'Created backup: {backup_path}')
+            return backup_path
+        except Exception as e:
+            self.log_debug('WARNING', f'Failed to create backup for {filepath}: {e}')
+            return None
+    
     def get_album_cover_filepath(self) -> str:
         """Get the album cover image file path for the current song if it exists."""
         if not self.current_song_path:
@@ -6520,12 +6711,33 @@ TECHNICAL REQUIREMENTS:
             # Helper function to split lyrics into chunks
             def split_lyrics_into_chunks(lyrics_text, chunk_size=60):
                 """Split lyrics into chunks of approximately chunk_size lines."""
+                # Ensure lyrics_text is a proper string (handle any encoding issues)
+                if isinstance(lyrics_text, bytes):
+                    try:
+                        lyrics_text = lyrics_text.decode('utf-8')
+                    except UnicodeDecodeError:
+                        try:
+                            lyrics_text = lyrics_text.decode('latin-1')
+                        except UnicodeDecodeError:
+                            lyrics_text = lyrics_text.decode('utf-8', errors='replace')
+                elif not isinstance(lyrics_text, str):
+                    lyrics_text = str(lyrics_text)
+                
                 lines = lyrics_text.split('\n')
                 chunks = []
                 current_chunk = []
                 current_line_count = 0
                 
                 for line in lines:
+                    # Ensure each line is a proper string
+                    if isinstance(line, bytes):
+                        try:
+                            line = line.decode('utf-8')
+                        except UnicodeDecodeError:
+                            line = line.decode('utf-8', errors='replace')
+                    elif not isinstance(line, str):
+                        line = str(line)
+                    
                     current_chunk.append(line)
                     current_line_count += 1
                     
@@ -6542,13 +6754,31 @@ TECHNICAL REQUIREMENTS:
             
             # Helper function to process a single chunk
             def process_chunk(chunk_extracted, chunk_index, total_chunks):
+                # Ensure all text inputs are proper UTF-8 strings
+                if isinstance(chunk_extracted, bytes):
+                    try:
+                        chunk_extracted = chunk_extracted.decode('utf-8')
+                    except UnicodeDecodeError:
+                        chunk_extracted = chunk_extracted.decode('utf-8', errors='replace')
+                elif not isinstance(chunk_extracted, str):
+                    chunk_extracted = str(chunk_extracted)
+                
+                safe_original_lyrics = original_lyrics
+                if isinstance(original_lyrics, bytes):
+                    try:
+                        safe_original_lyrics = original_lyrics.decode('utf-8')
+                    except UnicodeDecodeError:
+                        safe_original_lyrics = original_lyrics.decode('utf-8', errors='replace')
+                elif not isinstance(original_lyrics, str):
+                    safe_original_lyrics = str(original_lyrics)
+                
                 prompt = f"""Review the extracted lyrics (with timestamps) and compare them with the original lyrics. Fix any wrong word detections while preserving the exact timestamp format.
 
 EXTRACTED LYRICS (with timestamps) - Chunk {chunk_index + 1} of {total_chunks}:
 {chunk_extracted}
 
 ORIGINAL LYRICS (reference):
-{original_lyrics}
+{safe_original_lyrics}
 
 Instructions:
 1. Compare the extracted lyrics with the original lyrics
@@ -6634,10 +6864,25 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
                 
                 for i, chunk in enumerate(chunks):
                     self.log_debug('INFO', f'Processing chunk {i + 1} of {len(chunks)}')
-                    chunk_result = process_chunk(chunk, i, len(chunks))
+                    try:
+                        chunk_result = process_chunk(chunk, i, len(chunks))
+                    except Exception as e:
+                        # Handle encoding errors gracefully
+                        error_msg = str(e)
+                        if isinstance(e, (UnicodeDecodeError, UnicodeEncodeError)):
+                            error_msg = f'Encoding error: {type(e).__name__}'
+                        self.log_debug('ERROR', f'Chunk {i + 1} processing exception: {error_msg}')
+                        messagebox.showerror('Error', f'Failed to process chunk {i + 1} of {len(chunks)}:\n{error_msg}')
+                        return
                     
                     if not chunk_result.get('success', False):
                         error_msg = chunk_result.get('error', 'Unknown error')
+                        # Ensure error message is safe for display
+                        if isinstance(error_msg, bytes):
+                            try:
+                                error_msg = error_msg.decode('utf-8', errors='replace')
+                            except Exception:
+                                error_msg = 'Unknown error (encoding issue)'
                         messagebox.showerror('Error', f'Failed to process chunk {i + 1} of {len(chunks)}:\n{error_msg}')
                         self.log_debug('ERROR', f'Chunk {i + 1} failed: {error_msg}')
                         return
@@ -7180,9 +7425,15 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
         if result.get('success'):
             img_bytes = result.get('image_bytes', b'')
             if img_bytes:
+                # Create backup if file exists
+                backup_path = self.backup_file_if_exists(filename)
+                
                 with open(filename, 'wb') as f:
                     f.write(img_bytes)
-                messagebox.showinfo('Success', f'Album cover saved to {filename}')
+                success_msg = f'Album cover saved to {filename}'
+                if backup_path:
+                    success_msg += f'\n\nBackup created: {os.path.basename(backup_path)}'
+                messagebox.showinfo('Success', success_msg)
                 if self.current_album is not None:
                     self.current_album['cover_image_file'] = filename
                 self.last_album_cover_path = filename
@@ -8071,6 +8322,110 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
         finally:
             self.config(cursor='')
     
+    def improve_album_cover_prompt(self):
+        """Improve the album cover prompt using AI based on user feedback."""
+        current_prompt = self.album_cover_text.get('1.0', tk.END).strip()
+        if not current_prompt:
+            messagebox.showwarning('Warning', 'Please generate an album cover prompt first.')
+            return
+        
+        # Open dialog to get improvement request
+        dialog = PromptImprovementDialog(self, 'Album Cover', current_prompt)
+        self.wait_window(dialog)
+        
+        if not dialog.result:
+            return  # User cancelled
+        
+        improvement_request = dialog.result
+        
+        # Build improvement prompt
+        prompt = f"Improve the following album cover prompt based on these requested changes:\n\n"
+        prompt += f"REQUESTED CHANGES: {improvement_request}\n\n"
+        prompt += f"CURRENT PROMPT:\n{current_prompt}\n\n"
+        prompt += "Generate an improved version of the prompt that incorporates the requested changes while maintaining the core concept and style. Output ONLY the improved prompt text, nothing else."
+        
+        try:
+            self.config(cursor='wait')
+            self.update()
+            
+            system_message = 'You are an expert at improving image generation prompts. Analyze the current prompt and requested changes, then generate an improved version that incorporates the changes while maintaining quality and coherence. Output ONLY the improved prompt text.'
+            result = self.azure_ai(prompt, system_message=system_message, profile='text', max_tokens=2000, temperature=0.7)
+            
+            if result.get('success'):
+                improved_prompt = result.get('content', '').strip()
+                
+                # Show result dialog
+                result_dialog = ImprovedPromptResultDialog(self, improved_prompt, current_prompt)
+                self.wait_window(result_dialog)
+                
+                if result_dialog.result:
+                    # User wants to save
+                    self.album_cover_text.delete('1.0', tk.END)
+                    self.album_cover_text.insert('1.0', improved_prompt)
+                    self.log_debug('INFO', 'Album cover prompt improved and saved')
+                    messagebox.showinfo('Success', 'Improved prompt saved.')
+            else:
+                messagebox.showerror('Error', f'Failed to improve prompt: {result.get("error", "Unknown error")}')
+                self.log_debug('ERROR', f'Failed to improve album cover prompt: {result.get("error", "Unknown error")}')
+        except Exception as e:
+            messagebox.showerror('Error', f'Error improving album cover prompt: {e}')
+            self.log_debug('ERROR', f'Error improving album cover prompt: {e}')
+        finally:
+            self.config(cursor='')
+    
+    def improve_album_cover_prompt_album(self):
+        """Improve the album cover prompt (album tab) using AI based on user feedback."""
+        current_prompt = self.album_cover_album_text.get('1.0', tk.END).strip()
+        if not current_prompt:
+            messagebox.showwarning('Warning', 'Please generate an album cover prompt first.')
+            return
+        
+        # Open dialog to get improvement request
+        dialog = PromptImprovementDialog(self, 'Album Cover', current_prompt)
+        self.wait_window(dialog)
+        
+        if not dialog.result:
+            return  # User cancelled
+        
+        improvement_request = dialog.result
+        
+        # Build improvement prompt
+        prompt = f"Improve the following album cover prompt based on these requested changes:\n\n"
+        prompt += f"REQUESTED CHANGES: {improvement_request}\n\n"
+        prompt += f"CURRENT PROMPT:\n{current_prompt}\n\n"
+        prompt += "Generate an improved version of the prompt that incorporates the requested changes while maintaining the core concept and style. Output ONLY the improved prompt text, nothing else."
+        
+        try:
+            self.config(cursor='wait')
+            self.update()
+            
+            system_message = 'You are an expert at improving image generation prompts. Analyze the current prompt and requested changes, then generate an improved version that incorporates the changes while maintaining quality and coherence. Output ONLY the improved prompt text.'
+            result = self.azure_ai(prompt, system_message=system_message, profile='text', max_tokens=2000, temperature=0.7)
+            
+            if result.get('success'):
+                improved_prompt = result.get('content', '').strip()
+                
+                # Show result dialog
+                result_dialog = ImprovedPromptResultDialog(self, improved_prompt, current_prompt)
+                self.wait_window(result_dialog)
+                
+                if result_dialog.result:
+                    # User wants to save
+                    self.album_cover_album_text.delete('1.0', tk.END)
+                    self.album_cover_album_text.insert('1.0', improved_prompt)
+                    if self.current_album is not None:
+                        self.current_album['cover_prompt'] = improved_prompt
+                    self.log_debug('INFO', 'Album cover prompt improved and saved')
+                    messagebox.showinfo('Success', 'Improved prompt saved.')
+            else:
+                messagebox.showerror('Error', f'Failed to improve prompt: {result.get("error", "Unknown error")}')
+                self.log_debug('ERROR', f'Failed to improve album cover prompt: {result.get("error", "Unknown error")}')
+        except Exception as e:
+            messagebox.showerror('Error', f'Error improving album cover prompt: {e}')
+            self.log_debug('ERROR', f'Error improving album cover prompt: {e}')
+        finally:
+            self.config(cursor='')
+    
     def generate_video_loop(self):
         """Generate video loop prompt."""
         if not self.current_persona:
@@ -8361,6 +8716,18 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
                             # 2 = absolute time in frames
                             try:
                                 for text, timestamp in sylt_frame:
+                                    # Handle encoding: ensure text is a string with proper UTF-8 handling
+                                    if isinstance(text, bytes):
+                                        try:
+                                            text = text.decode('utf-8')
+                                        except UnicodeDecodeError:
+                                            try:
+                                                text = text.decode('latin-1')
+                                            except UnicodeDecodeError:
+                                                text = text.decode('utf-8', errors='replace')
+                                    elif not isinstance(text, str):
+                                        text = str(text)
+                                    
                                     # Convert timestamp based on format
                                     if sylt_frame.format == 1:  # milliseconds
                                         timestamp_seconds = timestamp / 1000.0
@@ -8399,6 +8766,18 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
                             timed_lyrics = []
                             try:
                                 for text, timestamp in frame:
+                                    # Handle encoding: ensure text is a string with proper UTF-8 handling
+                                    if isinstance(text, bytes):
+                                        try:
+                                            text = text.decode('utf-8')
+                                        except UnicodeDecodeError:
+                                            try:
+                                                text = text.decode('latin-1')
+                                            except UnicodeDecodeError:
+                                                text = text.decode('utf-8', errors='replace')
+                                    elif not isinstance(text, str):
+                                        text = str(text)
+                                    
                                     # Convert timestamp based on format
                                     if frame.format == 1:  # milliseconds
                                         timestamp_seconds = timestamp / 1000.0
@@ -8432,6 +8811,17 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
                         uslt_frame = audio[key]
                         if isinstance(uslt_frame, USLT):
                             lyrics_text = uslt_frame.text
+                            # Handle encoding: ensure text is a string with proper UTF-8 handling
+                            if isinstance(lyrics_text, bytes):
+                                try:
+                                    lyrics_text = lyrics_text.decode('utf-8')
+                                except UnicodeDecodeError:
+                                    try:
+                                        lyrics_text = lyrics_text.decode('latin-1')
+                                    except UnicodeDecodeError:
+                                        lyrics_text = lyrics_text.decode('utf-8', errors='replace')
+                            elif not isinstance(lyrics_text, str):
+                                lyrics_text = str(lyrics_text)
                             if lyrics_text:
                                 lyrics_frames.append(lyrics_text)
                     except Exception as e:
@@ -8444,12 +8834,24 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
                 if tag in audio:
                     try:
                         frame = audio[tag]
+                        lyrics_text = None
                         if isinstance(frame, USLT):
                             lyrics_text = frame.text
-                            if lyrics_text:
-                                lyrics_frames.append(lyrics_text)
                         elif hasattr(frame, 'text'):
                             lyrics_text = frame.text
+                        
+                        if lyrics_text:
+                            # Handle encoding: ensure text is a string with proper UTF-8 handling
+                            if isinstance(lyrics_text, bytes):
+                                try:
+                                    lyrics_text = lyrics_text.decode('utf-8')
+                                except UnicodeDecodeError:
+                                    try:
+                                        lyrics_text = lyrics_text.decode('latin-1')
+                                    except UnicodeDecodeError:
+                                        lyrics_text = lyrics_text.decode('utf-8', errors='replace')
+                            elif not isinstance(lyrics_text, str):
+                                lyrics_text = str(lyrics_text)
                             if lyrics_text:
                                 lyrics_frames.append(lyrics_text)
                     except Exception as e:
@@ -10151,6 +10553,55 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
             self.log_debug('WARNING', f'Failed to overlay lyrics on image: {e}')
             return False
 
+    def get_scene_final_prompt(self, scene_num: str, base_prompt: str = None, lyrics: str = None) -> str:
+        """Get the final prompt for a scene, checking saved generated_prompt first.
+        
+        This checks in order:
+        1. Saved generated_prompt from config.json (if available)
+        2. In-memory cache (scene_final_prompts)
+        3. Builds a new prompt if neither exists
+        
+        Args:
+            scene_num: Scene number
+            base_prompt: Base prompt text (optional, will be retrieved from scene if not provided)
+            lyrics: Lyrics text (optional, will be retrieved from scene if not provided)
+        
+        Returns:
+            Final prompt string ready for image generation
+        """
+        # First, check if there's a saved generated_prompt in config.json
+        if self.current_song:
+            storyboard = self.current_song.get('storyboard', [])
+            scene_num_int = int(scene_num) if str(scene_num).isdigit() else None
+            
+            # Find the scene in the storyboard
+            for scene in storyboard:
+                scene_value = scene.get('scene')
+                # Handle both int and string scene numbers
+                if (scene_num_int is not None and scene_value == scene_num_int) or str(scene_value) == str(scene_num):
+                    stored_prompt = scene.get('generated_prompt', '')
+                    if stored_prompt:
+                        self.log_debug('INFO', f'Using saved generated_prompt for scene {scene_num}')
+                        return stored_prompt
+                    # If no stored prompt but we found the scene, use its base prompt and lyrics
+                    if base_prompt is None:
+                        base_prompt = scene.get('prompt', '')
+                    if lyrics is None:
+                        lyrics = scene.get('lyrics', '')
+                    break
+        
+        # Second, check in-memory cache
+        cache_key = f"{scene_num}|{self._get_song_persona_preset_key()}"
+        if cache_key in self.scene_final_prompts:
+            return self.scene_final_prompts[cache_key]
+        
+        # Third, build a new prompt if base_prompt is available
+        if base_prompt:
+            return self.build_scene_image_prompt(scene_num, base_prompt, lyrics)
+        
+        # Fallback: return empty string if nothing is available
+        return ''
+    
     def build_scene_image_prompt(self, scene_num: str, base_prompt: str, lyrics: str = None) -> str:
         """Build the final prompt that gets sent to the image model.
         
@@ -10708,26 +11159,8 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
         if image_exists:
             self.log_debug('INFO', f'Scene {scene_num} image already exists, will show preview dialog: {image_filename}')
 
-        # Check if a generated_prompt exists in config.json for this scene
-        final_prompt = None
-        if self.current_song:
-            storyboard = self.current_song.get('storyboard', [])
-            scene_num_int = int(scene_num) if str(scene_num).isdigit() else None
-            
-            # Find the scene in the storyboard
-            for scene in storyboard:
-                scene_value = scene.get('scene')
-                # Handle both int and string scene numbers
-                if (scene_num_int is not None and scene_value == scene_num_int) or str(scene_value) == str(scene_num):
-                    stored_prompt = scene.get('generated_prompt', '')
-                    if stored_prompt:
-                        final_prompt = stored_prompt
-                        self.log_debug('INFO', f'Using stored generated_prompt for scene {scene_num}')
-                        break
-        
-        # If no stored prompt, build it
-        if not final_prompt:
-            final_prompt = self.build_scene_image_prompt(scene_num, prompt, lyrics)
+        # Get the final prompt, checking saved generated_prompt first
+        final_prompt = self.get_scene_final_prompt(scene_num, prompt, lyrics)
         
         # Apply embed_lyrics setting (for both stored and newly built prompts)
         embed_enabled = bool(self.embed_lyrics_var.get()) if hasattr(self, 'embed_lyrics_var') else True
@@ -10926,18 +11359,17 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
         file_extension = '.jpg' if image_format == 'jpeg' else '.png'
         filename = os.path.join(self.current_song_path, f'{safe_basename}-Cover{file_extension}')
         
-        # Check if file exists and ask for confirmation
-        if os.path.exists(filename):
-            response = messagebox.askyesno('File Exists', f'Album cover file already exists:\n{filename}\n\nOverwrite?')
-            if not response:
-                self.log_debug('INFO', 'Album cover save cancelled by user')
-                return
+        # Create backup if file exists
+        backup_path = self.backup_file_if_exists(filename)
         
         try:
             with open(filename, 'wb') as f:
                 f.write(img_bytes)
             self.log_debug('INFO', f'Album cover saved to {filename}')
-            messagebox.showinfo('Success', f'Album cover saved to:\n{filename}')
+            success_msg = f'Album cover saved to:\n{filename}'
+            if backup_path:
+                success_msg += f'\n\nBackup created: {os.path.basename(backup_path)}'
+            messagebox.showinfo('Success', success_msg)
             self.last_song_cover_path = filename
             self.show_image_preview(filename, 'Song Cover Preview')
         except Exception as e:
