@@ -1989,6 +1989,9 @@ def load_persona_config(persona_path: str) -> dict:
         'genre_tags': [],
         'voice_style': '',
         'lyrics_style': '',
+        'spotify_link': '',
+        'itunes_link': '',
+        'youtube_music_link': '',
         'image_presets': [
             {'key': 'default', 'label': 'Main', 'is_default': True, 'profile_prompt': '', 'profile_custom_prompt': ''}
         ],
@@ -3193,7 +3196,10 @@ Return only the single most important keyword, nothing else. Just one word."""
             ('base_image_prompt', 'Base Image Prompt', True),
             ('bio', 'Bio (Backstory)', True),
             ('voice_style', 'Voice Style (From Suno)', True),
-            ('lyrics_style', 'Lyrics Style (For Auto Generation)', True)
+            ('lyrics_style', 'Lyrics Style (For Auto Generation)', True),
+            ('spotify_link', 'Spotify Link', False),
+            ('itunes_link', 'iTunes Link', False),
+            ('youtube_music_link', 'YouTube Music Link', False)
         ]
         
         row = 0
@@ -4962,6 +4968,7 @@ TECHNICAL REQUIREMENTS:
         top_frame.pack(fill=tk.X, pady=(0, 10))
         
         ttk.Button(top_frame, text='New Song', command=self.new_song).pack(side=tk.LEFT, padx=5)
+        ttk.Button(top_frame, text='Clone Song', command=self.clone_song).pack(side=tk.LEFT, padx=5)
         ttk.Button(top_frame, text='Delete Song', command=self.delete_song).pack(side=tk.LEFT, padx=5)
         
         songs_list_frame = ttk.LabelFrame(main_frame, text='Songs', padding=5)
@@ -5087,6 +5094,7 @@ TECHNICAL REQUIREMENTS:
         lyrics_btn_frame = ttk.Frame(scrollable_frame)
         lyrics_btn_frame.grid(row=4, column=3, padx=5, pady=5, sticky=tk.N)
         ttk.Button(lyrics_btn_frame, text='Generate', command=self.generate_lyrics).pack(fill=tk.X, pady=(0, 4))
+        ttk.Button(lyrics_btn_frame, text='Improve Lyrics', command=self.improve_lyrics).pack(fill=tk.X, pady=(0, 4))
         ttk.Button(lyrics_btn_frame, text='Copy Distro Lyrics', command=self.copy_distro_lyrics).pack(fill=tk.X)
         
         ttk.Label(scrollable_frame, text='Song Style:', font=('TkDefaultFont', 9, 'bold')).grid(row=5, column=0, sticky=tk.NW, pady=5)
@@ -5234,8 +5242,9 @@ TECHNICAL REQUIREMENTS:
         self.album_select_combo.grid(row=0, column=1, sticky=tk.W, padx=(0, 6))
         self.album_select_combo.bind('<<ComboboxSelected>>', self.on_album_select_combo)
         ttk.Button(album_top, text='Clear', command=self.clear_album_form).grid(row=0, column=2, padx=4, sticky=tk.W)
-        ttk.Button(album_top, text='Delete Album', command=self.delete_album).grid(row=0, column=3, padx=4, sticky=tk.W)
-        ttk.Button(album_top, text='Save Album', command=self.save_album).grid(row=0, column=4, padx=4, sticky=tk.W)
+        ttk.Button(album_top, text='Rename Album', command=self.rename_album).grid(row=0, column=3, padx=4, sticky=tk.W)
+        ttk.Button(album_top, text='Delete Album', command=self.delete_album).grid(row=0, column=4, padx=4, sticky=tk.W)
+        ttk.Button(album_top, text='Save Album', command=self.save_album).grid(row=0, column=5, padx=4, sticky=tk.W)
 
         ttk.Label(album_top, text='Name:', font=('TkDefaultFont', 9, 'bold')).grid(row=1, column=0, sticky=tk.W, pady=(6, 2))
         self.album_name_var = tk.StringVar()
@@ -6416,6 +6425,125 @@ TECHNICAL REQUIREMENTS:
                 messagebox.showerror('Error', f'Failed to delete song: {e}')
                 self.log_debug('ERROR', f'Failed to delete song: {e}')
     
+    def clone_song(self):
+        """Clone the selected song with a new name, copying only config.json."""
+        if not self.current_song_path:
+            messagebox.showwarning('Warning', 'Please select a song to clone.')
+            return
+        
+        if not self.current_persona_path:
+            messagebox.showwarning('Warning', 'No persona selected.')
+            return
+        
+        # Get original song name
+        original_song_name = self.current_song.get('song_name', os.path.basename(self.current_song_path))
+        
+        # Create dialog for new song name
+        dialog = tk.Toplevel(self)
+        dialog.title('Clone Song')
+        dialog.geometry('500x150')
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.update_idletasks()
+        
+        # Center dialog on parent window
+        try:
+            parent_x = self.winfo_rootx()
+            parent_y = self.winfo_rooty()
+            parent_w = self.winfo_width() or dialog.winfo_screenwidth()
+            parent_h = self.winfo_height() or dialog.winfo_screenheight()
+        except Exception:
+            parent_x = parent_y = 0
+            parent_w = dialog.winfo_screenwidth()
+            parent_h = dialog.winfo_screenheight()
+        dlg_w = dialog.winfo_width()
+        dlg_h = dialog.winfo_height()
+        pos_x = parent_x + (parent_w - dlg_w) // 2
+        pos_y = parent_y + (parent_h - dlg_h) // 2
+        dialog.geometry(f'+{max(0, pos_x)}+{max(0, pos_y)}')
+        
+        ttk.Label(dialog, text='Enter new song name:', font=('TkDefaultFont', 10)).pack(pady=(15, 5))
+        
+        name_var = tk.StringVar(value=f'{original_song_name} copy')
+        name_entry = ttk.Entry(dialog, textvariable=name_var, width=60)
+        name_entry.pack(pady=5, padx=20)
+        name_entry.select_range(0, tk.END)
+        name_entry.focus()
+        
+        result = [None]
+        
+        def ok_clicked():
+            name = name_var.get().strip()
+            if name:
+                result[0] = name
+                dialog.destroy()
+        
+        def cancel_clicked():
+            dialog.destroy()
+        
+        btn_frame = ttk.Frame(dialog)
+        btn_frame.pack(pady=(10, 12))
+        ttk.Button(btn_frame, text='OK', command=ok_clicked).pack(side=tk.LEFT, padx=4)
+        ttk.Button(btn_frame, text='Cancel', command=cancel_clicked).pack(side=tk.LEFT, padx=4)
+        
+        dialog.bind('<Return>', lambda e: ok_clicked())
+        dialog.bind('<Escape>', lambda e: cancel_clicked())
+        
+        self.wait_window(dialog)
+        
+        if result[0]:
+            # Create safe filename
+            safe_name = result[0].replace(':', '_').replace('/', '_').replace('\\', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace("'", '_').replace('<', '_').replace('>', '_').replace('|', '_')
+            songs_dir = os.path.join(self.current_persona_path, 'AI-Songs')
+            new_song_path = os.path.join(songs_dir, safe_name)
+            
+            # Check if song already exists
+            if os.path.exists(new_song_path):
+                messagebox.showerror('Error', f'Song "{safe_name}" already exists!')
+                return
+            
+            try:
+                # Create new song directory
+                os.makedirs(new_song_path, exist_ok=True)
+                
+                # Load config from source song
+                source_config_file = os.path.join(self.current_song_path, 'config.json')
+                if os.path.exists(source_config_file):
+                    with open(source_config_file, 'r', encoding='utf-8') as f:
+                        config = json.load(f)
+                    
+                    # Update song name in config
+                    config['song_name'] = result[0]
+                    
+                    # Clear album assignment
+                    config['album_id'] = ''
+                    config['album_name'] = ''
+                    
+                    # Save config to new song folder
+                    dest_config_file = os.path.join(new_song_path, 'config.json')
+                    with open(dest_config_file, 'w', encoding='utf-8') as f:
+                        json.dump(config, f, indent=4)
+                    
+                    self.log_debug('INFO', f'Cloned song "{original_song_name}" to "{result[0]}"')
+                    messagebox.showinfo('Success', f'Song cloned successfully as "{result[0]}"')
+                else:
+                    messagebox.showerror('Error', 'Source song config.json not found!')
+                    shutil.rmtree(new_song_path)
+                    return
+                
+                # Refresh song list
+                self.refresh_songs_list()
+                
+            except Exception as e:
+                messagebox.showerror('Error', f'Failed to clone song: {e}')
+                self.log_debug('ERROR', f'Failed to clone song: {e}')
+                # Clean up if something went wrong
+                if os.path.exists(new_song_path):
+                    try:
+                        shutil.rmtree(new_song_path)
+                    except:
+                        pass
+    
     def load_song_info(self):
         """Load song info into the form."""
         if not self.current_song:
@@ -7306,6 +7434,83 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
         self.clear_album_form()
         messagebox.showinfo('Success', f'Album "{album_name}" deleted and songs ungrouped.')
 
+    def rename_album(self):
+        """Rename the selected album."""
+        if not self.current_album_id:
+            messagebox.showwarning('Warning', 'Select an album first.')
+            return
+        if not self.current_persona_path:
+            messagebox.showwarning('Warning', 'Please select a persona first.')
+            return
+        
+        old_album_id = self.current_album_id
+        album_cfg = self.albums.get(old_album_id, {})
+        old_album_name = album_cfg.get('album_name', old_album_id)
+        
+        new_album_name = simpledialog.askstring('Rename Album', 'Enter new album name:', initialvalue=old_album_name)
+        if not new_album_name:
+            return
+        new_album_name = new_album_name.strip()
+        if not new_album_name:
+            messagebox.showwarning('Warning', 'Album name cannot be empty.')
+            return
+        
+        new_album_id = self._album_slug(new_album_name)
+        albums_dir = self._albums_dir()
+        if not albums_dir:
+            messagebox.showerror('Error', 'Persona path not available.')
+            return
+        
+        old_path = self._get_album_path(old_album_id)
+        if not old_path or not os.path.exists(old_path):
+            messagebox.showerror('Error', 'Album folder not found.')
+            return
+        
+        old_folder_name = album_cfg.get('folder_name') or old_album_id
+        new_folder_name = new_album_id
+        new_path = os.path.join(albums_dir, new_folder_name)
+        
+        if old_album_id != new_album_id and os.path.exists(new_path):
+            messagebox.showerror('Error', f'An album with ID "{new_album_id}" already exists.')
+            return
+        
+        try:
+            if old_folder_name != new_folder_name:
+                shutil.move(old_path, new_path)
+                config_path = new_path
+            else:
+                config_path = old_path
+            
+            config = load_album_config(config_path)
+            config.update({
+                'album_id': new_album_id,
+                'album_name': new_album_name,
+                'folder_name': new_folder_name
+            })
+            
+            if save_album_config(config_path, config):
+                for sid in config.get('songs', []):
+                    song_path = os.path.join(self.current_persona_path, 'AI-Songs', sid)
+                    if os.path.isdir(song_path):
+                        song_cfg = load_song_config(song_path)
+                        song_cfg['album_id'] = new_album_id
+                        song_cfg['album_name'] = new_album_name
+                        save_song_config(song_path, song_cfg)
+                
+                self.current_album_id = new_album_id
+                self.current_album = config
+                self.load_albums()
+                self.refresh_album_selector()
+                self.refresh_songs_list()
+                self.album_select_var.set(new_album_name)
+                self.album_name_var.set(new_album_name)
+                messagebox.showinfo('Success', f'Album renamed from "{old_album_name}" to "{new_album_name}".')
+            else:
+                messagebox.showerror('Error', 'Failed to save album config.')
+        except Exception as exc:
+            messagebox.showerror('Error', f'Failed to rename album: {exc}')
+            self.log_debug('ERROR', f'Rename album failed: {exc}')
+
     def _album_cover_size_value(self) -> str:
         match = re.search(r'\((\d+x\d+)\)', self.album_cover_size_album_var.get() or '')
         return match.group(1) if match else '1024x1024'
@@ -7746,6 +7951,234 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
             self.log_debug('ERROR', f'Error generating lyrics: {e}')
         finally:
             self.config(cursor='')
+
+    def improve_lyrics(self):
+        """Improve, change, or translate lyrics using AI."""
+        lyrics = self.lyrics_text.get('1.0', tk.END).strip() if hasattr(self, 'lyrics_text') else ''
+        if not lyrics:
+            messagebox.showwarning('Warning', 'No lyrics found. Please add lyrics first.')
+            return
+        
+        # Create dialog for improvement options
+        dialog = tk.Toplevel(self)
+        dialog.title('Improve Lyrics')
+        dialog.geometry('600x550')
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.update_idletasks()
+        
+        # Center dialog on parent window
+        try:
+            parent_x = self.winfo_rootx()
+            parent_y = self.winfo_rooty()
+            parent_w = self.winfo_width() or dialog.winfo_screenwidth()
+            parent_h = self.winfo_height() or dialog.winfo_screenheight()
+        except Exception:
+            parent_x = parent_y = 0
+            parent_w = dialog.winfo_screenwidth()
+            parent_h = dialog.winfo_screenheight()
+        dlg_w = dialog.winfo_width()
+        dlg_h = dialog.winfo_height()
+        pos_x = parent_x + (parent_w - dlg_w) // 2
+        pos_y = parent_y + (parent_h - dlg_h) // 2
+        dialog.geometry(f'+{max(0, pos_x)}+{max(0, pos_y)}')
+        
+        main_frame = ttk.Frame(dialog, padding=15)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        ttk.Label(main_frame, text='Select Operation:', font=('TkDefaultFont', 10, 'bold')).pack(anchor=tk.W, pady=(0, 10))
+        
+        operation_var = tk.StringVar(value='improve')
+        
+        ttk.Radiobutton(main_frame, text='Improve/Enhance Lyrics (quality, flow, rhymes)', variable=operation_var, value='improve').pack(anchor=tk.W, pady=2)
+        ttk.Radiobutton(main_frame, text='Translate Lyrics', variable=operation_var, value='translate').pack(anchor=tk.W, pady=2)
+        ttk.Radiobutton(main_frame, text='Change/Modify with Custom Instructions', variable=operation_var, value='custom').pack(anchor=tk.W, pady=2)
+        
+        # Language selection frame (for translation)
+        lang_frame = ttk.LabelFrame(main_frame, text='Translation Target Language', padding=10)
+        lang_frame.pack(fill=tk.X, pady=(10, 0))
+        
+        lang_var = tk.StringVar(value='de')
+        ttk.Radiobutton(lang_frame, text='German', variable=lang_var, value='de').pack(anchor=tk.W, pady=2)
+        ttk.Radiobutton(lang_frame, text='English', variable=lang_var, value='en').pack(anchor=tk.W, pady=2)
+        ttk.Radiobutton(lang_frame, text='Spanish', variable=lang_var, value='es').pack(anchor=tk.W, pady=2)
+        ttk.Radiobutton(lang_frame, text='French', variable=lang_var, value='fr').pack(anchor=tk.W, pady=2)
+        ttk.Radiobutton(lang_frame, text='Italian', variable=lang_var, value='it').pack(anchor=tk.W, pady=2)
+        
+        # Custom instructions
+        custom_frame = ttk.LabelFrame(main_frame, text='Custom Instructions', padding=10)
+        custom_frame.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
+        
+        ttk.Label(custom_frame, text='Enter your custom instructions for modifying the lyrics:').pack(anchor=tk.W, pady=(0, 5))
+        custom_text = scrolledtext.ScrolledText(custom_frame, height=6, wrap=tk.WORD)
+        custom_text.pack(fill=tk.BOTH, expand=True)
+        
+        result = [None]
+        
+        def process_lyrics():
+            operation = operation_var.get()
+            
+            self.log_debug('INFO', f'Processing lyrics with operation: {operation}')
+            dialog.destroy()
+            
+            self.config(cursor='wait')
+            self.update()
+            
+            try:
+                if operation == 'improve':
+                    prompt = f"""Improve and enhance the following song lyrics.
+
+ORIGINAL LYRICS:
+{lyrics}
+
+INSTRUCTIONS:
+1. Enhance the quality, flow, and rhyming scheme
+2. Make the lyrics more poetic and impactful
+3. Maintain the original meaning and theme
+4. Keep the same language as the original
+5. Preserve the structure (Verse, Chorus, Bridge, etc.)
+6. Improve word choices and metaphors
+7. Ensure strong hooks and memorable lines
+
+Return ONLY the improved lyrics with section labels like [Verse 1], [Chorus], etc."""
+                    
+                    system_message = "You are an expert lyricist who improves song lyrics while maintaining their essence and structure."
+                
+                elif operation == 'translate':
+                    target_lang = lang_var.get()
+                    lang_names = {'de': 'German', 'en': 'English', 'es': 'Spanish', 'fr': 'French', 'it': 'Italian'}
+                    target_lang_name = lang_names.get(target_lang, 'German')
+                    
+                    prompt = f"""Translate the following song lyrics to {target_lang_name}.
+
+ORIGINAL LYRICS:
+{lyrics}
+
+INSTRUCTIONS:
+1. Translate all lyrics to {target_lang_name}
+2. Maintain the rhythm and syllable count as much as possible
+3. Preserve rhyming schemes where possible
+4. Keep the same emotional tone and meaning
+5. Adapt idioms and metaphors culturally when needed
+6. Preserve section labels like [Verse 1], [Chorus], [Bridge], etc.
+7. Make it singable in the target language
+
+Return ONLY the translated lyrics with section labels."""
+                    
+                    system_message = f"You are an expert translator specializing in song lyrics, translating to {target_lang_name} while maintaining singability and emotional impact."
+                
+                elif operation == 'custom':
+                    custom_instructions = custom_text.get('1.0', tk.END).strip()
+                    if not custom_instructions:
+                        messagebox.showwarning('Warning', 'Please enter custom instructions.')
+                        self.config(cursor='')
+                        return
+                    
+                    prompt = f"""Modify the following song lyrics according to the custom instructions below.
+
+ORIGINAL LYRICS:
+{lyrics}
+
+CUSTOM INSTRUCTIONS:
+{custom_instructions}
+
+IMPORTANT:
+1. Follow the custom instructions exactly
+2. Preserve section labels like [Verse 1], [Chorus], [Bridge], etc.
+3. Maintain the song structure unless instructed otherwise
+4. Return ONLY the modified lyrics
+
+Return the modified lyrics with section labels."""
+                    
+                    system_message = "You are an expert lyricist who modifies song lyrics according to specific instructions while maintaining quality and structure."
+                
+                else:
+                    messagebox.showerror('Error', 'Invalid operation selected.')
+                    self.config(cursor='')
+                    return
+                
+                # Call AI
+                result_ai = self.azure_ai(prompt, system_message=system_message, profile='text', max_tokens=2000, temperature=0.7)
+                
+                if result_ai.get('success'):
+                    improved_lyrics = result_ai.get('content', '').strip()
+                    
+                    # Show preview dialog with accept/cancel
+                    preview_dialog = tk.Toplevel(self)
+                    preview_dialog.title('Preview Improved Lyrics')
+                    preview_dialog.geometry('800x600')
+                    preview_dialog.transient(self)
+                    preview_dialog.grab_set()
+                    
+                    # Center preview dialog
+                    preview_dialog.update_idletasks()
+                    try:
+                        parent_x = self.winfo_rootx()
+                        parent_y = self.winfo_rooty()
+                        parent_w = self.winfo_width() or preview_dialog.winfo_screenwidth()
+                        parent_h = self.winfo_height() or preview_dialog.winfo_screenheight()
+                    except Exception:
+                        parent_x = parent_y = 0
+                        parent_w = preview_dialog.winfo_screenwidth()
+                        parent_h = preview_dialog.winfo_screenheight()
+                    dlg_w = preview_dialog.winfo_width()
+                    dlg_h = preview_dialog.winfo_height()
+                    pos_x = parent_x + (parent_w - dlg_w) // 2
+                    pos_y = parent_y + (parent_h - dlg_h) // 2
+                    preview_dialog.geometry(f'+{max(0, pos_x)}+{max(0, pos_y)}')
+                    
+                    preview_frame = ttk.Frame(preview_dialog, padding=15)
+                    preview_frame.pack(fill=tk.BOTH, expand=True)
+                    
+                    ttk.Label(preview_frame, text='Preview Improved Lyrics:', font=('TkDefaultFont', 10, 'bold')).pack(anchor=tk.W, pady=(0, 10))
+                    
+                    preview_text = scrolledtext.ScrolledText(preview_frame, wrap=tk.WORD, font=('TkDefaultFont', 10))
+                    preview_text.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+                    preview_text.insert('1.0', improved_lyrics)
+                    preview_text.config(state=tk.DISABLED)
+                    
+                    accept_result = [False]
+                    
+                    def accept_lyrics():
+                        accept_result[0] = True
+                        preview_dialog.destroy()
+                    
+                    def cancel_lyrics():
+                        preview_dialog.destroy()
+                    
+                    btn_frame = ttk.Frame(preview_frame)
+                    btn_frame.pack(fill=tk.X)
+                    ttk.Button(btn_frame, text='Accept & Replace Lyrics', command=accept_lyrics).pack(side=tk.LEFT, padx=5)
+                    ttk.Button(btn_frame, text='Cancel', command=cancel_lyrics).pack(side=tk.LEFT, padx=5)
+                    
+                    self.wait_window(preview_dialog)
+                    
+                    if accept_result[0]:
+                        self.lyrics_text.delete('1.0', tk.END)
+                        self.lyrics_text.insert('1.0', improved_lyrics)
+                        self.log_debug('INFO', f'Lyrics {operation} completed successfully')
+                        messagebox.showinfo('Success', f'Lyrics {operation} completed successfully!')
+                    else:
+                        self.log_debug('INFO', f'Lyrics {operation} cancelled by user')
+                else:
+                    messagebox.showerror('Error', f'Failed to process lyrics: {result_ai.get("error", "Unknown error")}')
+                    self.log_debug('ERROR', f'Failed to process lyrics: {result_ai.get("error", "Unknown error")}')
+            
+            except Exception as e:
+                messagebox.showerror('Error', f'Error processing lyrics: {e}')
+                self.log_debug('ERROR', f'Error processing lyrics: {e}')
+            finally:
+                self.config(cursor='')
+        
+        def cancel_dialog():
+            dialog.destroy()
+        
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(fill=tk.X, pady=(10, 0))
+        ttk.Button(btn_frame, text='Process', command=process_lyrics).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text='Cancel', command=cancel_dialog).pack(side=tk.LEFT, padx=5)
+        
+        dialog.bind('<Escape>', lambda e: cancel_dialog())
 
     def copy_distro_lyrics(self):
         """Format lyrics for distribution platforms and copy to clipboard."""
@@ -11492,6 +11925,24 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
         desc += f"AI Persona: {persona_name}\n"
         desc += f"Style: {merged_style}\n"
         desc += f"Video Type: AI-Generated Music\n\n"
+        
+        # Add music platform links if available
+        spotify_link = self.current_persona.get('spotify_link', '').strip()
+        itunes_link = self.current_persona.get('itunes_link', '').strip()
+        youtube_music_link = self.current_persona.get('youtube_music_link', '').strip()
+        
+        if spotify_link or itunes_link or youtube_music_link:
+            desc += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            desc += "🎵 LISTEN ON\n"
+            desc += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            if spotify_link:
+                desc += f"Spotify: {spotify_link}\n"
+            if itunes_link:
+                desc += f"iTunes: {itunes_link}\n"
+            if youtube_music_link:
+                desc += f"YouTube Music: {youtube_music_link}\n"
+            desc += "\n"
+        
         desc += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         desc += "⚠️ DISCLAIMER\n"
         desc += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
