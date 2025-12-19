@@ -425,21 +425,20 @@ class VideoEditorGUI(BaseAudioGUI):
             # Position video at correct time first using setpts
             filter_parts.append(f"[v{i}_scaled]setpts=PTS+{video_start}/TB[v{i}_positioned]")
             
-            # Apply fade-in at start (for transitions after first video) using absolute time
+            # Apply fade-in at start (for transitions after first video) relative to video stream
             if i > 0:
-                # This video fades in during transition (absolute time)
-                filter_parts.append(f"[v{i}_positioned]fade=t=in:st={video_start}:d={transition_dur}[v{i}_fadein]")
+                # This video fades in during transition (relative to stream start)
+                filter_parts.append(f"[v{i}_positioned]fade=t=in:st=0:d={transition_dur}[v{i}_fadein]")
                 video_label = f"v{i}_fadein"
             else:
                 video_label = f"v{i}_positioned"
             
-            # Apply fade-out at end (for all videos except the last) using absolute time
+            # Apply fade-out at end (for all videos except the last) relative to video stream
             if i < len(video_files) - 1:
-                # Calculate when fade-out should start in absolute time
-                # The video ends at video_start + durations[i]
                 # Fade-out should start (transition_dur) before the video ends
-                fade_out_start_absolute = video_start + durations[i] - transition_dur
-                filter_parts.append(f"[{video_label}]fade=t=out:st={fade_out_start_absolute}:d={transition_dur}[v{i}_faded]")
+                # Use stream-relative time (relative to start of this video)
+                fade_out_start_relative = durations[i] - transition_dur
+                filter_parts.append(f"[{video_label}]fade=t=out:st={fade_out_start_relative}:d={transition_dur}[v{i}_faded]")
                 video_label = f"v{i}_faded"
             
             # Overlay on current output - use the final video_label after all fades

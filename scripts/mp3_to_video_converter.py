@@ -1495,8 +1495,13 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
         # Build filter graph
         filter_parts = []
         
-        # Create scaled copies for each loop using split
-        filter_parts.append(f"[0:v]{scale_filter},split={num_loops}" + "".join([f"[v{i}]" for i in range(num_loops)]))
+        # Scale and normalize all video inputs (same file loaded multiple times as separate inputs)
+        # Each input is a separate decoder instance, preventing synchronization issues
+        # Note: We don't trim here - let xfade handle the timing, trim only if video is longer than needed
+        for i in range(num_loops):
+            # Apply scaling - the video will naturally play for its duration
+            # xfade will handle the transition timing based on offsets
+            filter_parts.append(f"[{i}:v]{scale_filter}[v{i}]")
         
         # Calculate xfade offsets
         xfade_offsets = []
@@ -1504,15 +1509,22 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
         
         for i in range(num_loops - 1):
             if i == 0:
-                offset = max(0.1, video_duration - transition_dur)
+                # First transition: start transition near end of first video
+                # Offset must be at least transition_dur to allow full transition
+                # But should be video_duration - transition_dur for seamless loop
+                offset = max(transition_dur + 0.1, video_duration - transition_dur)
                 output_dur = offset + video_duration
             else:
                 prev_output_dur = xfade_output_durations[i-1]
-                offset = max(0.1, prev_output_dur - transition_dur)
+                offset = max(transition_dur + 0.1, prev_output_dur - transition_dur)
                 output_dur = offset + video_duration
             
             xfade_offsets.append(offset)
             xfade_output_durations.append(output_dur)
+        
+        # Debug logging for first transition
+        if len(xfade_offsets) > 0:
+            self.log(f"[DEBUG] First xfade offset: {xfade_offsets[0]:.3f}s, video_duration: {video_duration:.3f}s, transition_dur: {transition_dur:.3f}s")
         
         # Build xfade chain
         if num_loops == 2:
@@ -1533,13 +1545,15 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
         
         filter_complex = ";".join(filter_parts)
         
-        # Build command
+        # Build command - load video file multiple times as separate inputs
+        # This prevents synchronization issues that make xfade transitions invisible
         cmd = [ffmpeg_cmd, '-y']
-        cmd.extend(['-i', self.selected_video_file])
+        for _ in range(num_loops):
+            cmd.extend(['-i', self.selected_video_file])
         cmd.extend(['-i', audio_file])
         cmd.extend(['-filter_complex', filter_complex])
         cmd.extend(['-map', '[vout]'])
-        cmd.extend(['-map', '1:a:0'])
+        cmd.extend(['-map', f'{num_loops}:a:0'])  # Audio is after all video inputs
         cmd.extend(['-c:a', 'aac', '-b:a', '192k'])
         cmd.extend(['-c:v', video_codec])
         
