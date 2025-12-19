@@ -84,6 +84,9 @@ class ImageFormatConverterGUI(BaseAudioGUI):
         self.selected_files = []
         self.log_text = None  # Will be initialized in setup_ui()
         
+        # Video mode for MP4 output (Forward or Forward+Reverse)
+        self.video_mode_var = tk.StringVar(value="forward")
+        
         # Initialize FFmpeg manager (with safe log callback)
         root_dir = os.path.dirname(os.path.dirname(__file__))
         self.ffmpeg_manager = FFmpegManager(root_dir, log_callback=lambda msg: self._safe_log(f"[FFmpeg] {msg}"))
@@ -215,11 +218,20 @@ class ImageFormatConverterGUI(BaseAudioGUI):
         ttk.Radiobutton(format_frame, text="JPG", variable=self.output_format_var, value="JPG").pack(side='left', padx=5)
         ttk.Radiobutton(format_frame, text="PNG", variable=self.output_format_var, value="PNG").pack(side='left', padx=5)
         ttk.Radiobutton(format_frame, text="MP4", variable=self.output_format_var, value="MP4").pack(side='left', padx=5)
+        self.output_format_var.trace('w', self.on_output_format_change)
+        
+        # Video mode (only visible when MP4 is selected)
+        self.video_mode_frame = ttk.Frame(settings_frame)
+        self.video_mode_frame.grid(row=5, column=0, columnspan=3, sticky='w', pady=5)
+        ttk.Label(self.video_mode_frame, text="Video Mode:").pack(side='left', padx=5)
+        ttk.Radiobutton(self.video_mode_frame, text="Forward", variable=self.video_mode_var, value="forward").pack(side='left', padx=5)
+        ttk.Radiobutton(self.video_mode_frame, text="Forward+Reverse", variable=self.video_mode_var, value="forward_reverse").pack(side='left', padx=5)
+        self.video_mode_frame.grid_remove()  # Hidden by default
         
         # Input format detection display
-        ttk.Label(settings_frame, text="Input Format:").grid(row=5, column=0, sticky='w', pady=5)
+        ttk.Label(settings_frame, text="Input Format:").grid(row=6, column=0, sticky='w', pady=5)
         self.input_format_label = ttk.Label(settings_frame, text="No file selected", foreground="gray")
-        self.input_format_label.grid(row=5, column=1, sticky='w', padx=5)
+        self.input_format_label.grid(row=6, column=1, sticky='w', padx=5)
         
         # Processing frame
         process_frame = ttk.Frame(self.root)
@@ -250,6 +262,13 @@ class ImageFormatConverterGUI(BaseAudioGUI):
         # Bind selection change to update input format display
         self.file_listbox.bind('<<ListboxSelect>>', self.on_file_selection_change)
     
+    
+    def on_output_format_change(self, *args):
+        """Show/hide video mode options based on output format"""
+        if self.output_format_var.get() == "MP4":
+            self.video_mode_frame.grid()
+        else:
+            self.video_mode_frame.grid_remove()
     
     def on_aspect_ratio_change(self, event=None):
         ratio_name = self.aspect_ratio_var.get()
@@ -571,7 +590,8 @@ class ImageFormatConverterGUI(BaseAudioGUI):
                 # Save with appropriate format
                 if output_format == "MP4":
                     # Convert image to MP4 video (single frame, 1 second duration)
-                    return self._convert_image_to_mp4(cropped_img, output_path, target_ratio)
+                    video_mode = self.video_mode_var.get()
+                    return self._convert_image_to_mp4(cropped_img, output_path, target_ratio, video_mode)
                 elif output_format == "JPG":
                     cropped_img.save(output_path, "JPEG", quality=95)
                 else:
@@ -581,7 +601,7 @@ class ImageFormatConverterGUI(BaseAudioGUI):
         except Exception as e:
             return False, str(e)
     
-    def _convert_image_to_mp4(self, img, output_path, target_ratio=None):
+    def _convert_image_to_mp4(self, img, output_path, target_ratio=None, video_mode="forward"):
         """Convert a PIL Image to MP4 video (single frame, 1 second)"""
         try:
             ffmpeg_cmd = self.ffmpeg_manager.get_ffmpeg_command()
@@ -602,19 +622,57 @@ class ImageFormatConverterGUI(BaseAudioGUI):
                 else:
                     output_width, output_height = width, height
                 
-                # Create 1-second video from image
-                cmd = [ffmpeg_cmd, '-loop', '1', '-i', temp_img.name, 
-                      '-t', '1', '-vf', f'scale={output_width}:{output_height}',
-                      '-c:v', 'libx264', '-preset', 'medium', '-crf', '23',
-                      '-pix_fmt', 'yuv420p', '-y', output_path]
-                
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-                
-                if result.returncode == 0 and os.path.exists(output_path):
-                    return True, None
+                if video_mode == "forward_reverse":
+                    # Create forward-reverse video: forward 1 second + reverse 1 second = 2 seconds total
+                    # Step 1: Create forward-reverse segment
+                    temp_video = os.path.join(os.path.dirname(output_path), f"temp_forward_reverse_{os.path.basename(output_path)}")
+                    
+                    scale_filter = f'scale={output_width}:{output_height}'
+                    temp_cmd = [ffmpeg_cmd, '-y', '-loop', '1', '-i', temp_img.name, '-t', '1',
+                               '-filter_complex', 
+                               f'[0:v]{scale_filter}[v_scaled];[0:v]{scale_filter}[v_scaled2];[v_scaled2]reverse[v_rev];[v_scaled][v_rev]concat=n=2:v=1:a=0[v_final]',
+                               '-map', '[v_final]', '-c:v', 'libx264', '-preset', 'medium', '-crf', '23',
+                               '-pix_fmt', 'yuv420p', temp_video]
+                    
+                    result = subprocess.run(temp_cmd, capture_output=True, text=True, timeout=30)
+                    
+                    if result.returncode != 0:
+                        error_msg = result.stderr[-500:] if result.stderr else "Unknown FFmpeg error"
+                        try:
+                            os.unlink(temp_img.name)
+                        except:
+                            pass
+                        return False, f"Forward-reverse temp video creation failed: {error_msg}"
+                    
+                    # Step 2: Use the forward-reverse video as output (it's already 2 seconds)
+                    try:
+                        if os.path.exists(temp_video):
+                            import shutil
+                            shutil.move(temp_video, output_path)
+                            return True, None
+                        else:
+                            return False, "Temp video file was not created"
+                    finally:
+                        # Clean up temp video if it still exists
+                        try:
+                            if os.path.exists(temp_video):
+                                os.unlink(temp_video)
+                        except:
+                            pass
                 else:
-                    error_msg = result.stderr[-500:] if result.stderr else "Unknown FFmpeg error"
-                    return False, error_msg
+                    # Forward only - create 1-second video from image
+                    cmd = [ffmpeg_cmd, '-loop', '1', '-i', temp_img.name, 
+                          '-t', '1', '-vf', f'scale={output_width}:{output_height}',
+                          '-c:v', 'libx264', '-preset', 'medium', '-crf', '23',
+                          '-pix_fmt', 'yuv420p', '-y', output_path]
+                    
+                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+                    
+                    if result.returncode == 0 and os.path.exists(output_path):
+                        return True, None
+                    else:
+                        error_msg = result.stderr[-500:] if result.stderr else "Unknown FFmpeg error"
+                        return False, error_msg
             finally:
                 # Clean up temp file
                 try:
@@ -674,26 +732,68 @@ class ImageFormatConverterGUI(BaseAudioGUI):
             
             # Build FFmpeg filter: crop then scale to exact output dimensions
             # This ensures the final output has exact aspect ratio
-            crop_filter = f"crop={crop_width}:{crop_height}:{crop_x}:{crop_y},scale={output_width}:{output_height}"
+            scale_filter = f"crop={crop_width}:{crop_height}:{crop_x}:{crop_y},scale={output_width}:{output_height}"
             
-            # Build FFmpeg command
-            cmd = [ffmpeg_cmd, '-i', input_path, '-vf', crop_filter]
+            # Get video mode for MP4 output
+            video_mode = self.video_mode_var.get() if output_format == "MP4" else "forward"
             
-            # Set output format and codec (videos always output as MP4)
-            cmd.extend(['-c:v', 'libx264', '-preset', 'medium', '-crf', '23'])
-            # Try to copy audio, fallback to AAC if copy fails
-            cmd.extend(['-c:a', 'aac', '-b:a', '192k'])
-            
-            cmd.extend(['-y', output_path])  # -y to overwrite
-            
-            # Run FFmpeg
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-            
-            if result.returncode == 0 and os.path.exists(output_path):
-                return True, None
+            if video_mode == "forward_reverse":
+                # Create forward-reverse video
+                temp_video = os.path.join(os.path.dirname(output_path), f"temp_forward_reverse_{os.path.basename(output_path)}")
+                
+                # Step 1: Create forward-reverse segment
+                temp_cmd = [ffmpeg_cmd, '-y', '-i', input_path,
+                           '-filter_complex', 
+                           f'[0:v]{scale_filter}[v_scaled];[0:v]{scale_filter}[v_scaled2];[v_scaled2]reverse[v_rev];[v_scaled][v_rev]concat=n=2:v=1:a=0[v_final]',
+                           '-map', '[v_final]']
+                
+                # Copy audio from first input (forward part)
+                temp_cmd.extend(['-map', '0:a?'])
+                temp_cmd.extend(['-c:v', 'libx264', '-preset', 'medium', '-crf', '23'])
+                temp_cmd.extend(['-c:a', 'aac', '-b:a', '192k'])
+                temp_cmd.append(temp_video)
+                
+                result = subprocess.run(temp_cmd, capture_output=True, text=True, timeout=300)
+                
+                if result.returncode != 0:
+                    error_msg = result.stderr[-500:] if result.stderr else "Unknown FFmpeg error"
+                    return False, f"Forward-reverse temp video creation failed: {error_msg}"
+                
+                # Step 2: Use the forward-reverse video as output
+                try:
+                    if os.path.exists(temp_video):
+                        import shutil
+                        shutil.move(temp_video, output_path)
+                        return True, None
+                    else:
+                        return False, "Temp video file was not created"
+                finally:
+                    # Clean up temp video if it still exists
+                    try:
+                        if os.path.exists(temp_video):
+                            os.unlink(temp_video)
+                    except:
+                        pass
             else:
-                error_msg = result.stderr[-500:] if result.stderr else "Unknown FFmpeg error"
-                return False, error_msg
+                # Forward only
+                # Build FFmpeg command
+                cmd = [ffmpeg_cmd, '-i', input_path, '-vf', scale_filter]
+                
+                # Set output format and codec (videos always output as MP4)
+                cmd.extend(['-c:v', 'libx264', '-preset', 'medium', '-crf', '23'])
+                # Try to copy audio, fallback to AAC if copy fails
+                cmd.extend(['-c:a', 'aac', '-b:a', '192k'])
+                
+                cmd.extend(['-y', output_path])  # -y to overwrite
+                
+                # Run FFmpeg
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+                
+                if result.returncode == 0 and os.path.exists(output_path):
+                    return True, None
+                else:
+                    error_msg = result.stderr[-500:] if result.stderr else "Unknown FFmpeg error"
+                    return False, error_msg
                 
         except subprocess.TimeoutExpired:
             return False, "FFmpeg operation timed out"
