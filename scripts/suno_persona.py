@@ -5155,7 +5155,10 @@ TECHNICAL REQUIREMENTS:
         ttk.Label(scrollable_frame, text='Merged Style:', font=('TkDefaultFont', 9, 'bold')).grid(row=6, column=0, sticky=tk.NW, pady=5)
         self.merged_style_text = scrolledtext.ScrolledText(scrollable_frame, height=3, wrap=tk.WORD, width=60)
         self.merged_style_text.grid(row=6, column=1, columnspan=2, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
-        ttk.Button(scrollable_frame, text='Merge', command=self.merge_song_style).grid(row=6, column=3, padx=5, pady=5, sticky=tk.N)
+        merged_btn_frame = ttk.Frame(scrollable_frame)
+        merged_btn_frame.grid(row=6, column=3, padx=5, pady=5, sticky=tk.N)
+        ttk.Button(merged_btn_frame, text='Merge', command=self.merge_song_style).pack(fill=tk.X, pady=(0, 4))
+        ttk.Button(merged_btn_frame, text='Improve', command=self.improve_merged_style).pack(fill=tk.X)
 
         ttk.Label(scrollable_frame, text='Storyboard Theme / Global Image Style:', font=('TkDefaultFont', 9, 'bold')).grid(row=7, column=0, sticky=tk.NW, pady=5)
         self.storyboard_theme_text = scrolledtext.ScrolledText(scrollable_frame, height=3, wrap=tk.WORD, width=60)
@@ -5344,7 +5347,7 @@ TECHNICAL REQUIREMENTS:
         self.album_cover_size_album_var = tk.StringVar(value='1:1 (1024x1024)')
         ttk.Combobox(size_bar, textvariable=self.album_cover_size_album_var,
                      values=['1:1 (1024x1024)', '3:2 (1536x1024)', '16:9 (1792x1024)',
-                             '4:3 (1365x1024)', '2:3 (1024x1536)''9:16 (1024x1792)', '21:9 (2048x1024)'],
+                             '4:3 (1365x1024)', '2:3 (1024x1536)', '9:16 (1024x1792)', '21:9 (2048x1024)'],
                      state='readonly', width=18).pack(side=tk.LEFT)
         ttk.Label(size_bar, text='Format:').pack(side=tk.LEFT, padx=(10, 4))
         self.album_cover_format_album_var = tk.StringVar(value='PNG')
@@ -5358,6 +5361,7 @@ TECHNICAL REQUIREMENTS:
         video_bar.pack(fill=tk.X, pady=(0, 2))
         ttk.Label(video_bar, text='Album Video Prompt:', font=('TkDefaultFont', 9, 'bold')).pack(side=tk.LEFT)
         ttk.Button(video_bar, text='Generate', command=self.generate_album_video_prompt).pack(side=tk.LEFT, padx=4)
+        ttk.Button(video_bar, text='Save', command=self.save_album_video_prompt).pack(side=tk.LEFT, padx=4)
 
         video_size_bar = ttk.Frame(album_prompt_frame)
         video_size_bar.pack(fill=tk.X, pady=(0, 2))
@@ -7687,7 +7691,25 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
         fmt = (self.album_cover_format_album_var.get() or 'PNG').lower()
         album_path = self._get_album_path(album_id) or os.path.join(self._albums_dir() or '', album_id)
         os.makedirs(album_path, exist_ok=True)
-        filename = os.path.join(album_path, f'cover.{fmt}')
+        
+        # Generate safe filename from album name
+        safe_basename = album_name.replace(':', '_').replace('/', '_').replace('\\', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace("'", "'").replace('<', '_').replace('>', '_').replace('|', '_')
+        
+        # Extract aspect ratio from album cover size (e.g., "3:2 (1536x1024)" -> "3:2" -> "3x2")
+        aspect_ratio_suffix = ''
+        if hasattr(self, 'album_cover_size_album_var'):
+            size_value = self.album_cover_size_album_var.get()
+            # Extract aspect ratio part before parentheses (e.g., "3:2" from "3:2 (1536x1024)")
+            match = re.search(r'^([^\(]+)', size_value)
+            if match:
+                aspect_ratio = match.group(1).strip()
+                # Convert ":" to "x" (e.g., "3:2" -> "3x2", "1:1" -> "1x1")
+                aspect_ratio_x = aspect_ratio.replace(':', 'x')
+                # Only append if not 1x1
+                if aspect_ratio_x != '1x1':
+                    aspect_ratio_suffix = aspect_ratio_x
+        
+        filename = os.path.join(album_path, f'{safe_basename}{aspect_ratio_suffix}.{fmt}')
 
         try:
             self.config(cursor='wait')
@@ -7769,6 +7791,77 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
                 self.current_album['video_prompt'] = text
         else:
             messagebox.showerror('Error', f'Failed to generate video prompt: {result.get("error", "Unknown error")}')
+    
+    def save_album_video_prompt(self):
+        """Save the album video prompt to a JSON file using the same basename as the album cover."""
+        if not self.current_album_id:
+            messagebox.showwarning('Warning', 'No album selected. Cannot save album video prompt.')
+            return
+        
+        video_prompt = self.album_video_text.get('1.0', tk.END).strip()
+        if not video_prompt:
+            messagebox.showwarning('Warning', 'Album video prompt is empty. Please generate a prompt first.')
+            return
+        
+        try:
+            # Use album name as basename
+            album_name = self.album_name_var.get().strip()
+            if not album_name:
+                album_name = 'album'
+            
+            # Generate safe filename from album name (same as album cover)
+            safe_basename = album_name.replace(':', '_').replace('/', '_').replace('\\', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace("'", "'").replace('<', '_').replace('>', '_').replace('|', '_')
+            
+            # Extract aspect ratio from video size (e.g., "9:16 (720x1280)" -> "9:16" -> "9x16")
+            aspect_ratio_suffix = ''
+            if hasattr(self, 'album_video_size_var'):
+                size_value = self.album_video_size_var.get()
+                # Extract aspect ratio part before parentheses (e.g., "9:16" from "9:16 (720x1280)")
+                match = re.search(r'^([^\(]+)', size_value)
+                if match:
+                    aspect_ratio = match.group(1).strip()
+                    # Convert ":" to "x" (e.g., "9:16" -> "9x16", "1:1" -> "1x1")
+                    aspect_ratio_x = aspect_ratio.replace(':', 'x')
+                    # Only append if not 1x1
+                    if aspect_ratio_x != '1x1':
+                        aspect_ratio_suffix = aspect_ratio_x
+            
+            # Get album path
+            album_id = self.current_album_id
+            album_path = self._get_album_path(album_id) or os.path.join(self._albums_dir() or '', album_id)
+            os.makedirs(album_path, exist_ok=True)
+            
+            # Save with same basename as album cover image, but as .json file with -Video suffix
+            filename = os.path.join(album_path, f'{safe_basename}-Video{aspect_ratio_suffix}.json')
+            
+            # Create backup if file exists
+            backup_path = self.backup_file_if_exists(filename)
+            
+            # Create JSON structure (same format as storyboard prompt export)
+            export_data = {
+                'generated_prompt': video_prompt
+            }
+            
+            # Save the prompt to JSON file
+            with open(filename, 'w', encoding='utf-8') as f:
+                json.dump(export_data, f, indent=2, ensure_ascii=False)
+            
+            self.log_debug('INFO', f'Album video prompt saved to {filename}')
+            success_msg = f'Album video prompt saved to:\n{filename}'
+            if backup_path:
+                success_msg += f'\n\nBackup created: {os.path.basename(backup_path)}'
+            messagebox.showinfo('Success', success_msg)
+            
+            # Also save to config.json
+            if self.current_album is not None:
+                self.current_album['video_prompt'] = video_prompt
+                if save_album_config(album_path, self.current_album):
+                    self.log_debug('INFO', 'Config.json updated with album video prompt')
+                else:
+                    self.log_debug('WARNING', 'Failed to save config.json with album video prompt')
+        except Exception as e:
+            messagebox.showerror('Error', f'Failed to save album video prompt: {e}')
+            self.log_debug('ERROR', f'Failed to save album video prompt: {e}')
     
     def _ask_language(self, title='Select Language'):
         """Show a dialog to select language (English or German). Returns 'en' or 'de', or None if cancelled."""
@@ -8667,6 +8760,65 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
         except Exception as e:
             messagebox.showerror('Error', f'Error merging styles: {e}')
             self.log_debug('ERROR', f'Error merging styles: {e}')
+        finally:
+            self.config(cursor='')
+
+    def improve_merged_style(self):
+        """Improve/modify merged style keywords based on user instructions."""
+        if not self.current_persona:
+            messagebox.showwarning('Warning', 'Please select a persona first.')
+            return
+        
+        current_style = self.merged_style_text.get('1.0', tk.END).strip()
+        if not current_style:
+            messagebox.showwarning('Warning', 'Please merge styles first or enter merged style text.')
+            return
+        
+        # Ask user for transformation instructions
+        instruction = simpledialog.askstring(
+            'Improve Merged Style',
+            'How would you like to modify the keywords?\n(e.g., "change hardrock to metal", "make it more aggressive", "add electronic elements"):',
+            initialvalue=''
+        )
+        
+        if not instruction:
+            self.log_debug('INFO', 'Improve merged style cancelled: no instruction provided')
+            return
+        
+        song_name = self.song_name_var.get().strip()
+        full_song_name = self.full_song_name_var.get().strip() or song_name
+        persona_name = self.current_persona.get('name', '')
+        
+        prompt = (
+            "Modify the following merged style description according to the user's instructions.\n"
+            "CRITICAL: Preserve the overall structure and flow of the style description.\n"
+            "Apply the requested changes while maintaining coherence and musical accuracy.\n"
+            "Keep it concise and focused on musical/style elements.\n"
+            "Avoid brand names and band/artist names. No bullet points. Return only the modified style text.\n\n"
+            f"Song: {full_song_name if full_song_name else song_name}\n"
+            f"Persona: {persona_name}\n\n"
+            f"User's modification instruction: {instruction}\n\n"
+            f"Current Merged Style:\n{current_style}\n\n"
+            "Apply the modification and return ONLY the improved/modified style description."
+        )
+        
+        self.log_debug('INFO', f'Improving merged style with instruction: {instruction}')
+        self.config(cursor='wait')
+        self.update()
+        try:
+            result = self.azure_ai(prompt, profile='text')
+            if result.get('success'):
+                improved_raw = result.get('content', '').strip()
+                improved = self._sanitize_style_keywords(improved_raw)
+                self.merged_style_text.delete('1.0', tk.END)
+                self.merged_style_text.insert('1.0', improved)
+                self.log_debug('INFO', 'Merged style improved with AI')
+            else:
+                messagebox.showerror('Error', f'Failed to improve merged style: {result.get("error")}')
+                self.log_debug('ERROR', f'Failed to improve merged style: {result.get("error")}')
+        except Exception as exc:
+            messagebox.showerror('Error', f'Error improving merged style: {exc}')
+            self.log_debug('ERROR', f'Error improving merged style: {exc}')
         finally:
             self.config(cursor='')
 
