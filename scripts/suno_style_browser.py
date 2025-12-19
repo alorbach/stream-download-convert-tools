@@ -116,6 +116,129 @@ def get_csv_file_path(config: dict) -> str:
     return resolve_csv_path()
 
 
+def get_ai_covers_root() -> str:
+    """Get the path to AI/AI-COVERS directory relative to project root."""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.abspath(os.path.join(script_dir, os.pardir))
+    return os.path.join(project_root, 'AI', 'AI-COVERS')
+
+
+def extract_decade_from_cover_name(cover_name: str) -> str:
+    """
+    Extract decade from AI cover name (e.g., '1930s Gritty Slide Blues...' -> '1930s').
+    Returns empty string if no decade found.
+    """
+    if not cover_name:
+        return ''
+    # Match pattern like "1930s", "1940s", etc. at the start
+    match = re.match(r'^(\d{4}s)', cover_name.strip())
+    if match:
+        return match.group(1)
+    return ''
+
+
+def sanitize_directory_name(name: str) -> str:
+    """
+    Sanitize a name for use as a directory name by removing invalid filesystem characters.
+    """
+    if not name:
+        return ''
+    # Replace invalid characters with underscore
+    invalid_chars = '<>:"/\\|?*'
+    sanitized = name
+    for char in invalid_chars:
+        sanitized = sanitized.replace(char, '_')
+    # Remove leading/trailing spaces and dots (Windows restriction)
+    sanitized = sanitized.strip(' .')
+    # Replace multiple consecutive underscores with single underscore
+    sanitized = re.sub(r'_+', '_', sanitized)
+    return sanitized
+
+
+def get_song_directory_path(ai_cover_name: str) -> str:
+    """
+    Get the full directory path for a song based on its AI cover name.
+    Creates directory structure: AI/AI-COVERS/{decade}/{sanitized_cover_name}/
+    """
+    if not ai_cover_name:
+        return ''
+    root = get_ai_covers_root()
+    decade = extract_decade_from_cover_name(ai_cover_name)
+    if not decade:
+        # If no decade found, use 'Unknown' as fallback
+        decade = 'Unknown'
+    sanitized_name = sanitize_directory_name(ai_cover_name)
+    return os.path.join(root, decade, sanitized_name)
+
+
+def get_song_json_path(ai_cover_name: str) -> str:
+    """
+    Get the JSON file path for a song based on its AI cover name.
+    Returns path like: AI/AI-COVERS/{decade}/{sanitized_cover_name}/{sanitized_cover_name}.json
+    """
+    if not ai_cover_name:
+        return ''
+    dir_path = get_song_directory_path(ai_cover_name)
+    sanitized_name = sanitize_directory_name(ai_cover_name)
+    return os.path.join(dir_path, f'{sanitized_name}.json')
+
+
+def scan_ai_covers_directory() -> dict:
+    """
+    Scan the AI/AI-COVERS directory and return structure: {decade: [song_info_dicts...]}
+    Each song_info_dict contains: 'directory', 'json_path', 'ai_cover_name', 'song_name', 'artist'
+    """
+    root = get_ai_covers_root()
+    structure = {}
+    
+    if not os.path.exists(root):
+        return structure
+    
+    try:
+        # Iterate through decade directories
+        for decade_dir in os.listdir(root):
+            decade_path = os.path.join(root, decade_dir)
+            if not os.path.isdir(decade_path):
+                continue
+            
+            songs = []
+            # Iterate through song directories
+            for song_dir in os.listdir(decade_path):
+                song_path = os.path.join(decade_path, song_dir)
+                if not os.path.isdir(song_path):
+                    continue
+                
+                # Look for JSON file in this directory
+                json_files = [f for f in os.listdir(song_path) if f.endswith('.json') and not f.startswith('grok_')]
+                if not json_files:
+                    continue
+                
+                # Try to load the first JSON file found
+                json_path = os.path.join(song_path, json_files[0])
+                try:
+                    with open(json_path, 'r', encoding='utf-8') as f:
+                        song_data = json.load(f)
+                    
+                    song_info = {
+                        'directory': song_path,
+                        'json_path': json_path,
+                        'ai_cover_name': song_data.get('ai_cover_name', song_dir),
+                        'song_name': song_data.get('song_name', ''),
+                        'artist': song_data.get('artist', ''),
+                        'decade': decade_dir
+                    }
+                    songs.append(song_info)
+                except Exception:
+                    # Skip if JSON can't be loaded
+                    continue
+            
+            if songs:
+                structure[decade_dir] = songs
+    except Exception:
+        pass
+    
+    return structure
+
 
 def load_config() -> dict:
     """Load configuration from JSON file, create default if it doesn't exist."""
@@ -990,6 +1113,8 @@ class SunoStyleBrowser(tk.Tk):
         # Sort initially by style
         self.sort_by_column('style')
         self.populate_tree(self.filtered)
+        # Populate AI covers tree
+        self.populate_ai_covers_tree()
         self.restore_song_details()
         self.restore_last_selected_style()
         # Try load last saved album cover preview if available
@@ -1035,6 +1160,16 @@ class SunoStyleBrowser(tk.Tk):
         # Menu bar
         menubar = tk.Menu(self)
         self.config(menu=menubar)
+        
+        song_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label='Song', menu=song_menu)
+        song_menu.add_command(label='New Song', command=self.new_song, accelerator='Ctrl+N')
+        song_menu.add_command(label='Load Song...', command=self.load_song_details, accelerator='Ctrl+O')
+        song_menu.add_command(label='Save Song', command=self.save_song_details, accelerator='Ctrl+S')
+        song_menu.add_separator()
+        song_menu.add_command(label='Rename Song...', command=self.show_rename_dialog, accelerator='F2')
+        song_menu.add_separator()
+        song_menu.add_command(label='Load Style from Song...', command=self.show_style_derivation_dialog)
         
         settings_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label='Settings', menu=settings_menu)
@@ -1085,6 +1220,10 @@ class SunoStyleBrowser(tk.Tk):
         tempo_entry.bind('<KeyRelease>', lambda e: self.apply_filter())
 
         # Right-side actions
+        refresh_covers_btn = ttk.Button(top_frame, text='Refresh Covers', command=self.refresh_ai_covers_tree)
+        refresh_covers_btn.pack(side=tk.RIGHT, padx=4)
+        create_tooltip(refresh_covers_btn, 'Refresh AI Covers tree')
+        
         open_csv_btn = ttk.Button(top_frame, text='Open CSV', command=self.choose_csv)
         open_csv_btn.pack(side=tk.RIGHT, padx=4)
         create_tooltip(open_csv_btn, 'Open a different CSV file')
@@ -1101,25 +1240,61 @@ class SunoStyleBrowser(tk.Tk):
         content_frame = ttk.Frame(self)
         content_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=4)
         
-        # Left panel: Style list (30%)
+        # Left panel: Notebook with Style Browser and AI Covers tabs (30%)
         left_panel = ttk.Frame(content_frame)
         left_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=False)
         left_panel.config(width=384)  # ~30% of 1280
         
+        # Create notebook for left panel tabs
+        left_notebook = ttk.Notebook(left_panel)
+        left_notebook.pack(fill=tk.BOTH, expand=True)
+        
+        # Tab 1: Style Browser
+        style_browser_frame = ttk.Frame(left_notebook)
+        left_notebook.add(style_browser_frame, text='Style Browser')
+        
         # Only show 'style' column in the tree
         columns = ('style',)
-        self.tree = ttk.Treeview(left_panel, columns=columns, show='headings', selectmode='browse')
+        self.tree = ttk.Treeview(style_browser_frame, columns=columns, show='headings', selectmode='browse')
         self.tree.heading('style', text='Style', command=lambda: self.sort_by_column('style'))
         self.tree.column('style', width=364, anchor=tk.W)
 
         # Add vertical scrollbar for styles list
-        tree_scrollbar = ttk.Scrollbar(left_panel, orient=tk.VERTICAL, command=self.tree.yview)
+        tree_scrollbar = ttk.Scrollbar(style_browser_frame, orient=tk.VERTICAL, command=self.tree.yview)
         self.tree.configure(yscrollcommand=tree_scrollbar.set)
 
         # Pack tree and scrollbar side-by-side
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         tree_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.tree.bind('<<TreeviewSelect>>', self.on_select)
+        
+        # Tab 2: My AI Covers
+        ai_covers_frame = ttk.Frame(left_notebook)
+        left_notebook.add(ai_covers_frame, text='My AI Covers')
+        
+        # Create treeview for AI covers
+        self.ai_covers_tree = ttk.Treeview(ai_covers_frame, columns=('name',), show='tree headings', selectmode='browse')
+        self.ai_covers_tree.heading('#0', text='AI Covers')
+        self.ai_covers_tree.heading('name', text='Name')
+        self.ai_covers_tree.column('#0', width=200, anchor=tk.W)
+        self.ai_covers_tree.column('name', width=164, anchor=tk.W)
+        
+        # Add vertical scrollbar for AI covers list
+        ai_covers_scrollbar = ttk.Scrollbar(ai_covers_frame, orient=tk.VERTICAL, command=self.ai_covers_tree.yview)
+        self.ai_covers_tree.configure(yscrollcommand=ai_covers_scrollbar.set)
+        
+        # Pack AI covers tree and scrollbar
+        self.ai_covers_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        ai_covers_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.ai_covers_tree.bind('<<TreeviewSelect>>', self.on_ai_cover_select)
+        self.ai_covers_tree.bind('<Double-1>', self.on_ai_cover_double_click)
+        self.ai_covers_tree.bind('<Button-3>', self.on_ai_cover_right_click)  # Right-click for context menu
+        
+        # Initialize tracking variables
+        self.current_song_json_path = None
+        self.current_song_directory = None
+        # Dictionary to map tree item IDs to JSON paths
+        self.ai_covers_item_map = {}
 
         # Right panel: Details (70%)
         right_panel = ttk.Frame(content_frame)
@@ -1173,6 +1348,9 @@ class SunoStyleBrowser(tk.Tk):
         
         # Bind keyboard shortcuts
         self.bind_all('<Control-s>', lambda e: self.save_song_details())
+        self.bind_all('<Control-n>', lambda e: self.new_song())
+        self.bind_all('<Control-o>', lambda e: self.load_song_details())
+        self.bind_all('<F2>', lambda e: self.show_rename_dialog())
         self.bind_all('<Control-d>', lambda e: self.toggle_debug())
         self.bind_all('<Control-f>', lambda e: self.focus_search())
         self.bind_all('<F5>', lambda e: self.reload_csv())
@@ -1678,6 +1856,269 @@ class SunoStyleBrowser(tk.Tk):
         self.decade_var.set('')
         self.tempo_var.set('')
         self.apply_filter()
+
+    def populate_ai_covers_tree(self):
+        """Populate the AI Covers treeview with directory structure."""
+        # Clear existing items and mapping
+        for item in self.ai_covers_tree.get_children():
+            self.ai_covers_tree.delete(item)
+        self.ai_covers_item_map.clear()
+        
+        # Scan directory structure
+        structure = scan_ai_covers_directory()
+        
+        if not structure:
+            self.ai_covers_tree.insert('', tk.END, text='No AI covers found', values=('',))
+            return
+        
+        # Sort decades
+        sorted_decades = sorted(structure.keys())
+        
+        # Populate tree
+        for decade in sorted_decades:
+            # Create decade node
+            decade_node = self.ai_covers_tree.insert('', tk.END, text=decade, values=('',), tags=('decade',))
+            
+            # Add songs under decade
+            songs = structure[decade]
+            for song_info in songs:
+                # Create human-readable label: Song Name - Artist
+                song_name = song_info.get('song_name', '')
+                artist = song_info.get('artist', '')
+                if song_name and artist:
+                    label = f'{song_name} - {artist}'
+                elif song_name:
+                    label = song_name
+                else:
+                    label = os.path.basename(song_info.get('directory', ''))
+                
+                # Store JSON path in mapping dictionary
+                json_path = song_info.get('json_path', '')
+                item_id = self.ai_covers_tree.insert(
+                    decade_node, tk.END,
+                    text=label,
+                    values=(song_info.get('ai_cover_name', ''),),
+                    tags=('song',)
+                )
+                # Map item ID to JSON path
+                if json_path:
+                    self.ai_covers_item_map[item_id] = json_path
+        
+        self.log_debug('INFO', f'Populated AI Covers tree with {len(sorted_decades)} decades')
+
+    def refresh_ai_covers_tree(self):
+        """Refresh the AI Covers treeview."""
+        self.populate_ai_covers_tree()
+
+    def on_ai_cover_select(self, event):
+        """Handle selection of an AI cover in the tree."""
+        sel = self.ai_covers_tree.selection()
+        if not sel:
+            return
+        
+        item = sel[0]
+        tags = self.ai_covers_tree.item(item, 'tags')
+        
+        # Check if it's a song (not a decade)
+        if 'song' in tags:
+            # Get JSON path from mapping
+            json_path = self.ai_covers_item_map.get(item)
+            if json_path and os.path.exists(json_path):
+                self.load_song_from_json(json_path)
+
+    def on_ai_cover_double_click(self, event):
+        """Handle double-click on AI cover (same as select)."""
+        self.on_ai_cover_select(event)
+
+    def on_ai_cover_right_click(self, event):
+        """Handle right-click on AI cover tree to show context menu."""
+        # Select the item under the cursor
+        item = self.ai_covers_tree.identify_row(event.y)
+        if item:
+            # Select the item
+            self.ai_covers_tree.selection_set(item)
+            self.ai_covers_tree.focus(item)
+            
+            # Check if it's a song (not a decade)
+            tags = self.ai_covers_tree.item(item, 'tags')
+            if 'song' not in tags:
+                return  # Don't show menu for decade nodes
+            
+            # Get JSON path
+            json_path = self.ai_covers_item_map.get(item)
+            if not json_path or not os.path.exists(json_path):
+                return
+            
+            # Create context menu
+            context_menu = tk.Menu(self, tearoff=0)
+            context_menu.add_command(label='Load Song', command=lambda: self.load_song_from_json(json_path))
+            context_menu.add_separator()
+            context_menu.add_command(label='Rename Song...', command=lambda: self.show_rename_dialog_for_path(json_path))
+            context_menu.add_command(label='Load Style from This Song...', command=lambda: self.show_style_derivation_dialog_for_path(json_path))
+            context_menu.add_separator()
+            context_menu.add_command(label='Open Folder', command=lambda: self.open_song_folder(json_path))
+            context_menu.add_separator()
+            context_menu.add_command(label='Delete Song...', command=lambda: self.delete_song(json_path))
+            
+            # Show context menu at cursor position
+            try:
+                context_menu.tk_popup(event.x_root, event.y_root)
+            finally:
+                context_menu.grab_release()
+
+    def show_rename_dialog_for_path(self, json_path: str):
+        """Show rename dialog for a specific JSON path."""
+        if not json_path or not os.path.exists(json_path):
+            return
+        
+        # Load the song first to populate fields
+        self.load_song_from_json(json_path)
+        # Then show rename dialog
+        self.show_rename_dialog()
+
+    def show_style_derivation_dialog_for_path(self, json_path: str):
+        """Show style derivation dialog pre-selected for a specific JSON path."""
+        if not json_path or not os.path.exists(json_path):
+            return
+        
+        # Load the song data
+        try:
+            with open(json_path, 'r', encoding='utf-8') as f:
+                song_data = json.load(f)
+            
+            # Create a simplified dialog just for this song
+            dialog = tk.Toplevel(self)
+            dialog.title('Load Style from Song')
+            dialog.geometry('500x250')
+            dialog.transient(self)
+            dialog.grab_set()
+            
+            # Center dialog
+            dialog.update_idletasks()
+            x = self.winfo_x() + (self.winfo_width() // 2) - (dialog.winfo_width() // 2)
+            y = self.winfo_y() + (self.winfo_height() // 2) - (dialog.winfo_height() // 2)
+            dialog.geometry(f"+{x}+{y}")
+            
+            # Show song info
+            song_name = song_data.get('song_name', '')
+            artist = song_data.get('artist', '')
+            ai_cover_name = song_data.get('ai_cover_name', '')
+            display_text = f'{song_name} - {artist}' if song_name and artist else ai_cover_name
+            
+            ttk.Label(dialog, text=f'Load style from:', font=('TkDefaultFont', 9, 'bold')).pack(pady=10)
+            ttk.Label(dialog, text=display_text, font=('TkDefaultFont', 9)).pack(pady=5)
+            
+            # Options frame
+            options_frame = ttk.LabelFrame(dialog, text='Options', padding=10)
+            options_frame.pack(fill=tk.X, padx=20, pady=10)
+            
+            style_source_var = tk.StringVar(value='merged')
+            ttk.Radiobutton(options_frame, text='Use Merged Style', variable=style_source_var, value='merged').pack(anchor=tk.W)
+            ttk.Radiobutton(options_frame, text='Use Base Style', variable=style_source_var, value='base').pack(anchor=tk.W)
+            
+            target_field_var = tk.StringVar(value='styles')
+            ttk.Label(options_frame, text='Target Field:').pack(anchor=tk.W, pady=(10, 0))
+            ttk.Radiobutton(options_frame, text='Styles Field', variable=target_field_var, value='styles').pack(anchor=tk.W)
+            ttk.Radiobutton(options_frame, text='Merged Style Field', variable=target_field_var, value='merged_style').pack(anchor=tk.W)
+            
+            def do_load():
+                use_merged = style_source_var.get() == 'merged'
+                target_field = target_field_var.get()
+                
+                if use_merged:
+                    style_text = song_data.get('merged_style', '')
+                else:
+                    style_text = song_data.get('styles', '')
+                
+                if target_field == 'styles':
+                    self.styles_text.delete('1.0', tk.END)
+                    self.styles_text.insert('1.0', style_text)
+                else:
+                    self.merged_style_text.delete('1.0', tk.END)
+                    self.merged_style_text.insert('1.0', style_text)
+                
+                self.log_debug('INFO', f'Loaded style from: {display_text}')
+                dialog.destroy()
+            
+            # Buttons
+            btn_frame = ttk.Frame(dialog)
+            btn_frame.pack(pady=10)
+            ttk.Button(btn_frame, text='Load Style', command=do_load).pack(side=tk.LEFT, padx=5)
+            ttk.Button(btn_frame, text='Cancel', command=dialog.destroy).pack(side=tk.LEFT, padx=5)
+            
+            dialog.bind('<Return>', lambda e: do_load())
+            dialog.bind('<Escape>', lambda e: dialog.destroy())
+        except Exception as e:
+            messagebox.showerror('Error', f'Failed to load song data: {e}')
+
+    def open_song_folder(self, json_path: str):
+        """Open the folder containing the song in the system file manager."""
+        if not json_path or not os.path.exists(json_path):
+            return
+        
+        folder_path = os.path.dirname(json_path)
+        try:
+            import subprocess
+            import platform
+            if platform.system() == 'Windows':
+                os.startfile(folder_path)
+            elif platform.system() == 'Darwin':  # macOS
+                subprocess.Popen(['open', folder_path])
+            else:  # Linux
+                subprocess.Popen(['xdg-open', folder_path])
+            self.log_debug('INFO', f'Opened folder: {folder_path}')
+        except Exception as e:
+            self.log_debug('ERROR', f'Failed to open folder: {e}')
+            messagebox.showerror('Error', f'Failed to open folder: {e}')
+
+    def delete_song(self, json_path: str):
+        """Delete a song and its directory after confirmation."""
+        if not json_path or not os.path.exists(json_path):
+            return
+        
+        # Load song data to show name in confirmation
+        try:
+            with open(json_path, 'r', encoding='utf-8') as f:
+                song_data = json.load(f)
+            song_name = song_data.get('song_name', '')
+            artist = song_data.get('artist', '')
+            display_name = f'{song_name} - {artist}' if song_name and artist else song_data.get('ai_cover_name', 'Unknown')
+        except:
+            display_name = os.path.basename(os.path.dirname(json_path))
+        
+        # Confirm deletion
+        response = messagebox.askyesno(
+            'Delete Song',
+            f'Are you sure you want to delete this song?\n\n{display_name}\n\nThis will delete the entire song directory and all files in it.\nThis action cannot be undone!',
+            icon='warning'
+        )
+        
+        if not response:
+            return
+        
+        # Get directory path
+        song_dir = os.path.dirname(json_path)
+        
+        try:
+            import shutil
+            # Delete entire directory
+            if os.path.exists(song_dir):
+                shutil.rmtree(song_dir)
+                self.log_debug('INFO', f'Deleted song directory: {song_dir}')
+                
+                # If this was the current song, clear fields
+                if self.current_song_json_path == json_path:
+                    self.new_song()
+                
+                # Refresh tree
+                self.refresh_ai_covers_tree()
+                
+                messagebox.showinfo('Success', 'Song deleted successfully.')
+            else:
+                messagebox.showerror('Error', 'Song directory not found.')
+        except Exception as e:
+            self.log_debug('ERROR', f'Failed to delete song: {e}')
+            messagebox.showerror('Error', f'Failed to delete song: {e}')
 
     def on_select(self, _evt):
         sel = self.tree.selection()
@@ -2653,7 +3094,7 @@ class SunoStyleBrowser(tk.Tk):
         return desc
     
     def save_song_details(self):
-        """Save song details to config file."""
+        """Save song details to config file and auto-save to AI-COVERS directory if AI Cover Name is set."""
         song_details = {
             'ai_cover_name': self.ai_cover_name_var.get(),
             'song_name': self.song_name_var.get(),
@@ -2669,40 +3110,122 @@ class SunoStyleBrowser(tk.Tk):
         if save_config(self.ai_config):
             self.log_debug('INFO', 'Song details saved successfully to config')
             
-            # If AI Cover Name is set, ask user to save settings to separate file
+            # If AI Cover Name is set, auto-save to AI-COVERS directory structure
             ai_cover_name = self.ai_cover_name_var.get().strip()
             if ai_cover_name:
-                # Use same basename logic as run_image_model
-                safe_basename = ai_cover_name.replace(':', '_').replace('/', '_').replace('\\', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace("'", '_').replace('<', '_').replace('>', '_').replace('|', '_')
+                if self.save_song_to_ai_covers(song_details):
+                    self.log_debug('INFO', f'Song saved to AI-COVERS directory structure')
+                else:
+                    self.log_debug('WARNING', 'Failed to save song to AI-COVERS directory')
+    
+    def save_song_to_ai_covers(self, song_details: dict) -> bool:
+        """Save song details to AI-COVERS directory structure. Returns True if successful."""
+        ai_cover_name = song_details.get('ai_cover_name', '').strip()
+        if not ai_cover_name:
+            return False
+        
+        try:
+            # Get directory path for this song
+            song_dir = get_song_directory_path(ai_cover_name)
+            json_path = get_song_json_path(ai_cover_name)
+            
+            # Create directory if it doesn't exist
+            os.makedirs(song_dir, exist_ok=True)
+            
+            # Handle conflicts: if directory exists but JSON doesn't match, append number
+            if os.path.exists(json_path) and json_path != self.current_song_json_path:
+                # This is a different song with same name - append number
+                base_dir = song_dir
+                counter = 1
+                while os.path.exists(json_path):
+                    new_name = f"{ai_cover_name} ({counter})"
+                    song_dir = get_song_directory_path(new_name)
+                    json_path = get_song_json_path(new_name)
+                    counter += 1
+                    if counter > 100:  # Safety limit
+                        self.log_debug('ERROR', 'Too many conflicts when saving song')
+                        return False
+                # Update AI cover name in song_details
+                song_details['ai_cover_name'] = new_name
+                ai_cover_name = new_name
+                os.makedirs(song_dir, exist_ok=True)
+            
+            # Save JSON file
+            with open(json_path, 'w', encoding='utf-8') as f:
+                json.dump(song_details, f, indent=4)
+            
+            # Update tracking variables
+            self.current_song_json_path = json_path
+            self.current_song_directory = song_dir
+            
+            # Update UI if name changed
+            if ai_cover_name != self.ai_cover_name_var.get().strip():
+                self.ai_cover_name_var.set(ai_cover_name)
+            
+            # Refresh AI covers tree
+            self.refresh_ai_covers_tree()
+            
+            # Update status
+            song_name = song_details.get('song_name', '')
+            artist = song_details.get('artist', '')
+            if song_name and artist:
+                self.status_var.set(f'Saved: {song_name} - {artist}')
+            else:
+                self.status_var.set(f'Saved: {ai_cover_name}')
+            
+            return True
+        except Exception as e:
+            self.log_debug('ERROR', f'Failed to save song to AI-COVERS: {e}')
+            return False
+    
+    def load_song_from_json(self, json_path: str):
+        """Load song details from a specific JSON file path."""
+        if not json_path or not os.path.exists(json_path):
+            self.log_debug('ERROR', f'JSON file not found: {json_path}')
+            return
+        
+        try:
+            with open(json_path, 'r', encoding='utf-8') as f:
+                song_details = json.load(f)
+            
+            # Populate fields from loaded settings
+            if isinstance(song_details, dict):
+                self.ai_cover_name_var.set(song_details.get('ai_cover_name', ''))
+                self.song_name_var.set(song_details.get('song_name', ''))
+                self.artist_var.set(song_details.get('artist', ''))
+                self.singer_gender_var.set(song_details.get('singer_gender', 'Female'))
+                self.lyrics_text.delete('1.0', tk.END)
+                self.lyrics_text.insert('1.0', song_details.get('lyrics', ''))
+                self.styles_text.delete('1.0', tk.END)
+                self.styles_text.insert('1.0', song_details.get('styles', ''))
+                self.merged_style_text.delete('1.0', tk.END)
+                self.merged_style_text.insert('1.0', song_details.get('merged_style', ''))
+                self.album_cover_text.delete('1.0', tk.END)
+                self.album_cover_text.insert('1.0', song_details.get('album_cover', ''))
+                self.video_loop_text.delete('1.0', tk.END)
+                self.video_loop_text.insert('1.0', song_details.get('video_loop', ''))
                 
-                # Ask user if they want to save to a separate file
-                response = messagebox.askyesno(
-                    'Save Settings File',
-                    f'AI Cover Name is set. Would you like to save settings to a separate file?\n\nSuggested filename: {safe_basename}.json'
-                )
+                # Update tracking variables
+                self.current_song_json_path = json_path
+                self.current_song_directory = os.path.dirname(json_path)
                 
-                if response:
-                    # Get the directory from last saved album cover image if available
-                    default_dir = self.ai_config.get('song_details', {}).get('album_cover_image_dir', '')
-                    if not default_dir:
-                        # Fallback to script directory
-                        default_dir = os.path.dirname(os.path.abspath(__file__))
-                    
-                    filename = filedialog.asksaveasfilename(
-                        title='Save Song Details Settings',
-                        defaultextension='.json',
-                        filetypes=[('JSON Files', '*.json'), ('All Files', '*.*')],
-                        initialdir=default_dir,
-                        initialfile=f"{safe_basename}.json"
-                    )
-                    
-                    if filename:
-                        try:
-                            with open(filename, 'w', encoding='utf-8') as f:
-                                json.dump(song_details, f, indent=4)
-                            self.log_debug('INFO', f'Song details saved to {filename}')
-                        except Exception as e:
-                            self.log_debug('ERROR', f'Failed to save settings file: {e}')
+                # Update status
+                song_name = song_details.get('song_name', '')
+                artist = song_details.get('artist', '')
+                if song_name and artist:
+                    self.status_var.set(f'Loaded: {song_name} - {artist}')
+                elif song_name:
+                    self.status_var.set(f'Loaded: {song_name}')
+                else:
+                    self.status_var.set(f'Loaded: {os.path.basename(json_path)}')
+                
+                self.log_debug('INFO', f'Song details loaded from {json_path}')
+            else:
+                self.log_debug('ERROR', 'Load Song: Invalid settings file format.')
+        except json.JSONDecodeError as e:
+            self.log_debug('ERROR', f'Failed to parse JSON file: {e}')
+        except Exception as e:
+            self.log_debug('ERROR', f'Failed to load settings file: {e}')
     
     def load_song_details(self):
         """Load song details from a settings file."""
@@ -2787,6 +3310,12 @@ class SunoStyleBrowser(tk.Tk):
                 self.on_select(None)
                 break
     
+    def new_song(self):
+        """Create a new song (clear all fields)."""
+        self.clear_song_fields()
+        self.status_var.set('New Song')
+        self.log_debug('INFO', 'New song created')
+    
     def clear_song_fields(self):
         """Clear all song detail fields."""
         self.ai_cover_name_var.set('')
@@ -2800,6 +3329,252 @@ class SunoStyleBrowser(tk.Tk):
         # Clear album cover preview image
         self.album_cover_photo = None
         self.album_cover_preview.config(image='', text='No image generated yet')
+        # Reset tracking variables
+        self.current_song_json_path = None
+        self.current_song_directory = None
+    
+    def show_rename_dialog(self):
+        """Show dialog to rename current song."""
+        if not self.current_song_json_path:
+            self.log_debug('WARNING', 'Rename Song: No song loaded. Please load a song first.')
+            return
+        
+        # Get current AI cover name
+        current_name = self.ai_cover_name_var.get().strip()
+        if not current_name:
+            self.log_debug('WARNING', 'Rename Song: AI Cover Name is empty.')
+            return
+        
+        # Create simple dialog
+        dialog = tk.Toplevel(self)
+        dialog.title('Rename Song')
+        dialog.geometry('500x150')
+        dialog.transient(self)
+        dialog.grab_set()
+        
+        # Center dialog
+        dialog.update_idletasks()
+        x = self.winfo_x() + (self.winfo_width() // 2) - (dialog.winfo_width() // 2)
+        y = self.winfo_y() + (self.winfo_height() // 2) - (dialog.winfo_height() // 2)
+        dialog.geometry(f"+{x}+{y}")
+        
+        ttk.Label(dialog, text='New AI Cover Name:', font=('TkDefaultFont', 9, 'bold')).pack(pady=10)
+        
+        new_name_var = tk.StringVar(value=current_name)
+        name_entry = ttk.Entry(dialog, textvariable=new_name_var, width=60)
+        name_entry.pack(pady=5, padx=20, fill=tk.X)
+        name_entry.select_range(0, tk.END)
+        name_entry.focus_set()
+        
+        def do_rename():
+            new_name = new_name_var.get().strip()
+            if not new_name:
+                messagebox.showerror('Error', 'AI Cover Name cannot be empty.')
+                return
+            
+            if new_name == current_name:
+                dialog.destroy()
+                return
+            
+            if self.rename_song(current_name, new_name):
+                dialog.destroy()
+                self.log_debug('INFO', f'Song renamed from "{current_name}" to "{new_name}"')
+            else:
+                messagebox.showerror('Error', 'Failed to rename song. Check debug output for details.')
+        
+        btn_frame = ttk.Frame(dialog)
+        btn_frame.pack(pady=10)
+        ttk.Button(btn_frame, text='Rename', command=do_rename).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text='Cancel', command=dialog.destroy).pack(side=tk.LEFT, padx=5)
+        
+        dialog.bind('<Return>', lambda e: do_rename())
+        dialog.bind('<Escape>', lambda e: dialog.destroy())
+    
+    def rename_song(self, old_name: str, new_name: str) -> bool:
+        """Rename a song and refactor directory structure. Returns True if successful."""
+        if not old_name or not new_name:
+            return False
+        
+        if not self.current_song_json_path or not self.current_song_directory:
+            self.log_debug('ERROR', 'Rename Song: No current song path tracked.')
+            return False
+        
+        try:
+            old_dir = self.current_song_directory
+            old_json = self.current_song_json_path
+            
+            # Calculate new paths
+            new_dir = get_song_directory_path(new_name)
+            new_json = get_song_json_path(new_name)
+            
+            # Check if target exists
+            if os.path.exists(new_json) and new_json != old_json:
+                self.log_debug('ERROR', f'Rename Song: Target already exists: {new_json}')
+                return False
+            
+            # If decade changed, we need to move the directory
+            old_decade = extract_decade_from_cover_name(old_name)
+            new_decade = extract_decade_from_cover_name(new_name)
+            
+            if old_decade != new_decade:
+                # Create new decade directory if needed
+                os.makedirs(os.path.dirname(new_dir), exist_ok=True)
+                # Move entire directory
+                if os.path.exists(old_dir):
+                    import shutil
+                    shutil.move(old_dir, new_dir)
+                    self.log_debug('INFO', f'Moved directory from {old_dir} to {new_dir}')
+            else:
+                # Just rename directory
+                if os.path.exists(old_dir):
+                    os.rename(old_dir, new_dir)
+                    self.log_debug('INFO', f'Renamed directory from {old_dir} to {new_dir}')
+            
+            # Rename JSON file
+            if os.path.exists(os.path.join(new_dir, os.path.basename(old_json))):
+                old_json_in_new_dir = os.path.join(new_dir, os.path.basename(old_json))
+                os.rename(old_json_in_new_dir, new_json)
+            
+            # Update JSON content
+            try:
+                with open(new_json, 'r', encoding='utf-8') as f:
+                    song_data = json.load(f)
+                song_data['ai_cover_name'] = new_name
+                with open(new_json, 'w', encoding='utf-8') as f:
+                    json.dump(song_data, f, indent=4)
+            except Exception as e:
+                self.log_debug('ERROR', f'Failed to update JSON content: {e}')
+                return False
+            
+            # Update tracking variables
+            self.current_song_json_path = new_json
+            self.current_song_directory = new_dir
+            
+            # Update UI
+            self.ai_cover_name_var.set(new_name)
+            
+            # Refresh tree
+            self.refresh_ai_covers_tree()
+            
+            # Reload song to update all fields
+            self.load_song_from_json(new_json)
+            
+            return True
+        except Exception as e:
+            self.log_debug('ERROR', f'Failed to rename song: {e}')
+            return False
+    
+    def show_style_derivation_dialog(self):
+        """Show dialog to load style from an existing song."""
+        # Scan all songs
+        structure = scan_ai_covers_directory()
+        if not structure:
+            messagebox.showinfo('No Songs', 'No AI covers found. Create some songs first.')
+            return
+        
+        # Create dialog
+        dialog = tk.Toplevel(self)
+        dialog.title('Load Style from Song')
+        dialog.geometry('700x500')
+        dialog.transient(self)
+        dialog.grab_set()
+        
+        # Center dialog
+        dialog.update_idletasks()
+        x = self.winfo_x() + (self.winfo_width() // 2) - (dialog.winfo_width() // 2)
+        y = self.winfo_y() + (self.winfo_height() // 2) - (dialog.winfo_height() // 2)
+        dialog.geometry(f"+{x}+{y}")
+        
+        # Search frame
+        search_frame = ttk.Frame(dialog)
+        search_frame.pack(fill=tk.X, padx=10, pady=10)
+        ttk.Label(search_frame, text='Search:').pack(side=tk.LEFT, padx=5)
+        search_var = tk.StringVar()
+        search_entry = ttk.Entry(search_frame, textvariable=search_var, width=30)
+        search_entry.pack(side=tk.LEFT, padx=5)
+        
+        # Song list
+        list_frame = ttk.Frame(dialog)
+        list_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        
+        song_listbox = tk.Listbox(list_frame, height=15)
+        song_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        list_scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=song_listbox.yview)
+        song_listbox.configure(yscrollcommand=list_scrollbar.set)
+        list_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Build song list with mapping
+        song_data_map = {}
+        for decade, songs in sorted(structure.items()):
+            for song_info in songs:
+                song_name = song_info.get('song_name', '')
+                artist = song_info.get('artist', '')
+                display_text = f'[{decade}] {song_name} - {artist}' if song_name and artist else f'[{decade}] {song_info.get("ai_cover_name", "")}'
+                song_listbox.insert(tk.END, display_text)
+                song_data_map[display_text] = song_info
+        
+        # Options frame
+        options_frame = ttk.LabelFrame(dialog, text='Options', padding=10)
+        options_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        style_source_var = tk.StringVar(value='merged')
+        ttk.Radiobutton(options_frame, text='Use Merged Style', variable=style_source_var, value='merged').pack(anchor=tk.W)
+        ttk.Radiobutton(options_frame, text='Use Base Style', variable=style_source_var, value='base').pack(anchor=tk.W)
+        
+        target_field_var = tk.StringVar(value='styles')
+        ttk.Label(options_frame, text='Target Field:').pack(anchor=tk.W, pady=(10, 0))
+        ttk.Radiobutton(options_frame, text='Styles Field', variable=target_field_var, value='styles').pack(anchor=tk.W)
+        ttk.Radiobutton(options_frame, text='Merged Style Field', variable=target_field_var, value='merged_style').pack(anchor=tk.W)
+        
+        def do_load():
+            selection = song_listbox.curselection()
+            if not selection:
+                messagebox.showwarning('No Selection', 'Please select a song.')
+                return
+            
+            selected_text = song_listbox.get(selection[0])
+            song_info = song_data_map.get(selected_text)
+            if not song_info:
+                return
+            
+            json_path = song_info.get('json_path', '')
+            if not json_path or not os.path.exists(json_path):
+                messagebox.showerror('Error', 'Song JSON file not found.')
+                return
+            
+            # Load style
+            use_merged = style_source_var.get() == 'merged'
+            target_field = target_field_var.get()
+            
+            try:
+                with open(json_path, 'r', encoding='utf-8') as f:
+                    song_data = json.load(f)
+                
+                if use_merged:
+                    style_text = song_data.get('merged_style', '')
+                else:
+                    style_text = song_data.get('styles', '')
+                
+                if target_field == 'styles':
+                    self.styles_text.delete('1.0', tk.END)
+                    self.styles_text.insert('1.0', style_text)
+                else:
+                    self.merged_style_text.delete('1.0', tk.END)
+                    self.merged_style_text.insert('1.0', style_text)
+                
+                self.log_debug('INFO', f'Loaded style from: {selected_text}')
+                dialog.destroy()
+            except Exception as e:
+                messagebox.showerror('Error', f'Failed to load style: {e}')
+        
+        # Buttons
+        btn_frame = ttk.Frame(dialog)
+        btn_frame.pack(pady=10)
+        ttk.Button(btn_frame, text='Load Style', command=do_load).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text='Cancel', command=dialog.destroy).pack(side=tk.LEFT, padx=5)
+        
+        dialog.bind('<Return>', lambda e: do_load())
+        dialog.bind('<Escape>', lambda e: dialog.destroy())
     
     def show_shortcuts(self):
         """Show keyboard shortcuts dialog."""

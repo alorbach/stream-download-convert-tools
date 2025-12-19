@@ -5136,7 +5136,7 @@ TECHNICAL REQUIREMENTS:
         self.album_cover_size_var = tk.StringVar(value='1:1 (1024x1024)')
         album_cover_size_combo = ttk.Combobox(album_cover_toolbar, textvariable=self.album_cover_size_var, 
                                               values=['1:1 (1024x1024)', '3:2 (1536x1024)', '16:9 (1792x1024)', 
-                                                      '4:3 (1365x1024)', '9:16 (1024x1792)', '21:9 (2048x1024)'],
+                                                      '4:3 (1365x1024)', '2:3 (1024x1536)', '9:16 (1024x1792)', '21:9 (2048x1024)'],
                                               state='readonly', width=18)
         album_cover_size_combo.pack(side=tk.LEFT, padx=2)
         
@@ -5298,7 +5298,7 @@ TECHNICAL REQUIREMENTS:
         self.album_cover_size_album_var = tk.StringVar(value='1:1 (1024x1024)')
         ttk.Combobox(size_bar, textvariable=self.album_cover_size_album_var,
                      values=['1:1 (1024x1024)', '3:2 (1536x1024)', '16:9 (1792x1024)',
-                             '4:3 (1365x1024)', '9:16 (1024x1792)', '21:9 (2048x1024)'],
+                             '4:3 (1365x1024)', '2:3 (1024x1536)''9:16 (1024x1792)', '21:9 (2048x1024)'],
                      state='readonly', width=18).pack(side=tk.LEFT)
         ttk.Label(size_bar, text='Format:').pack(side=tk.LEFT, padx=(10, 4))
         self.album_cover_format_album_var = tk.StringVar(value='PNG')
@@ -5392,7 +5392,7 @@ TECHNICAL REQUIREMENTS:
         self.storyboard_image_size_var = tk.StringVar(value='3:2 (1536x1024)')
         image_size_combo = ttk.Combobox(controls_frame, textvariable=self.storyboard_image_size_var, 
                                         values=['3:2 (1536x1024)', '16:9 (1792x1024)', '1:1 (1024x1024)', 
-                                                '4:3 (1365x1024)', '9:16 (1024x1792)', '21:9 (2048x1024)'],
+                                                '4:3 (1365x1024)', '2:3 (1024x1536)', '9:16 (1024x1792)', '21:9 (2048x1024)'],
                                         state='readonly', width=18)
         image_size_combo.pack(side=tk.LEFT, padx=5)
         
