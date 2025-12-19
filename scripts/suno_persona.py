@@ -2020,11 +2020,39 @@ def load_persona_config(persona_path: str) -> dict:
     return default_config
 
 
+def backup_file_if_exists(file_path: str) -> str | None:
+    """Create a timestamped backup of a file if it exists.
+    
+    Args:
+        file_path: Path to the file to backup
+        
+    Returns:
+        Path to the backup file if backup was created, None otherwise
+    """
+    if not os.path.exists(file_path):
+        return None
+    
+    try:
+        import datetime
+        timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+        base, ext = os.path.splitext(file_path)
+        backup_path = f"{base}_backup_{timestamp}{ext}"
+        shutil.copy2(file_path, backup_path)
+        return backup_path
+    except Exception as e:
+        print(f'Warning: Failed to create backup of {file_path}: {e}')
+        return None
+
+
 def save_persona_config(persona_path: str, config: dict):
-    """Save persona config.json to persona folder."""
+    """Save persona config.json to persona folder. Creates backup before overwriting."""
     config_file = os.path.join(persona_path, 'config.json')
     try:
         os.makedirs(persona_path, exist_ok=True)
+        # Create backup before overwriting
+        backup_path = backup_file_if_exists(config_file)
+        if backup_path:
+            print(f'Backed up persona config to: {backup_path}')
         with open(config_file, 'w', encoding='utf-8') as f:
             json.dump(config, f, indent=4)
         return True
@@ -4283,6 +4311,9 @@ Return only the single most important keyword, nothing else. Just one word."""
                 temp_dir = os.path.join(base_path, 'temp')
                 os.makedirs(temp_dir, exist_ok=True)
                 reference_image_path = os.path.join(temp_dir, f'{safe_name}-Front-downscaled.png')
+                backup_path = backup_file_if_exists(reference_image_path)
+                if backup_path:
+                    self.log_debug('INFO', f'Backed up existing downscaled image to: {backup_path}')
                 downscaled_img.save(reference_image_path, 'PNG')
                 
                 self.config(cursor='wait')
@@ -4346,6 +4377,9 @@ Return only the single most important keyword, nothing else. Just one word."""
                 if result['success']:
                     img_bytes = result.get('image_bytes', b'')
                     if img_bytes:
+                        backup_path = backup_file_if_exists(filename)
+                        if backup_path:
+                            self.log_debug('INFO', f'Backed up existing profile image to: {backup_path}')
                         with open(filename, 'wb') as f:
                             f.write(img_bytes)
                         successes += 1
@@ -4535,6 +4569,9 @@ TECHNICAL REQUIREMENTS:
                 img_bytes = result.get('image_bytes', b'')
                 if img_bytes:
                     front_filename = os.path.join(base_path, f'{safe_name}-Front.png')
+                    backup_path = backup_file_if_exists(front_filename)
+                    if backup_path:
+                        self.log_debug('INFO', f'Backed up existing Front image to: {backup_path}')
                     with open(front_filename, 'wb') as f:
                         f.write(img_bytes)
                     front_image_path = front_filename
@@ -4638,6 +4675,9 @@ TECHNICAL REQUIREMENTS:
                     img_bytes = result_img.get('image_bytes', b'')
                     if img_bytes:
                         filename = os.path.join(base_path, f'{safe_name}-{view}.png')
+                        backup_path = backup_file_if_exists(filename)
+                        if backup_path:
+                            self.log_debug('INFO', f'Backed up existing {view} image to: {backup_path}')
                         with open(filename, 'wb') as f:
                             f.write(img_bytes)
                         self.log_debug('INFO', f'{view} reference image saved: {filename}')
@@ -4890,6 +4930,9 @@ TECHNICAL REQUIREMENTS:
                     img_bytes = result.get('image_bytes', b'')
                     if img_bytes:
                         front_filename = os.path.join(base_path, f'{safe_name}-Front.png')
+                        backup_path = backup_file_if_exists(front_filename)
+                        if backup_path:
+                            self.log_debug('INFO', f'Backed up existing Front image to: {backup_path}')
                         with open(front_filename, 'wb') as f:
                             f.write(img_bytes)
                         self.log_debug('INFO', f'Front reference image regenerated: {front_filename}')
@@ -4947,6 +4990,9 @@ TECHNICAL REQUIREMENTS:
                 img_bytes = result_img.get('image_bytes', b'')
                 if img_bytes:
                     filename = os.path.join(base_path, f'{safe_name}-{view}.png')
+                    backup_path = backup_file_if_exists(filename)
+                    if backup_path:
+                        self.log_debug('INFO', f'Backed up existing {view} image to: {backup_path}')
                     with open(filename, 'wb') as f:
                         f.write(img_bytes)
                     self.log_debug('INFO', f'{view} reference image regenerated: {filename}')
@@ -8506,27 +8552,102 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
         if genre_tags:
             persona_style_context = f"{voice_style}\nGenre Tags: {genre_tags}"
 
+        # Create explicit weighting instructions that emphasize the percentages
+        if song_weight >= 70:
+            weighting_emphasis = "CRITICAL: The Song Style should DOMINATE the merged result. Use {song_weight}% of elements, characteristics, and details from the Song Style, and only {persona_weight}% from the Persona Voice Style."
+        elif song_weight <= 30:
+            weighting_emphasis = "CRITICAL: The Persona Voice Style should DOMINATE the merged result. Use {persona_weight}% of elements, characteristics, and details from the Persona Voice Style, and only {song_weight}% from the Song Style."
+        else:
+            weighting_emphasis = "CRITICAL: Balance the styles according to these EXACT percentages: {song_weight}% Song Style influence and {persona_weight}% Persona Voice Style influence. The merged style must reflect this precise weighting."
+
         weighting_text = (
-            "\n\nWeighting preference:\n"
-            f"- Song Style importance: {song_weight}%\n"
-            f"- Persona Voice Style importance: {persona_weight}%\n"
-            "Blend the merged style to respect this weighting."
+            "\n\n=== WEIGHTING REQUIREMENTS (MUST BE FOLLOWED EXACTLY) ===\n"
+            f"Song Style Weight: {song_weight}%\n"
+            f"Persona Voice Style Weight: {persona_weight}%\n\n"
+            f"{weighting_emphasis.format(song_weight=song_weight, persona_weight=persona_weight)}\n\n"
+            "When creating the merged style:\n"
+            f"- If Song Style is {song_weight}%, prioritize {song_weight}% of musical elements, instrumentation, tempo, rhythm, and genre characteristics from the Song Style\n"
+            f"- If Persona Voice Style is {persona_weight}%, incorporate {persona_weight}% of vocal characteristics, delivery style, emotional tone, and persona-specific elements\n"
+            "- The percentages indicate the PROPORTIONAL INFLUENCE each style should have in the final merged description\n"
+            "- Ensure the merged style description clearly reflects this {song_weight}/{persona_weight} balance\n"
+            "=== END WEIGHTING REQUIREMENTS ===\n"
+        )
+
+        # Add instructions to MIX detailed phrases and keywords from song style with persona style
+        phrase_mixing_text = (
+            "\n\n=== PHRASE AND KEYWORD MIXING (CRITICAL) ===\n"
+            "The Song Style contains detailed phrases and keyphrases that describe specific musical characteristics.\n"
+            "These MUST be MIXED and BLENDED with the Persona Voice Style according to the weighting percentages:\n\n"
+            f"- Take the longer keyphrases from the Song Style (e.g., 'A hard rock track with a driving tempo of approximately 120 BPM', 'distorted electric guitar playing a prominent riff', 'raw powerful delivery with a slightly raspy timbre')\n"
+            f"- MIX these keyphrases with the Persona Voice Style elements according to the {song_weight}%/{persona_weight}% weighting\n"
+            f"- For each keyphrase from the Song Style, blend it with corresponding Persona Voice Style elements\n"
+            f"- If Song Style is {song_weight}%, that percentage of the keyphrases and their characteristics should be prominent in the mix\n"
+            f"- If Persona Voice Style is {persona_weight}%, that percentage of vocal characteristics and persona elements should be integrated into the keyphrases\n"
+            f"- Do NOT just list them separately - actively MIX and BLEND them together\n"
+            f"- For example, if Song Style says 'raw powerful delivery' and Persona Style has specific vocal characteristics, blend them: incorporate {song_weight}% of the 'raw powerful delivery' concept with {persona_weight}% of the persona's vocal style\n"
+            f"- The technical details (tempo, BPM, instrumentation) from Song Style should be mixed with persona elements according to the weighting\n"
+            f"- The structural descriptions (verse/chorus, instrumental breaks) should be blended with persona's style characteristics\n"
+            f"- The production characteristics should reflect the {song_weight}%/{persona_weight}% mix of both styles\n"
+            f"- Create a unified, blended description where Song Style keyphrases are integrated with Persona Voice Style, not just appended\n"
+            "=== END PHRASE MIXING ===\n"
         )
 
         template = get_prompt_template('merge_styles')
         if template:
-            prompt = template.replace('{STYLES_TO_MERGE}', song_style)
-            prompt = prompt.replace('{ORIGINAL_STYLE}', persona_style_context if persona_style_context else 'Persona style not set')
-            prompt += weighting_text
-            self.log_debug('INFO', 'Merging styles with template merge_styles')
+            # Override template's default prioritization with weighted approach
+            # Let the AI decide how to mix based on the percentages
+            prompt = (
+                weighting_text + phrase_mixing_text + "\n\n" +
+                "You are a music style expert. Your task is to merge music styles into a cohesive, unique style description optimized for music generation.\n\n" +
+                f"Song Style ({song_weight}% weight):\n{song_style}\n\n" +
+                f"Persona Voice Style ({persona_weight}% weight):\n{voice_style}\n" +
+                (f"\nGenre Tags: {genre_tags}\n" if genre_tags else "") +
+                "\nYour task is to MIX and BLEND these two styles according to the EXACT percentage weighting specified above.\n" +
+                f"The merged style should reflect {song_weight}% influence from the Song Style and {persona_weight}% influence from the Persona Voice Style.\n" +
+                "CRITICAL: Do not just combine them - actively MIX the longer keyphrases from the Song Style with the Persona Voice Style elements.\n" +
+                "For each detailed phrase in the Song Style, blend it with corresponding Persona Voice Style characteristics according to the weighting.\n\n" +
+                "Create a merged style description that:\n" +
+                f"1. MIXES the longer keyphrases from Song Style with Persona Voice Style elements according to {song_weight}%/{persona_weight}% weighting\n" +
+                "2. Blends technical details, instrumentation, and structural elements from Song Style with persona vocal characteristics\n" +
+                "3. Results in a unified, integrated description where both styles are actively mixed, not just listed\n" +
+                "4. The proportion of mixed elements from each style should match the weighting percentages\n" +
+                "5. Each keyphrase should reflect the blend of both styles according to the percentages\n\n" +
+                "OUTPUT REQUIREMENTS:\n" +
+                "- Output ONLY the merged style description\n" +
+                "- Include ONLY words, phrases, and descriptions that are relevant to the merged song style\n" +
+                "- Do NOT include any explanations, labels, or meta-commentary\n" +
+                "- Do NOT include phrases like 'This style...' or 'The merged style...'\n" +
+                "- Output ONLY the actual style description itself - nothing else\n" +
+                "- Be concise and include only relevant musical/style elements"
+            )
+            self.log_debug('INFO', f'Merging styles with weighted template (weights: {song_weight}% song, {persona_weight}% persona)')
         else:
             prompt = (
-                "Merge the following song style with the persona's voice style:\n\n"
-                f"Song Style: {song_style}\n\nPersona Voice Style: {voice_style}\n"
-                f"{'Genre Tags: ' + genre_tags if genre_tags else ''}\n\nCreate a merged style description that combines both."
+                weighting_text + phrase_mixing_text + "\n\n"
+                "Merge the following styles according to the weighting and mixing requirements above:\n\n"
+                f"Song Style ({song_weight}% weight):\n{song_style}\n\n"
+                f"Persona Voice Style ({persona_weight}% weight):\n{voice_style}\n"
+                f"{'Genre Tags: ' + genre_tags if genre_tags else ''}\n\n"
+                "Your task is to MIX and BLEND these two styles according to the EXACT percentage weighting specified above.\n" +
+                f"The merged style should reflect {song_weight}% influence from the Song Style and {persona_weight}% influence from the Persona Voice Style.\n" +
+                "CRITICAL: Do not just combine them - actively MIX the longer keyphrases from the Song Style with the Persona Voice Style elements.\n" +
+                "For each detailed phrase in the Song Style, blend it with corresponding Persona Voice Style characteristics according to the weighting.\n\n" +
+                "Create a merged style description that:\n"
+                f"1. MIXES the longer keyphrases from Song Style with Persona Voice Style elements according to {song_weight}%/{persona_weight}% weighting\n"
+                "2. Blends technical details, instrumentation, tempo, and structural elements from Song Style with persona vocal characteristics\n"
+                "3. Preserves and incorporates ALL detailed phrases, keywords, and technical descriptions from both styles\n"
+                "4. Results in a unified, integrated description where both styles are actively mixed, not just listed\n"
+                "5. The proportion of mixed elements from each style should match the weighting percentages\n"
+                "6. Each keyphrase should reflect the blend of both styles according to the percentages\n\n"
+                "OUTPUT REQUIREMENTS:\n" +
+                "- Output ONLY the merged style description\n" +
+                "- Include ONLY words, phrases, and descriptions that are relevant to the merged song style\n" +
+                "- Do NOT include any explanations, labels, or meta-commentary\n" +
+                "- Do NOT include phrases like 'This style...' or 'The merged style...'\n" +
+                "- Output ONLY the actual style description itself - nothing else\n" +
+                "- Be concise and include only relevant musical/style elements"
             )
-            prompt += weighting_text
-            self.log_debug('INFO', 'Merging styles with fallback prompt')
+            self.log_debug('INFO', f'Merging styles with fallback prompt (weights: {song_weight}% song, {persona_weight}% persona)')
         
         self.config(cursor='wait')
         self.update()
@@ -8656,6 +8777,8 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
         preset_key = self._get_song_persona_preset_key()
         base_path = self.get_persona_image_base_path(preset_key)
         storyboard_theme = self.storyboard_theme_text.get('1.0', tk.END).strip() if hasattr(self, 'storyboard_theme_text') else ''
+        # Get song lyrics for character and scene inspiration
+        song_lyrics = self.lyrics_text.get('1.0', tk.END).strip() if hasattr(self, 'lyrics_text') else ''
         
         if not song_name:
             messagebox.showwarning('Warning', 'Please enter a song name.')
@@ -8685,7 +8808,30 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
         # Remove parenthetical content from full_song_name for prompt generation
         clean_full_song_name = self._remove_parenthetical_content(full_song_name) if full_song_name else ''
         prompt += f"\n\nFull Song Name: {clean_full_song_name if clean_full_song_name else full_song_name}"
-        prompt += f"\n\nMerged Style: {merged_style}"
+        
+        # Emphasize merged style for coloring and scene - CRITICAL for visual design
+        if merged_style:
+            prompt += f"\n\n=== MERGED STYLE (CRITICAL FOR COLORING AND SCENE) ==="
+            prompt += f"\n{merged_style}"
+            prompt += "\n\nIMPORTANT: The merged style MUST heavily influence:"
+            prompt += "\n- COLOR PALETTE: Extract color schemes, tones, and mood colors from the merged style"
+            prompt += "\n- SCENE SETTING: Use the merged style to determine the environment, atmosphere, and visual setting"
+            prompt += "\n- LIGHTING: Apply lighting characteristics described in the merged style"
+            prompt += "\n- OVERALL AESTHETIC: The merged style should be the PRIMARY driver for the visual design choices"
+            prompt += "\n=== END MERGED STYLE ===\n"
+        
+        # Emphasize song lyrics for character and scene inspiration
+        if song_lyrics:
+            prompt += f"\n\n=== SONG LYRICS (CRITICAL FOR CHARACTER AND SCENE) ==="
+            prompt += f"\n{song_lyrics}"
+            prompt += "\n\nIMPORTANT: The song lyrics MUST heavily influence:"
+            prompt += "\n- CHARACTER DEPICTION: Use lyrical themes, emotions, and narrative to shape how the persona appears"
+            prompt += "\n- SCENE CONTENT: Extract visual elements, settings, and imagery directly from the lyrics"
+            prompt += "\n- COLORING: Use colors and moods described or implied in the lyrics"
+            prompt += "\n- ATMOSPHERE: The lyrics should inform the overall mood and visual tone of the cover"
+            prompt += "\n- SYMBOLISM: Incorporate visual metaphors and symbols from the lyrics into the cover design"
+            prompt += "\n=== END SONG LYRICS ===\n"
+        
         if storyboard_theme:
             prompt += f"\n\nSTORYBOARD THEME (MANDATORY - primary art direction): {storyboard_theme}"
             prompt += "\nUse this storyboard theme 100% as the core visual aesthetic. All album cover decisions must align with it."
@@ -8737,6 +8883,14 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
             if storyboard_theme:
                 prompt += "\nMANDATORY: The storyboard theme overrides any conflicting cues. Keep the theme fully intact while merging persona visuals."
             prompt += "\n\nCreate a detailed album cover prompt suitable for image generation that incorporates ALL of the persona's visual characteristics, appearance, styling, and aesthetic."
+            # Reinforce merged style and lyrics influence on coloring and scene
+            if merged_style or song_lyrics:
+                prompt += "\n\nCRITICAL REMINDER FOR COLORING AND SCENE:"
+                if merged_style:
+                    prompt += "\n- Use the merged style as the PRIMARY source for color palette, lighting, and overall visual aesthetic"
+                if song_lyrics:
+                    prompt += "\n- Use the song lyrics as the PRIMARY source for scene content, character depiction, and symbolic imagery"
+                prompt += "\n- The merged style and lyrics should be the dominant influences on the final cover's coloring and scene composition"
             
             self.log_debug('INFO', f'Generating album cover prompt using {len(reference_images)} reference images...')
             self.config(cursor='wait')
@@ -8754,6 +8908,14 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
             if storyboard_theme:
                 prompt += "\nMANDATORY: The storyboard theme overrides any conflicting cues. Keep the theme fully intact while merging persona visuals."
             prompt += "\n\nCreate a detailed album cover prompt suitable for image generation that incorporates ALL of the persona's visual characteristics, appearance, styling, and aesthetic."
+            # Reinforce merged style and lyrics influence on coloring and scene
+            if merged_style or song_lyrics:
+                prompt += "\n\nCRITICAL REMINDER FOR COLORING AND SCENE:"
+                if merged_style:
+                    prompt += "\n- Use the merged style as the PRIMARY source for color palette, lighting, and overall visual aesthetic"
+                if song_lyrics:
+                    prompt += "\n- Use the song lyrics as the PRIMARY source for scene content, character depiction, and symbolic imagery"
+                prompt += "\n- The merged style and lyrics should be the dominant influences on the final cover's coloring and scene composition"
             
             self.log_debug('INFO', 'Generating album cover prompt (no reference images available)...')
             self.config(cursor='wait')
@@ -11207,6 +11369,9 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
                         temp_dir = os.path.join(self.current_song_path if self.current_song_path else os.path.dirname(front_image_path), 'temp')
                         os.makedirs(temp_dir, exist_ok=True)
                         reference_image_path = os.path.join(temp_dir, f'{safe_name}-Front-downscaled.png')
+                        backup_path = backup_file_if_exists(reference_image_path)
+                        if backup_path:
+                            self.log_debug('INFO', f'Backed up existing downscaled image to: {backup_path}')
                         downscaled_img.save(reference_image_path, 'PNG')
 
                         self.config(cursor='wait')
@@ -11793,6 +11958,9 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
                     temp_dir = os.path.join(self.current_song_path if self.current_song_path else os.path.dirname(front_image_path), 'temp')
                     os.makedirs(temp_dir, exist_ok=True)
                     reference_image_path = os.path.join(temp_dir, f'{safe_name}-Front-downscaled.png')
+                    backup_path = backup_file_if_exists(reference_image_path)
+                    if backup_path:
+                        self.log_debug('INFO', f'Backed up existing downscaled image to: {backup_path}')
                     downscaled_img.save(reference_image_path, 'PNG')
                     
                     # Analyze the reference image using vision API to get detailed description
