@@ -5163,6 +5163,7 @@ TECHNICAL REQUIREMENTS:
         video_loop_toolbar.pack(fill=tk.X, padx=2, pady=2)
         ttk.Button(video_loop_toolbar, text='Generate Prompt', command=self.generate_video_loop).pack(side=tk.LEFT, padx=2)
         ttk.Button(video_loop_toolbar, text='Run', command=self.run_video_loop_model).pack(side=tk.LEFT, padx=2)
+        ttk.Button(video_loop_toolbar, text='Save', command=self.save_video_loop_prompt).pack(side=tk.LEFT, padx=2)
         
         ttk.Label(video_loop_toolbar, text='Size:', font=('TkDefaultFont', 8)).pack(side=tk.LEFT, padx=(10, 2))
         self.video_loop_size_var = tk.StringVar(value='9:16 (720x1280)')
@@ -6710,11 +6711,33 @@ TECHNICAL REQUIREMENTS:
             full_song_name = self.song_name_var.get().strip() or 'album_cover'
 
         safe_basename = full_song_name.replace(':', '_').replace('/', '_').replace('\\', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace("'", "'").replace('<', '_').replace('>', '_').replace('|', '_')
-        candidates = [
+        
+        # Get current aspect ratio suffix if available
+        aspect_ratio_suffix = ''
+        if hasattr(self, 'album_cover_size_var'):
+            size_value = self.album_cover_size_var.get()
+            match = re.search(r'^([^\(]+)', size_value)
+            if match:
+                aspect_ratio = match.group(1).strip()
+                aspect_ratio_x = aspect_ratio.replace(':', 'x')
+                if aspect_ratio_x != '1x1':
+                    aspect_ratio_suffix = aspect_ratio_x
+        
+        # Check for current aspect ratio first, then fallback to old format
+        candidates = []
+        if aspect_ratio_suffix:
+            candidates.extend([
+                os.path.join(self.current_song_path, f'{safe_basename}-Cover{aspect_ratio_suffix}.png'),
+                os.path.join(self.current_song_path, f'{safe_basename}-Cover{aspect_ratio_suffix}.jpg'),
+                os.path.join(self.current_song_path, f'{safe_basename}-Cover{aspect_ratio_suffix}.jpeg'),
+            ])
+        # Also check old format (without aspect ratio) for backward compatibility
+        candidates.extend([
             os.path.join(self.current_song_path, f'{safe_basename}-Cover.png'),
             os.path.join(self.current_song_path, f'{safe_basename}-Cover.jpg'),
             os.path.join(self.current_song_path, f'{safe_basename}-Cover.jpeg'),
-        ]
+        ])
+        
         for path in candidates:
             if os.path.exists(path):
                 return path
@@ -7512,8 +7535,13 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
             self.log_debug('ERROR', f'Rename album failed: {exc}')
 
     def _album_cover_size_value(self) -> str:
+        """Get album cover size value, mapped to supported sizes for gpt-image-1.5."""
         match = re.search(r'\((\d+x\d+)\)', self.album_cover_size_album_var.get() or '')
-        return match.group(1) if match else '1024x1024'
+        if match:
+            extracted_size = match.group(1)
+            # Map to supported size
+            return self._map_to_supported_image_size(extracted_size)
+        return '1024x1024'
 
     def _album_video_size_value(self) -> str:
         match = re.search(r'\((\d+x\d+)\)', self.album_video_size_var.get() or '')
@@ -10835,29 +10863,70 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
         """Get the image size string for storyboard images.
         
         Returns:
-            Size string like '1536x1024' extracted from dropdown value
+            Size string like '1536x1024' mapped to supported sizes for gpt-image-1.5
         """
         if hasattr(self, 'storyboard_image_size_var'):
             size_value = self.storyboard_image_size_var.get()
             # Extract size from format like "3:2 (1536x1024)" -> "1536x1024"
             match = re.search(r'\((\d+x\d+)\)', size_value)
             if match:
-                return match.group(1)
+                extracted_size = match.group(1)
+                # Map to supported size
+                return self._map_to_supported_image_size(extracted_size)
         # Default to 3:2 aspect ratio
         return '1536x1024'
+    
+    def _map_to_supported_image_size(self, size_str: str) -> str:
+        """Map image size to supported sizes for gpt-image-1.5 model.
+        
+        Supported sizes: 1024x1024, 1536x1024, 1024x1536
+        
+        Args:
+            size_str: Size string like '1024x1024' or '1024x1792'
+            
+        Returns:
+            Mapped size string that is supported by the model
+        """
+        # Parse width and height
+        match = re.match(r'(\d+)x(\d+)', size_str)
+        if not match:
+            return '1024x1024'  # Default fallback
+        
+        width = int(match.group(1))
+        height = int(match.group(2))
+        
+        # If already a supported size, return as-is
+        if size_str in ['1024x1024', '1536x1024', '1024x1536']:
+            return size_str
+        
+        # Determine aspect ratio
+        aspect_ratio = width / height if height > 0 else 1.0
+        
+        # Map to closest supported size
+        if aspect_ratio == 1.0:
+            # Square
+            return '1024x1024'
+        elif aspect_ratio > 1.0:
+            # Landscape (wider than tall)
+            return '1536x1024'
+        else:
+            # Portrait (taller than wide)
+            return '1024x1536'
     
     def get_album_cover_image_size(self) -> str:
         """Get the image size string for album cover images.
         
         Returns:
-            Size string like '1024x1024' extracted from dropdown value
+            Size string like '1024x1024' mapped to supported sizes for gpt-image-1.5
         """
         if hasattr(self, 'album_cover_size_var'):
             size_value = self.album_cover_size_var.get()
             # Extract size from format like "1:1 (1024x1024)" -> "1024x1024"
             match = re.search(r'\((\d+x\d+)\)', size_value)
             if match:
-                return match.group(1)
+                extracted_size = match.group(1)
+                # Map to supported size
+                return self._map_to_supported_image_size(extracted_size)
         # Default to 1:1 aspect ratio
         return '1024x1024'
     
@@ -11790,7 +11859,22 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
         # Generate safe filename from Full Song Name with correct extension
         safe_basename = full_song_name.replace(':', '_').replace('/', '_').replace('\\', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace("'", "'").replace('<', '_').replace('>', '_').replace('|', '_')
         file_extension = '.jpg' if image_format == 'jpeg' else '.png'
-        filename = os.path.join(self.current_song_path, f'{safe_basename}-Cover{file_extension}')
+        
+        # Extract aspect ratio from size (e.g., "1:1 (1024x1024)" -> "1:1" -> "1x1")
+        aspect_ratio_suffix = ''
+        if hasattr(self, 'album_cover_size_var'):
+            size_value = self.album_cover_size_var.get()
+            # Extract aspect ratio part before parentheses (e.g., "1:1" from "1:1 (1024x1024)")
+            match = re.search(r'^([^\(]+)', size_value)
+            if match:
+                aspect_ratio = match.group(1).strip()
+                # Convert ":" to "x" (e.g., "1:1" -> "1x1", "3:2" -> "3x2")
+                aspect_ratio_x = aspect_ratio.replace(':', 'x')
+                # Only append if not 1x1
+                if aspect_ratio_x != '1x1':
+                    aspect_ratio_suffix = aspect_ratio_x
+        
+        filename = os.path.join(self.current_song_path, f'{safe_basename}-Cover{aspect_ratio_suffix}{file_extension}')
         
         # Create backup if file exists
         backup_path = self.backup_file_if_exists(filename)
@@ -11885,6 +11969,72 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
             except Exception as e:
                 messagebox.showerror('Error', f'Failed to save video: {e}')
                 self.log_debug('ERROR', f'Failed to save video: {e}')
+    
+    def save_video_loop_prompt(self):
+        """Save the video loop prompt to a JSON file using the same basename as the album cover."""
+        if not self.current_song_path:
+            messagebox.showwarning('Warning', 'No song selected. Cannot save video loop prompt.')
+            return
+        
+        video_prompt = self.video_loop_text.get('1.0', tk.END).strip()
+        if not video_prompt:
+            messagebox.showwarning('Warning', 'Video loop prompt is empty. Please generate a prompt first.')
+            return
+        
+        try:
+            # Use the same basename logic as album cover
+            full_song_name = self.full_song_name_var.get().strip()
+            if not full_song_name:
+                full_song_name = self.song_name_var.get().strip() or 'album_cover'
+            
+            # Generate safe filename from Full Song Name (same as album cover)
+            safe_basename = full_song_name.replace(':', '_').replace('/', '_').replace('\\', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace("'", "'").replace('<', '_').replace('>', '_').replace('|', '_')
+            
+            # Extract aspect ratio from video loop size (e.g., "9:16 (720x1280)" -> "9:16" -> "9x16")
+            aspect_ratio_suffix = ''
+            if hasattr(self, 'video_loop_size_var'):
+                size_value = self.video_loop_size_var.get()
+                # Extract aspect ratio part before parentheses (e.g., "9:16" from "9:16 (720x1280)")
+                match = re.search(r'^([^\(]+)', size_value)
+                if match:
+                    aspect_ratio = match.group(1).strip()
+                    # Convert ":" to "x" (e.g., "9:16" -> "9x16", "1:1" -> "1x1")
+                    aspect_ratio_x = aspect_ratio.replace(':', 'x')
+                    # Only append if not 1x1
+                    if aspect_ratio_x != '1x1':
+                        aspect_ratio_suffix = aspect_ratio_x
+            
+            # Save with same basename as album cover image, but as .json file
+            filename = os.path.join(self.current_song_path, f'{safe_basename}-Cover{aspect_ratio_suffix}.json')
+            
+            # Create backup if file exists
+            backup_path = self.backup_file_if_exists(filename)
+            
+            # Create JSON structure (same format as storyboard prompt export)
+            export_data = {
+                'generated_prompt': video_prompt
+            }
+            
+            # Save the prompt to JSON file
+            with open(filename, 'w', encoding='utf-8') as f:
+                json.dump(export_data, f, indent=2, ensure_ascii=False)
+            
+            self.log_debug('INFO', f'Video loop prompt saved to {filename}')
+            success_msg = f'Video loop prompt saved to:\n{filename}'
+            if backup_path:
+                success_msg += f'\n\nBackup created: {os.path.basename(backup_path)}'
+            messagebox.showinfo('Success', success_msg)
+            
+            # Also save to config.json using the same approach as _save_storyboard_generated_prompt
+            if self.current_song:
+                self.current_song['video_loop'] = video_prompt
+                if save_song_config(self.current_song_path, self.current_song):
+                    self.log_debug('INFO', 'Config.json updated with video loop prompt')
+                else:
+                    self.log_debug('WARNING', 'Failed to save config.json with video loop prompt')
+        except Exception as e:
+            messagebox.showerror('Error', f'Failed to save video loop prompt: {e}')
+            self.log_debug('ERROR', f'Failed to save video loop prompt: {e}')
     
     def export_youtube_description(self):
         """Export YouTube description for the song."""
