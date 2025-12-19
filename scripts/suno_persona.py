@@ -1163,6 +1163,86 @@ class ProgressDialog(tk.Toplevel):
         return self.cancelled
 
 
+class BulkCoverDialog(tk.Toplevel):
+    """Dialog for bulk cover generation settings."""
+    
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.title('Bulk Cover Generation')
+        self.geometry('450x300')
+        self.transient(parent)
+        self.grab_set()
+        
+        self.result = None
+        
+        self.create_widgets()
+        
+        self.update_idletasks()
+        x = parent.winfo_x() + (parent.winfo_width() // 2) - (self.winfo_width() // 2)
+        y = parent.winfo_y() + (parent.winfo_height() // 2) - (self.winfo_height() // 2)
+        self.geometry(f"+{x}+{y}")
+    
+    def create_widgets(self):
+        main_frame = ttk.Frame(self, padding=20)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Scope selection
+        ttk.Label(main_frame, text='Scope:', font=('TkDefaultFont', 9, 'bold')).pack(anchor=tk.W, pady=(0, 5))
+        scope_frame = ttk.Frame(main_frame)
+        scope_frame.pack(fill=tk.X, pady=(0, 15))
+        
+        self.scope_var = tk.StringVar(value='current_album')
+        ttk.Radiobutton(scope_frame, text='All songs from Persona', variable=self.scope_var, value='all_persona').pack(anchor=tk.W, pady=2)
+        ttk.Radiobutton(scope_frame, text='Only songs from current Album', variable=self.scope_var, value='current_album').pack(anchor=tk.W, pady=2)
+        
+        # Format selection
+        format_frame = ttk.Frame(main_frame)
+        format_frame.pack(fill=tk.X, pady=(0, 15))
+        
+        ttk.Label(format_frame, text='Size:', font=('TkDefaultFont', 9, 'bold')).grid(row=0, column=0, sticky=tk.W, pady=(0, 5))
+        self.size_var = tk.StringVar(value='1:1 (1024x1024)')
+        size_combo = ttk.Combobox(format_frame, textvariable=self.size_var,
+                                  values=['1:1 (1024x1024)', '3:2 (1536x1024)', '16:9 (1792x1024)',
+                                          '4:3 (1365x1024)', '2:3 (1024x1536)', '9:16 (1024x1792)', '21:9 (2048x1024)'],
+                                  state='readonly', width=20)
+        size_combo.grid(row=0, column=1, sticky=tk.W, padx=(10, 0), pady=(0, 5))
+        
+        ttk.Label(format_frame, text='Format:', font=('TkDefaultFont', 9, 'bold')).grid(row=1, column=0, sticky=tk.W, pady=(0, 5))
+        self.format_var = tk.StringVar(value='PNG')
+        format_combo = ttk.Combobox(format_frame, textvariable=self.format_var,
+                                    values=['PNG', 'JPEG'], state='readonly', width=20)
+        format_combo.grid(row=1, column=1, sticky=tk.W, padx=(10, 0), pady=(0, 5))
+        
+        # Overwrite option
+        self.overwrite_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(main_frame, text='Overwrite existing cover files', variable=self.overwrite_var).pack(anchor=tk.W, pady=(0, 15))
+        
+        # Buttons
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(fill=tk.X, pady=(10, 0))
+        
+        ttk.Button(btn_frame, text='Cancel', command=self.cancel).pack(side=tk.RIGHT, padx=(5, 0))
+        ttk.Button(btn_frame, text='Generate', command=self.ok).pack(side=tk.RIGHT)
+        
+        self.bind('<Return>', lambda e: self.ok())
+        self.bind('<Escape>', lambda e: self.cancel())
+    
+    def ok(self):
+        """Confirm and return result."""
+        self.result = {
+            'scope': self.scope_var.get(),
+            'size': self.size_var.get(),
+            'format': self.format_var.get(),
+            'overwrite': self.overwrite_var.get()
+        }
+        self.destroy()
+    
+    def cancel(self):
+        """Cancel dialog."""
+        self.result = None
+        self.destroy()
+
+
 class SettingsDialog(tk.Toplevel):
     """Dialog for editing configuration settings."""
     
@@ -5180,6 +5260,7 @@ TECHNICAL REQUIREMENTS:
         ttk.Button(album_cover_toolbar, text='Improve', command=self.improve_album_cover_prompt).pack(side=tk.LEFT, padx=2)
         ttk.Button(album_cover_toolbar, text='Run', command=self.run_image_model).pack(side=tk.LEFT, padx=2)
         ttk.Button(album_cover_toolbar, text='Preview', command=self.preview_last_song_cover).pack(side=tk.LEFT, padx=2)
+        ttk.Button(album_cover_toolbar, text='Bulk Generate Covers', command=self.bulk_generate_covers).pack(side=tk.LEFT, padx=2)
         
         ttk.Label(album_cover_toolbar, text='Size:', font=('TkDefaultFont', 8)).pack(side=tk.LEFT, padx=(10, 2))
         self.album_cover_size_var = tk.StringVar(value='1:1 (1024x1024)')
@@ -5340,6 +5421,7 @@ TECHNICAL REQUIREMENTS:
         ttk.Button(cover_bar, text='Improve', command=self.improve_album_cover_prompt_album).pack(side=tk.LEFT, padx=4)
         ttk.Button(cover_bar, text='Run Cover Image', command=self.run_album_cover_image).pack(side=tk.LEFT, padx=4)
         ttk.Button(cover_bar, text='Preview', command=self.preview_last_album_cover).pack(side=tk.LEFT, padx=4)
+        ttk.Button(cover_bar, text='Bulk Generate Covers', command=self.bulk_generate_covers).pack(side=tk.LEFT, padx=4)
 
         size_bar = ttk.Frame(album_prompt_frame)
         size_bar.pack(fill=tk.X, pady=(0, 2))
@@ -12212,6 +12294,399 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
         except Exception as e:
             messagebox.showerror('Error', f'Failed to save album cover: {e}')
             self.log_debug('ERROR', f'Failed to save album cover: {e}')
+    
+    def bulk_generate_covers(self):
+        """Open dialog for bulk cover generation."""
+        if not self.current_persona_path:
+            messagebox.showwarning('Warning', 'Please select a persona first.')
+            return
+        
+        dialog = BulkCoverDialog(self)
+        self.wait_window(dialog)
+        
+        if not dialog.result:
+            return
+        
+        scope = dialog.result['scope']
+        size = dialog.result['size']
+        format_type = dialog.result['format']
+        overwrite = dialog.result['overwrite']
+        
+        # Get songs based on scope
+        songs_to_process = []
+        songs_dir = os.path.join(self.current_persona_path, 'AI-Songs')
+        
+        if scope == 'all_persona':
+            # All songs from persona
+            if os.path.exists(songs_dir):
+                for item in os.listdir(songs_dir):
+                    item_path = os.path.join(songs_dir, item)
+                    if os.path.isdir(item_path):
+                        songs_to_process.append(item_path)
+        elif scope == 'current_album':
+            # Only songs from current album
+            if not self.current_album_id:
+                messagebox.showwarning('Warning', 'No album selected. Please select an album first or choose "All songs from Persona".')
+                return
+            if os.path.exists(songs_dir):
+                for item in os.listdir(songs_dir):
+                    item_path = os.path.join(songs_dir, item)
+                    if os.path.isdir(item_path):
+                        config = load_song_config(item_path)
+                        if config.get('album_id') == self.current_album_id:
+                            songs_to_process.append(item_path)
+        
+        if not songs_to_process:
+            messagebox.showwarning('Warning', 'No songs found to process.')
+            return
+        
+        # Confirm before proceeding
+        confirm_msg = f'Generate covers for {len(songs_to_process)} song(s)?\n\n'
+        confirm_msg += f'Format: {size}\n'
+        confirm_msg += f'File Format: {format_type}\n'
+        confirm_msg += f'Overwrite existing: {"Yes" if overwrite else "No"}'
+        
+        if not messagebox.askyesno('Confirm Bulk Cover Generation', confirm_msg):
+            return
+        
+        # Process songs
+        self._process_bulk_covers(songs_to_process, size, format_type, overwrite)
+    
+    def _process_bulk_covers(self, song_paths: list[str], size: str, format_type: str, overwrite: bool):
+        """Process bulk cover generation for multiple songs."""
+        # Track albums being processed
+        albums_processed = set()
+        
+        progress_dialog = ProgressDialog(self, len(song_paths), 'Generating Covers')
+        progress_dialog.update()
+        
+        generated_count = 0
+        skipped_count = 0
+        errors = []
+        
+        for idx, song_path in enumerate(song_paths, 1):
+            if progress_dialog.is_cancelled():
+                self.log_debug('INFO', 'Bulk cover generation cancelled by user')
+                break
+            
+            song_config = load_song_config(song_path)
+            song_name = song_config.get('song_name', os.path.basename(song_path))
+            full_song_name = song_config.get('full_song_name', song_name)
+            
+            # Track album for video prompt generation
+            album_id = song_config.get('album_id', '')
+            if album_id:
+                albums_processed.add(album_id)
+            
+            progress_dialog.update_progress(idx, f'Processing: {song_name} ({idx}/{len(song_paths)})...')
+            
+            try:
+                # Check if cover already exists
+                safe_basename = full_song_name.replace(':', '_').replace('/', '_').replace('\\', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace("'", "'").replace('<', '_').replace('>', '_').replace('|', '_')
+                file_extension = '.jpg' if format_type.lower() == 'jpeg' else '.png'
+                
+                # Extract aspect ratio from size (e.g., "1:1 (1024x1024)" -> "1:1" -> "1x1")
+                aspect_ratio_suffix = ''
+                match = re.search(r'^([^\(]+)', size)
+                if match:
+                    aspect_ratio = match.group(1).strip()
+                    aspect_ratio_x = aspect_ratio.replace(':', 'x')
+                    if aspect_ratio_x != '1x1':
+                        aspect_ratio_suffix = aspect_ratio_x
+                
+                filename = os.path.join(song_path, f'{safe_basename}-Cover{aspect_ratio_suffix}{file_extension}')
+                
+                if os.path.exists(filename) and not overwrite:
+                    skipped_count += 1
+                    self.log_debug('INFO', f'Skipped {song_name}: cover already exists')
+                    continue
+                
+                # Get cover prompt from song config
+                cover_prompt = song_config.get('album_cover', '')
+                if not cover_prompt:
+                    errors.append(f'{song_name}: No cover prompt found')
+                    continue
+                
+                # Generate cover using existing logic
+                success = self._generate_single_cover(song_path, song_config, cover_prompt, size, format_type, filename, overwrite)
+                
+                if success:
+                    generated_count += 1
+                    self.log_debug('INFO', f'Generated cover for {song_name}')
+                else:
+                    errors.append(f'{song_name}: Failed to generate cover')
+                    
+            except Exception as e:
+                error_msg = f'{song_name}: {e}'
+                errors.append(error_msg)
+                self.log_debug('ERROR', error_msg)
+        
+        # Process album video prompts
+        video_prompts_generated = 0
+        video_prompts_skipped = 0
+        
+        if albums_processed and not progress_dialog.is_cancelled():
+            # Update progress dialog for video prompts
+            total_items = len(song_paths) + len(albums_processed)
+            progress_dialog.total_items = total_items
+            progress_dialog.update_progress(len(song_paths), f'Processing album video prompts ({len(albums_processed)} albums)...')
+            
+            for album_idx, album_id in enumerate(albums_processed, 1):
+                if progress_dialog.is_cancelled():
+                    self.log_debug('INFO', 'Album video prompt generation cancelled by user')
+                    break
+                
+                try:
+                    album_path = self._get_album_path(album_id)
+                    if not album_path or not os.path.exists(album_path):
+                        continue
+                    
+                    album_config = load_album_config(album_path)
+                    album_name = album_config.get('album_name', album_id)
+                    
+                    progress_dialog.update_progress(len(song_paths) + album_idx, f'Processing album: {album_name} ({album_idx}/{len(albums_processed)})...')
+                    
+                    # Extract aspect ratio from size for video prompt filename
+                    aspect_ratio_suffix = ''
+                    match = re.search(r'^([^\(]+)', size)
+                    if match:
+                        aspect_ratio = match.group(1).strip()
+                        aspect_ratio_x = aspect_ratio.replace(':', 'x')
+                        if aspect_ratio_x != '1x1':
+                            aspect_ratio_suffix = aspect_ratio_x
+                    
+                    # Check if video prompt file already exists
+                    safe_basename = album_name.replace(':', '_').replace('/', '_').replace('\\', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace("'", "'").replace('<', '_').replace('>', '_').replace('|', '_')
+                    video_prompt_file = os.path.join(album_path, f'{safe_basename}-Video{aspect_ratio_suffix}.json')
+                    
+                    # Check if video prompt exists in config or file
+                    existing_video_prompt = album_config.get('video_prompt', '')
+                    video_prompt_exists = existing_video_prompt or os.path.exists(video_prompt_file)
+                    
+                    if video_prompt_exists and not overwrite:
+                        video_prompts_skipped += 1
+                        self.log_debug('INFO', f'Skipped album {album_name}: video prompt already exists')
+                        continue
+                    
+                    # Get cover prompt from album config
+                    cover_prompt = album_config.get('cover_prompt', '')
+                    if not cover_prompt:
+                        # Try to get from first song in album
+                        songs_dir = os.path.join(self.current_persona_path, 'AI-Songs')
+                        if os.path.exists(songs_dir):
+                            for item in os.listdir(songs_dir):
+                                item_path = os.path.join(songs_dir, item)
+                                if os.path.isdir(item_path):
+                                    song_cfg = load_song_config(item_path)
+                                    if song_cfg.get('album_id') == album_id:
+                                        cover_prompt = song_cfg.get('album_cover', '')
+                                        if cover_prompt:
+                                            break
+                    
+                    if not cover_prompt:
+                        errors.append(f'Album {album_name}: No cover prompt found for video prompt generation')
+                        continue
+                    
+                    # Generate video prompt
+                    success = self._generate_album_video_prompt(album_id, album_name, album_path, cover_prompt, aspect_ratio_suffix, video_prompt_file, overwrite)
+                    
+                    if success:
+                        video_prompts_generated += 1
+                        self.log_debug('INFO', f'Generated video prompt for album {album_name}')
+                    else:
+                        errors.append(f'Album {album_name}: Failed to generate video prompt')
+                        
+                except Exception as e:
+                    error_msg = f'Album {album_id}: {e}'
+                    errors.append(error_msg)
+                    self.log_debug('ERROR', error_msg)
+        
+        progress_dialog.destroy()
+        
+        # Show results
+        result_msg = f'Covers Generated: {generated_count}\n'
+        if skipped_count > 0:
+            result_msg += f'Covers Skipped: {skipped_count}\n'
+        if video_prompts_generated > 0:
+            result_msg += f'Video Prompts Generated: {video_prompts_generated}\n'
+        if video_prompts_skipped > 0:
+            result_msg += f'Video Prompts Skipped: {video_prompts_skipped}\n'
+        if errors:
+            result_msg += f'Errors: {len(errors)}\n\n'
+            result_msg += '\n'.join(errors[:10])
+            if len(errors) > 10:
+                result_msg += f'\n... and {len(errors) - 10} more errors'
+        else:
+            result_msg += '\nAll covers and video prompts generated successfully!'
+        
+        if errors:
+            messagebox.showwarning('Bulk Cover Generation Complete', result_msg)
+        else:
+            messagebox.showinfo('Success', result_msg)
+    
+    def _generate_single_cover(self, song_path: str, song_config: dict, prompt: str, size: str, format_type: str, filename: str, overwrite: bool) -> bool:
+        """Generate a single cover image for a song."""
+        try:
+            # Enhance prompt with persona reference if available
+            enhanced_prompt = prompt
+            
+            if self.current_persona and self.current_persona_path:
+                preset_key = song_config.get('persona_image_preset', self.current_persona.get('current_image_preset', 'default'))
+                base_path = self.get_persona_image_base_path(preset_key)
+                safe_name = self._safe_persona_basename()
+                front_image_path = os.path.join(base_path, f'{safe_name}-Front.png')
+                
+                if os.path.exists(front_image_path):
+                    try:
+                        from PIL import Image
+                        original_img = Image.open(front_image_path)
+                        new_width = original_img.width // 2
+                        new_height = original_img.height // 2
+                        downscaled_img = original_img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                        
+                        temp_dir = os.path.join(song_path, 'temp')
+                        os.makedirs(temp_dir, exist_ok=True)
+                        reference_image_path = os.path.join(temp_dir, f'{safe_name}-Front-downscaled.png')
+                        backup_file_if_exists(reference_image_path)
+                        downscaled_img.save(reference_image_path, 'PNG')
+                        
+                        self.log_debug('INFO', f'Analyzing Front Persona Image for cover reference...')
+                        vision_prompt = "Analyze this persona reference image in extreme detail. Provide a comprehensive description of the character's appearance, including: physical features, clothing, styling, colors, accessories, pose, and all visual characteristics. This description will be used to ensure the album cover features the exact same character."
+                        vision_system = "You are an image analysis assistant. Provide a highly detailed, objective description of the character's visual appearance from the reference image. Focus on all visual characteristics that should be preserved in the album cover."
+                        
+                        vision_result = self.azure_vision([reference_image_path], vision_prompt, system_message=vision_system, profile='text')
+                        
+                        if vision_result['success']:
+                            character_description = vision_result['content'].strip()
+                            enhanced_prompt += f"\n\nREFERENCE CHARACTER DESCRIPTION (from Front Persona Image):\n{character_description}\n\n"
+                            enhanced_prompt += "IMPORTANT: The album cover MUST feature this exact character with matching appearance, styling, and visual characteristics as described above. The character in the album cover must be visually consistent with the reference image."
+                        else:
+                            enhanced_prompt += f"\n\nIMPORTANT: Use the Front Persona Image as reference. The album cover must feature this exact character with matching appearance, styling, and visual characteristics."
+                    except Exception as e:
+                        self.log_debug('WARNING', f'Failed to prepare reference image: {e}')
+            
+            # Map size to actual dimensions
+            size_value = self._map_cover_size_to_value(size)
+            
+            # Convert format to lowercase (Azure API requires lowercase: 'png' or 'jpeg')
+            format_lower = format_type.lower()
+            if format_lower == 'jpeg':
+                format_lower = 'jpeg'
+            elif format_lower == 'png':
+                format_lower = 'png'
+            else:
+                format_lower = 'png'  # Default fallback
+            
+            # Generate image
+            result = self.azure_image(enhanced_prompt, size=size_value, profile='image_gen', output_format=format_lower)
+            
+            if not result.get('success'):
+                self.log_debug('ERROR', f'Image generation failed: {result.get("error", "Unknown error")}')
+                return False
+            
+            img_bytes = result.get('image_bytes', b'')
+            if not img_bytes:
+                self.log_debug('ERROR', 'No image bytes received')
+                return False
+            
+            # Handle overwrite
+            if os.path.exists(filename) and not overwrite:
+                return False
+            
+            # Create backup if file exists
+            if os.path.exists(filename):
+                self.backup_file_if_exists(filename)
+            
+            # Save image
+            with open(filename, 'wb') as f:
+                f.write(img_bytes)
+            
+            # Update song config
+            song_config['album_cover_size'] = size
+            song_config['album_cover_format'] = format_type
+            save_song_config(song_path, song_config)
+            
+            return True
+            
+        except Exception as e:
+            self.log_debug('ERROR', f'Error generating cover: {e}')
+            return False
+    
+    def _map_cover_size_to_value(self, size_str: str) -> str:
+        """Map cover size string to actual dimensions value, mapped to supported Azure Image API sizes."""
+        # Extract dimensions from string like "1:1 (1024x1024)" -> "1024x1024"
+        match = re.search(r'\((\d+x\d+)\)', size_str)
+        if match:
+            extracted_size = match.group(1)
+            # Map to supported size (1024x1024, 1536x1024, 1024x1536)
+            return self._map_to_supported_image_size(extracted_size)
+        # Fallback to default
+        return '1024x1024'
+    
+    def _generate_album_video_prompt(self, album_id: str, album_name: str, album_path: str, cover_prompt: str, aspect_ratio_suffix: str, video_prompt_file: str, overwrite: bool) -> bool:
+        """Generate and save album video prompt."""
+        try:
+            if not self.current_persona:
+                return False
+            
+            merged_style = self._get_sanitized_style_text()
+            visual_aesthetic = self.current_persona.get('visual_aesthetic', '')
+            base_image_prompt = self.current_persona.get('base_image_prompt', '')
+            vibe = self.current_persona.get('vibe', '')
+            
+            prompt = (
+                f"Create a seamless looping video prompt for the album \"{album_name}\" "
+                f"based on this cover description:\n{cover_prompt}\n\nMerged Style: {merged_style}"
+            )
+            if visual_aesthetic:
+                prompt += f"\nPersona Visual Aesthetic: {visual_aesthetic}"
+            if base_image_prompt:
+                prompt += f"\nPersona Base Image Prompt: {base_image_prompt}"
+            if vibe:
+                prompt += f"\nPersona Vibe: {vibe}"
+            prompt += "\nReturn only the final video prompt text."
+            
+            # Generate video prompt
+            system_message = 'You are a video loop prompt generator. Output only the final prompt text.'
+            result = self.azure_ai(prompt, system_message=system_message, profile='text')
+            
+            if not result.get('success'):
+                self.log_debug('ERROR', f'Video prompt generation failed: {result.get("error", "Unknown error")}')
+                return False
+            
+            video_prompt = result.get('content', '').strip()
+            if not video_prompt:
+                self.log_debug('ERROR', 'No video prompt received')
+                return False
+            
+            # Handle overwrite
+            if os.path.exists(video_prompt_file) and not overwrite:
+                return False
+            
+            # Create backup if file exists
+            if os.path.exists(video_prompt_file):
+                self.backup_file_if_exists(video_prompt_file)
+            
+            # Save video prompt to JSON file
+            export_data = {
+                'generated_prompt': video_prompt
+            }
+            
+            os.makedirs(album_path, exist_ok=True)
+            with open(video_prompt_file, 'w', encoding='utf-8') as f:
+                json.dump(export_data, f, indent=2, ensure_ascii=False)
+            
+            # Update album config
+            album_config = load_album_config(album_path)
+            album_config['video_prompt'] = video_prompt
+            save_album_config(album_path, album_config)
+            
+            self.log_debug('INFO', f'Album video prompt saved to {video_prompt_file}')
+            return True
+            
+        except Exception as e:
+            self.log_debug('ERROR', f'Error generating album video prompt: {e}')
+            return False
     
     def run_video_loop_model(self):
         """Run the video generation model."""
