@@ -360,7 +360,8 @@ def load_config() -> dict:
     default_config = {
         "general": {
             "csv_file_path": "suno/suno_sound_styles.csv",
-            "default_save_path": ""
+            "default_save_path": "",
+            "title_appendix": "Cover"
         },
         "profiles": {
             "text": {
@@ -1101,6 +1102,13 @@ class SettingsDialog(tk.Toplevel):
         ttk.Label(general_frame, text='Note: Leave empty to use current working directory', 
                  font=('TkDefaultFont', 7, 'italic')).grid(row=4, column=0, sticky=tk.W, pady=(0, 5), padx=(10, 0), columnspan=3)
         
+        # Title Appendix
+        ttk.Label(general_frame, text='Title Appendix:', font=('TkDefaultFont', 9, 'bold')).grid(row=5, column=0, sticky=tk.W, pady=(15, 2), columnspan=3)
+        ttk.Label(general_frame, text='Text appended to titles (e.g., "Cover", "AI Cover"):', font=('TkDefaultFont', 8)).grid(row=6, column=0, sticky=tk.W, pady=5, padx=(10, 0))
+        self.general_vars['title_appendix'] = tk.StringVar(value=general_data.get('title_appendix', 'Cover'))
+        title_appendix_entry = ttk.Entry(general_frame, textvariable=self.general_vars['title_appendix'], width=40)
+        title_appendix_entry.grid(row=6, column=1, pady=5, padx=5, sticky=tk.W)
+        
         # Get profiles from config
         profiles = self.config.get('profiles', {})
         
@@ -1182,7 +1190,8 @@ class SettingsDialog(tk.Toplevel):
         # Update general settings in config
         general = {
             'csv_file_path': self.general_vars['csv_file_path'].get(),
-            'default_save_path': self.general_vars['default_save_path'].get()
+            'default_save_path': self.general_vars['default_save_path'].get(),
+            'title_appendix': self.general_vars['title_appendix'].get()
         }
         
         # Update profiles in config
@@ -2615,7 +2624,8 @@ class SunoStyleBrowser(tk.Tk):
         # Get AI Cover Name
         ai_cover_name = self.ai_cover_name_var.get().strip()
         if not ai_cover_name:
-            ai_cover_name = f"{style_keywords} - {artist} _{song_name}_ Cover"
+            title_appendix = self.ai_config.get('general', {}).get('title_appendix', 'Cover')
+            ai_cover_name = f"{style_keywords} - {artist} _{song_name}_ {title_appendix}"
         
         # Replace template variables
         prompt = template.replace('{SONG_TITLE}', song_name)
@@ -3248,7 +3258,8 @@ class SunoStyleBrowser(tk.Tk):
             style_name = style_name.split(',')[0].strip()
         
         # Generate full title in the format: "1930s Smoky Lo-Fi Swing - The Chainsmokers ft. Halsey _Closer_ Cover"
-        title = f"{style_name} - {artist} _{song_name}_ Cover"
+        title_appendix = self.ai_config.get('general', {}).get('title_appendix', 'Cover')
+        title = f"{style_name} - {artist} _{song_name}_ {title_appendix}"
         
         # SEO-optimized description structure
         desc = f"TITLE: {title}\n\n"
