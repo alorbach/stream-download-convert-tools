@@ -102,6 +102,8 @@ The original individual tools are still available for users who prefer separate 
 - `launchers/mp3_to_video_converter.bat` - MP3 to video converter only
 - `launchers/video_editor.bat` - Video editor for combining and arranging videos
 - `launchers/suno_style_browser.bat` - Suno Style Browser for AI music cover generation
+- `launchers/image_format_converter.bat` - Image & Video Format Converter for aspect ratio and format conversion
+- `launchers/mp3_wav_to_flac_converter.bat` - MP3/WAV to FLAC Converter for lossless audio conversion
 
 **Linux/Mac:**
 - `launchers/youtube_downloader.sh` - YouTube downloader only
@@ -110,6 +112,8 @@ The original individual tools are still available for users who prefer separate 
 - `launchers/mp3_to_video_converter.sh` - MP3 to video converter only
 - `launchers/video_editor.sh` - Video editor for combining and arranging videos
 - `launchers/suno_style_browser.sh` - Suno Style Browser for AI music cover generation
+- `launchers/image_format_converter.sh` - Image & Video Format Converter for aspect ratio and format conversion
+- `launchers/mp3_wav_to_flac_converter.sh` - MP3/WAV to FLAC Converter for lossless audio conversion
 
 ## How to Use Stream Download Convert Tools - Unified
 
@@ -410,6 +414,69 @@ Example columns:
 - Browse and explore music style databases
 - Merge multiple music styles for unique compositions
 
+## Image Format Converter (Individual Tool)
+
+A standalone tool for converting images and videos to different aspect ratios and formats:
+
+### Features
+- **Aspect Ratio Conversion**: Convert images/videos to common aspect ratios (1:1, 16:9, 9:16, 4:3, 3:4, 21:9, 9:21, 5:4, 4:5)
+- **Custom Aspect Ratios**: Define custom aspect ratios with width:height ratio
+- **Multiple Output Formats**: Convert to JPG, PNG, or MP4 video
+- **Crop Position Control**: Choose where to crop (center, top, bottom, left, right)
+- **Video Generation**: Create MP4 videos from images with forward or forward-reverse looping
+- **Batch Processing**: Convert multiple files at once
+- **Drag-and-Drop Support**: Drag files directly from Explorer/Finder
+- **Input Format Detection**: Automatically detects input image/video format
+- **Standard Resolutions**: Pre-configured resolutions for each aspect ratio
+
+### Usage
+1. **Select Files**: Click "Select Image Files" or drag-and-drop image/video files
+2. **Choose Aspect Ratio**: Select from preset ratios or define a custom ratio
+3. **Set Crop Position**: Choose where the image should be cropped (center, top, bottom, left, right)
+4. **Select Output Format**: Choose JPG, PNG, or MP4
+5. **Video Mode** (MP4 only): Choose Forward or Forward+Reverse looping
+6. **Convert**: Click "Convert Selected Files" or "Convert All Files"
+
+### Supported Formats
+- **Input**: Images (JPG, PNG, BMP, GIF, TIFF, WEBP) | Videos (MP4, AVI, MOV, MKV, WEBM, FLV)
+- **Output**: JPG, PNG, MP4
+
+### Aspect Ratio Presets
+- **1:1 (Square)**: Perfect for Instagram posts (1080x1080, 720x720, 512x512)
+- **16:9 (Landscape)**: Standard widescreen (1920x1080, 1280x720, 854x480)
+- **9:16 (Portrait)**: Vertical mobile format (1080x1920, 720x1280, 540x960)
+- **4:3 (Standard)**: Classic TV format (1920x1440, 1280x960, 640x480)
+- **3:4 (Portrait Standard)**: Vertical classic format (1080x1440, 720x960, 540x720)
+- **21:9 (Ultrawide)**: Cinematic widescreen (2560x1080, 1920x822)
+- **9:21 (Tall)**: Ultra-tall portrait format (1080x2520, 720x1680)
+- **5:4 (Classic)**: Traditional computer display (1280x1024, 800x640)
+- **4:5 (Portrait Classic)**: Portrait classic format (1080x1350, 720x900)
+
+### Output Location
+Output files are saved in the same folder as the source file with an aspect ratio suffix:
+- Example: `image.jpg` → `image_16x9.jpg`
+- Example: `photo.png` → `photo_9x16.png`
+
+### Video Generation
+When output format is MP4:
+- Creates a video from the image
+- **Forward Mode**: Image displayed as static video frame
+- **Forward+Reverse Mode**: Image loops forward then reverse for seamless playback
+- Video duration matches the source video length (if input is video) or uses default duration
+
+### Use Cases
+- Convert images for social media (Instagram, TikTok, YouTube Shorts)
+- Prepare images for different screen formats
+- Create video loops from static images
+- Batch convert image collections to consistent aspect ratios
+- Prepare content for mobile vs desktop viewing
+
+### Requirements
+- Python 3.7 or higher
+- PIL/Pillow for image processing
+- FFmpeg for video conversion (automatically managed on Windows)
+- Optional: tkinterdnd2 for drag-and-drop support
+
 ## MP3 to Video Converter (Individual Tool)
 
 A standalone tool for creating videos from MP3 files:
@@ -478,14 +545,65 @@ Settings are stored in `mp3_to_video_converter_settings.json` in the project roo
 - Mobile-first content creation
 - Social media marketing videos
 
+## MP3/WAV to FLAC Converter (Individual Tool)
+
+A standalone tool for converting MP3 and WAV audio files to FLAC (Free Lossless Audio Codec) format:
+
+### Features
+- **Lossless Conversion**: Convert MP3/WAV to high-quality FLAC format
+- **High Quality Output**: 44.1 kHz sample rate, stereo, lossless compression
+- **Batch Processing**: Convert multiple files at once
+- **Drag-and-Drop Support**: Drag files directly from Explorer/Finder
+- **Progress Tracking**: Real-time conversion progress and detailed logs
+- **Automatic Output**: Files saved in same folder as input with .flac extension
+
+### Usage
+1. **Select Files**: Click "Select MP3/WAV Files" or drag-and-drop audio files
+2. **Configure Settings** (Optional):
+   - Set input folder (default: `converted/` folder)
+   - Output format is always FLAC 44.1 kHz (lossless)
+3. **Convert**: Click "Convert Selected Files" or "Convert All Files"
+4. **Monitor Progress**: Watch progress bar and log output
+
+### Output Format
+- **Format**: FLAC (Free Lossless Audio Codec)
+- **Sample Rate**: 44.1 kHz
+- **Channels**: Stereo (2 channels)
+- **Compression Level**: 5 (default, balanced between size and speed)
+- **Output Location**: Same folder as input file
+- **File Extension**: `.flac`
+
+### Supported Formats
+- **Input**: MP3, WAV
+- **Output**: FLAC (lossless)
+
+### Use Cases
+- Archive audio files in lossless format
+- Convert compressed audio to lossless for editing
+- Prepare audio files for professional audio work
+- Create high-quality audio archives
+- Convert downloaded MP3s to lossless format for storage
+
+### Requirements
+- Python 3.7 or higher
+- FFmpeg for audio conversion (automatically managed on Windows)
+
+### Technical Details
+- FLAC compression preserves 100% of audio quality (lossless)
+- Smaller file size than WAV while maintaining identical audio quality
+- Compatible with all major audio players and editing software
+- Compression level 5 provides good balance between file size and encoding speed
+
 ## Recommended Workflow
 
 1. **Download Videos**: Use the YouTube Downloader tab to download videos from CSV lists
 2. **Convert to MP3**: Use the Video to MP3 Converter tab to extract audio from downloaded videos
 3. **Modify Audio**: Use the Audio Modifier tab to adjust speed and pitch as needed
-4. **Create Videos**: Use the MP3 to Video Converter to create videos from MP3 files
-5. **Edit Videos**: Use the Video Editor to combine and arrange multiple videos
-6. **Generate AI Content**: Use the Suno Style Browser to create AI album covers and video loops for music projects
+4. **Convert to FLAC** (Optional): Use the MP3/WAV to FLAC Converter for lossless archival
+5. **Create Videos**: Use the MP3 to Video Converter to create videos from MP3 files
+6. **Format Images**: Use the Image Format Converter to adjust aspect ratios for social media
+7. **Edit Videos**: Use the Video Editor to combine and arrange multiple videos
+8. **Generate AI Content**: Use the Suno Style Browser to create AI album covers and video loops for music projects
 
 ## FFmpeg Setup (First Time Only)
 
@@ -538,7 +656,9 @@ stream-download-convert-tools/
 │   ├── audio_modifier.py               # Individual Audio modifier
 │   ├── mp3_to_video_converter.py       # Individual MP3 to Video converter
 │   ├── video_editor.py                  # Individual Video Editor
-│   └── suno_style_browser.py            # Suno Style Browser for AI music covers
+│   ├── suno_style_browser.py            # Suno Style Browser for AI music covers
+│   ├── image_format_converter.py       # Image & Video Format Converter
+│   └── mp3_wav_to_flac_converter.py    # MP3/WAV to FLAC Converter
 ├── launchers/                           # Launcher scripts
 │   ├── stream_download_convert_tools_unified.bat  # Windows launcher (Unified - RECOMMENDED)
 │   ├── stream_download_convert_tools_unified.sh   # Linux/Mac launcher (Unified - RECOMMENDED)
@@ -553,7 +673,11 @@ stream-download-convert-tools/
 │   ├── video_editor.bat                 # Windows launcher (Video Editor only)
 │   ├── video_editor.sh                  # Linux/Mac launcher (Video Editor only)
 │   ├── suno_style_browser.bat           # Windows launcher (Suno Style Browser)
-│   └── suno_style_browser.sh           # Linux/Mac launcher (Suno Style Browser)
+│   ├── suno_style_browser.sh           # Linux/Mac launcher (Suno Style Browser)
+│   ├── image_format_converter.bat       # Windows launcher (Image Format Converter)
+│   ├── image_format_converter.sh        # Linux/Mac launcher (Image Format Converter)
+│   ├── mp3_wav_to_flac_converter.bat    # Windows launcher (MP3/WAV to FLAC Converter)
+│   └── mp3_wav_to_flac_converter.sh     # Linux/Mac launcher (MP3/WAV to FLAC Converter)
 ├── requirements.txt                     # Python dependencies
 ├── .gitignore                           # Git ignore rules
 ├── AGENTS.md                            # Developer/agent documentation

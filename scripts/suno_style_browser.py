@@ -70,6 +70,120 @@ def create_tooltip(widget, text):
     return ToolTip(widget, text)
 
 
+class PromptImprovementDialog(tk.Toplevel):
+    """Dialog for requesting prompt improvements."""
+    
+    def __init__(self, parent, prompt_type: str, current_prompt: str = ''):
+        super().__init__(parent)
+        self.title(f'Improve {prompt_type} Prompt')
+        self.geometry('700x500')
+        self.transient(parent)
+        self.grab_set()
+        
+        self.result = None
+        
+        self.create_widgets(prompt_type, current_prompt)
+        
+        self.update_idletasks()
+        x = parent.winfo_x() + (parent.winfo_width() // 2) - (self.winfo_width() // 2)
+        y = parent.winfo_y() + (parent.winfo_height() // 2) - (self.winfo_height() // 2)
+        self.geometry(f"+{x}+{y}")
+        
+        self.improvement_request_text.focus_set()
+    
+    def create_widgets(self, prompt_type: str, current_prompt: str):
+        main_frame = ttk.Frame(self, padding=10)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        ttk.Label(main_frame, text=f'Improve {prompt_type} Prompt', font=('TkDefaultFont', 10, 'bold')).pack(anchor=tk.W, pady=(0, 10))
+        
+        ttk.Label(main_frame, text='Current prompt:', font=('TkDefaultFont', 8, 'bold')).pack(anchor=tk.W, pady=(5, 2))
+        current_preview = scrolledtext.ScrolledText(main_frame, height=6, wrap=tk.WORD, state=tk.DISABLED, font=('Consolas', 8))
+        current_preview.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        current_preview.config(state=tk.NORMAL)
+        current_preview.insert('1.0', current_prompt)
+        current_preview.config(state=tk.DISABLED)
+        
+        ttk.Label(main_frame, text='What changes would you like to make?', font=('TkDefaultFont', 8, 'bold')).pack(anchor=tk.W, pady=(5, 2))
+        ttk.Label(main_frame, text='(e.g., "Make it more dramatic", "Add more color", "Change the mood to be darker")', 
+                 font=('TkDefaultFont', 7), foreground='gray').pack(anchor=tk.W, pady=(0, 5))
+        self.improvement_request_text = scrolledtext.ScrolledText(main_frame, height=6, wrap=tk.WORD, font=('Consolas', 9))
+        self.improvement_request_text.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(fill=tk.X, pady=(5, 0))
+        ttk.Button(btn_frame, text='Improve', command=self.ok_clicked).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text='Cancel', command=self.cancel_clicked).pack(side=tk.LEFT, padx=5)
+        
+        self.bind('<Escape>', lambda e: self.cancel_clicked())
+    
+    def ok_clicked(self):
+        improvement_request = self.improvement_request_text.get('1.0', tk.END).strip()
+        if not improvement_request:
+            messagebox.showwarning('Warning', 'Please enter what changes you would like to make.')
+            return
+        self.result = improvement_request
+        self.destroy()
+    
+    def cancel_clicked(self):
+        self.result = None
+        self.destroy()
+
+
+class ImprovedPromptResultDialog(tk.Toplevel):
+    """Dialog to show improved prompt and ask if user wants to save it."""
+    
+    def __init__(self, parent, improved_prompt: str, original_prompt: str = ''):
+        super().__init__(parent)
+        self.title('Improved Prompt')
+        self.geometry('800x600')
+        self.transient(parent)
+        self.grab_set()
+        
+        self.result = False  # True = save, False = cancel
+        
+        self.create_widgets(improved_prompt, original_prompt)
+        
+        self.update_idletasks()
+        x = parent.winfo_x() + (parent.winfo_width() // 2) - (self.winfo_width() // 2)
+        y = parent.winfo_y() + (parent.winfo_height() // 2) - (self.winfo_height() // 2)
+        self.geometry(f"+{x}+{y}")
+    
+    def create_widgets(self, improved_prompt: str, original_prompt: str = ''):
+        main_frame = ttk.Frame(self, padding=10)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        ttk.Label(main_frame, text='Improved Prompt Generated', font=('TkDefaultFont', 10, 'bold')).pack(anchor=tk.W, pady=(0, 10))
+        
+        if original_prompt:
+            ttk.Label(main_frame, text='Original prompt:', font=('TkDefaultFont', 8, 'bold')).pack(anchor=tk.W, pady=(5, 2))
+            original_preview = scrolledtext.ScrolledText(main_frame, height=4, wrap=tk.WORD, state=tk.DISABLED, font=('Consolas', 8))
+            original_preview.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+            original_preview.config(state=tk.NORMAL)
+            original_preview.insert('1.0', original_prompt)
+            original_preview.config(state=tk.DISABLED)
+        
+        ttk.Label(main_frame, text='Improved prompt:', font=('TkDefaultFont', 8, 'bold')).pack(anchor=tk.W, pady=(5, 2))
+        self.improved_text = scrolledtext.ScrolledText(main_frame, height=12, wrap=tk.WORD, font=('Consolas', 9))
+        self.improved_text.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        self.improved_text.insert('1.0', improved_prompt)
+        
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(fill=tk.X, pady=(5, 0))
+        ttk.Button(btn_frame, text='Save', command=self.save_clicked).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text='Cancel', command=self.cancel_clicked).pack(side=tk.LEFT, padx=5)
+        
+        self.bind('<Escape>', lambda e: self.cancel_clicked())
+    
+    def save_clicked(self):
+        self.result = True
+        self.destroy()
+    
+    def cancel_clicked(self):
+        self.result = False
+        self.destroy()
+
+
 def resolve_csv_path() -> str:
     """Resolve default CSV path in AI/suno/suno_sound_styles.csv relative to project root."""
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -1581,6 +1695,9 @@ class SunoStyleBrowser(tk.Tk):
         album_copy_btn = ttk.Button(album_cover_toolbar, text='Copy', command=lambda: self.copy_to_clipboard(self.album_cover_text))
         album_copy_btn.pack(side=tk.RIGHT, padx=2)
         create_tooltip(album_copy_btn, 'Copy album cover prompt to clipboard')
+        album_improve_btn = ttk.Button(album_cover_toolbar, text='Improve', command=self.improve_album_cover_prompt)
+        album_improve_btn.pack(side=tk.LEFT, padx=2)
+        create_tooltip(album_improve_btn, 'Improve album cover prompt using AI')
         
         self.album_cover_text = scrolledtext.ScrolledText(album_cover_frame, height=6, wrap=tk.WORD, width=60)
         self.album_cover_text.pack(fill=tk.BOTH, expand=True)
@@ -1594,6 +1711,9 @@ class SunoStyleBrowser(tk.Tk):
         video_copy_btn = ttk.Button(video_loop_toolbar, text='Copy', command=lambda: self.copy_to_clipboard(self.video_loop_text))
         video_copy_btn.pack(side=tk.RIGHT, padx=2)
         create_tooltip(video_copy_btn, 'Copy video loop prompt to clipboard')
+        video_improve_btn = ttk.Button(video_loop_toolbar, text='Improve', command=self.improve_video_loop_prompt)
+        video_improve_btn.pack(side=tk.LEFT, padx=2)
+        create_tooltip(video_improve_btn, 'Improve video loop prompt using AI')
         
         self.video_loop_text = scrolledtext.ScrolledText(video_loop_frame, height=6, wrap=tk.WORD, width=60)
         self.video_loop_text.pack(fill=tk.BOTH, expand=True)
@@ -1611,7 +1731,7 @@ class SunoStyleBrowser(tk.Tk):
         ttk.Label(album_cover_opts, text='Size:').pack(side=tk.LEFT)
         self.album_cover_size_var = tk.StringVar(value='1:1 (1024x1024)')
         album_cover_sizes = ['1:1 (1024x1024)', '3:2 (1536x1024)', '16:9 (1792x1024)', 
-                             '4:3 (1365x1024)', '9:16 (1024x1792)', '21:9 (2048x1024)']
+                             '4:3 (1365x1024)', '2:3 (1024x1536)', '9:16 (1024x1792)', '21:9 (2048x1024)']
         self.album_cover_size_combo = ttk.Combobox(album_cover_opts, textvariable=self.album_cover_size_var, 
                                                    values=album_cover_sizes, width=18, state='readonly')
         self.album_cover_size_combo.pack(side=tk.LEFT, padx=6)
@@ -1621,6 +1741,11 @@ class SunoStyleBrowser(tk.Tk):
                                                values=['PNG', 'JPEG'], state='readonly', width=8)
         album_cover_format_combo.pack(side=tk.LEFT, padx=6)
         create_tooltip(album_cover_format_combo, 'Select image output format from AI (PNG or JPEG)')
+        ttk.Label(album_cover_opts, text='Include Artist:').pack(side=tk.LEFT, padx=(10, 0))
+        self.album_cover_include_artist_var = tk.BooleanVar(value=False)
+        album_cover_include_artist_check = ttk.Checkbutton(album_cover_opts, variable=self.album_cover_include_artist_var)
+        album_cover_include_artist_check.pack(side=tk.LEFT, padx=2)
+        create_tooltip(album_cover_include_artist_check, 'Include artist name on album cover (default: OFF)')
 
         # Video Options (size/seconds)
         video_opts = ttk.LabelFrame(main_frame, text='Video Options', padding=5)
@@ -1921,6 +2046,9 @@ class SunoStyleBrowser(tk.Tk):
         
         # Check if it's a song (not a decade)
         if 'song' in tags:
+            # Switch to Song Details tab
+            self.notebook.select(1)
+            
             # Get JSON path from mapping
             json_path = self.ai_covers_item_map.get(item)
             if json_path and os.path.exists(json_path):
@@ -2129,6 +2257,9 @@ class SunoStyleBrowser(tk.Tk):
             return
         
         self.current_row = self.filtered[idx]
+        
+        # Switch to Style Details tab
+        self.notebook.select(0)
         
         # Save selected style to config
         style_name = self.current_row.get('style', '')
@@ -2488,7 +2619,18 @@ class SunoStyleBrowser(tk.Tk):
         
         # Replace template variables
         prompt = template.replace('{SONG_TITLE}', song_name)
-        prompt = prompt.replace('{ORIGINAL_ARTIST}', artist)
+        
+        # Handle artist name inclusion based on checkbox
+        include_artist = self.album_cover_include_artist_var.get()
+        if include_artist:
+            prompt = prompt.replace('{ORIGINAL_ARTIST}', artist)
+        else:
+            # Remove artist name and the line that mentions it
+            prompt = prompt.replace('{ORIGINAL_ARTIST}', '')
+            # Remove the artist line from "TEXT TO DISPLAY ON COVER" section
+            # Remove line "3. Artist: "{ORIGINAL_ARTIST}" - ..." and its number
+            prompt = re.sub(r'\n3\.\s*Artist:.*?\n', '\n', prompt)
+        
         prompt = prompt.replace('{STYLE_DESCRIPTION}', style_keywords)
         prompt = prompt.replace('{MOOD_DESCRIPTION}', mood_description)
         prompt = prompt.replace('{VISUAL_TONE}', visual_tone)
@@ -2516,6 +2658,57 @@ class SunoStyleBrowser(tk.Tk):
         else:
             self.album_cover_text.insert('1.0', f'Error: {result["error"]}')
             self.log_debug('ERROR', f'Failed to generate album cover: {result["error"]}')
+    
+    def improve_album_cover_prompt(self):
+        """Improve the album cover prompt using AI based on user feedback."""
+        current_prompt = self.album_cover_text.get('1.0', tk.END).strip()
+        if not current_prompt or current_prompt.startswith('Error:'):
+            messagebox.showwarning('Warning', 'Please generate an album cover prompt first.')
+            return
+        
+        # Open dialog to get improvement request
+        dialog = PromptImprovementDialog(self, 'Album Cover', current_prompt)
+        self.wait_window(dialog)
+        
+        if not dialog.result:
+            return  # User cancelled
+        
+        improvement_request = dialog.result
+        
+        # Build improvement prompt
+        prompt = f"Improve the following album cover prompt based on these requested changes:\n\n"
+        prompt += f"REQUESTED CHANGES: {improvement_request}\n\n"
+        prompt += f"CURRENT PROMPT:\n{current_prompt}\n\n"
+        prompt += "Generate an improved version of the prompt that incorporates the requested changes while maintaining the core concept and style. Output ONLY the improved prompt text, nothing else."
+        
+        try:
+            self.config(cursor='wait')
+            self.update()
+            
+            system_message = 'You are an expert at improving image generation prompts. Analyze the current prompt and requested changes, then generate an improved version that incorporates the changes while maintaining quality and coherence. Output ONLY the improved prompt text.'
+            result = call_azure_ai(self.ai_config, prompt, system_message=system_message, profile='text')
+            
+            if result.get('success'):
+                improved_prompt = result.get('content', '').strip()
+                
+                # Show result dialog
+                result_dialog = ImprovedPromptResultDialog(self, improved_prompt, current_prompt)
+                self.wait_window(result_dialog)
+                
+                if result_dialog.result:
+                    # User wants to save
+                    self.album_cover_text.delete('1.0', tk.END)
+                    self.album_cover_text.insert('1.0', improved_prompt)
+                    self.log_debug('INFO', 'Album cover prompt improved and saved')
+                    messagebox.showinfo('Success', 'Improved prompt saved.')
+            else:
+                messagebox.showerror('Error', f'Failed to improve prompt: {result.get("error", "Unknown error")}')
+                self.log_debug('ERROR', f'Failed to improve album cover prompt: {result.get("error", "Unknown error")}')
+        except Exception as e:
+            messagebox.showerror('Error', f'Error improving album cover prompt: {e}')
+            self.log_debug('ERROR', f'Error improving album cover prompt: {e}')
+        finally:
+            self.config(cursor='')
     
     def generate_video_loop(self):
         """Generate video loop prompt from album cover and style."""
@@ -2638,6 +2831,57 @@ class SunoStyleBrowser(tk.Tk):
         else:
             self.video_loop_text.insert('1.0', f'Error: {result["error"]}')
             self.log_debug('ERROR', f'Failed to generate video loop: {result["error"]}')
+
+    def improve_video_loop_prompt(self):
+        """Improve the video loop prompt using AI based on user feedback."""
+        current_prompt = self.video_loop_text.get('1.0', tk.END).strip()
+        if not current_prompt or current_prompt.startswith('Error:'):
+            messagebox.showwarning('Warning', 'Please generate a video loop prompt first.')
+            return
+        
+        # Open dialog to get improvement request
+        dialog = PromptImprovementDialog(self, 'Video Loop', current_prompt)
+        self.wait_window(dialog)
+        
+        if not dialog.result:
+            return  # User cancelled
+        
+        improvement_request = dialog.result
+        
+        # Build improvement prompt
+        prompt = f"Improve the following video loop prompt based on these requested changes:\n\n"
+        prompt += f"REQUESTED CHANGES: {improvement_request}\n\n"
+        prompt += f"CURRENT PROMPT:\n{current_prompt}\n\n"
+        prompt += "Generate an improved version of the prompt that incorporates the requested changes while maintaining the core concept and style. Ensure the prompt remains suitable for music visualization and complies with content safety guidelines. Output ONLY the improved prompt text, nothing else."
+        
+        try:
+            self.config(cursor='wait')
+            self.update()
+            
+            system_message = 'You are an expert at improving video generation prompts for music visualizers. Analyze the current prompt and requested changes, then generate an improved version that incorporates the changes while maintaining quality, coherence, and compliance with content safety guidelines. Output ONLY the improved prompt text.'
+            result = call_azure_ai(self.ai_config, prompt, system_message=system_message, profile='text')
+            
+            if result.get('success'):
+                improved_prompt = result.get('content', '').strip()
+                
+                # Show result dialog
+                result_dialog = ImprovedPromptResultDialog(self, improved_prompt, current_prompt)
+                self.wait_window(result_dialog)
+                
+                if result_dialog.result:
+                    # User wants to save
+                    self.video_loop_text.delete('1.0', tk.END)
+                    self.video_loop_text.insert('1.0', improved_prompt)
+                    self.log_debug('INFO', 'Video loop prompt improved and saved')
+                    messagebox.showinfo('Success', 'Improved prompt saved.')
+            else:
+                messagebox.showerror('Error', f'Failed to improve prompt: {result.get("error", "Unknown error")}')
+                self.log_debug('ERROR', f'Failed to improve video loop prompt: {result.get("error", "Unknown error")}')
+        except Exception as e:
+            messagebox.showerror('Error', f'Error improving video loop prompt: {e}')
+            self.log_debug('ERROR', f'Error improving video loop prompt: {e}')
+        finally:
+            self.config(cursor='')
 
     def run_video_loop_model(self):
         """Placeholder for running the video loop model using the generated prompt."""
@@ -3104,7 +3348,8 @@ class SunoStyleBrowser(tk.Tk):
             'styles': self.styles_text.get('1.0', tk.END).strip(),
             'merged_style': self.merged_style_text.get('1.0', tk.END).strip(),
             'album_cover': self.album_cover_text.get('1.0', tk.END).strip(),
-            'video_loop': self.video_loop_text.get('1.0', tk.END).strip()
+            'video_loop': self.video_loop_text.get('1.0', tk.END).strip(),
+            'album_cover_include_artist': self.album_cover_include_artist_var.get()
         }
         self.ai_config['song_details'] = song_details
         if save_config(self.ai_config):
@@ -3265,6 +3510,7 @@ class SunoStyleBrowser(tk.Tk):
                 self.album_cover_text.insert('1.0', song_details.get('album_cover', ''))
                 self.video_loop_text.delete('1.0', tk.END)
                 self.video_loop_text.insert('1.0', song_details.get('video_loop', ''))
+                self.album_cover_include_artist_var.set(song_details.get('album_cover_include_artist', False))
                 
                 self.log_debug('INFO', f'Song details loaded from {filename}')
             else:
@@ -3292,6 +3538,7 @@ class SunoStyleBrowser(tk.Tk):
             self.album_cover_text.insert('1.0', song_details.get('album_cover', ''))
             self.video_loop_text.delete('1.0', tk.END)
             self.video_loop_text.insert('1.0', song_details.get('video_loop', ''))
+            self.album_cover_include_artist_var.set(song_details.get('album_cover_include_artist', False))
     
     def restore_last_selected_style(self):
         """Restore and select the last chosen style from config."""
