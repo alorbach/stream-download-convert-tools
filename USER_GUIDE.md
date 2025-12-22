@@ -10,11 +10,12 @@ Welcome to Stream Download Convert Tools! This comprehensive guide will help you
 2. [YouTube Downloader](#youtube-downloader)
 3. [Video to MP3 Converter](#video-to-mp3-converter)
 4. [Audio Modifier](#audio-modifier)
-5. [Suno Style Browser](#suno-style-browser)
-6. [Settings Configuration](#settings-configuration)
-7. [Troubleshooting](#troubleshooting)
-8. [Advanced Features](#advanced-features)
-9. [Legal and Compliance](#legal-and-compliance)
+5. [Cover Song Checker](#cover-song-checker)
+6. [Suno Style Browser](#suno-style-browser)
+7. [Settings Configuration](#settings-configuration)
+8. [Troubleshooting](#troubleshooting)
+9. [Advanced Features](#advanced-features)
+10. [Legal and Compliance](#legal-and-compliance)
 
 ## Getting Started
 
@@ -222,6 +223,131 @@ Streams are organized by type:
 - **Quality Preservation**: Higher quality settings preserve audio fidelity
 - **Testing**: Try small adjustments first
 - **Backup**: Original files are never modified
+
+## Cover Song Checker
+
+The Cover Song Checker helps you assess copyright risk before uploading cover songs to YouTube by analyzing existing cover video history.
+
+### Overview
+
+Before uploading a cover song to YouTube, it's important to understand the potential copyright risks. This tool analyzes existing cover videos on YouTube to provide risk indicators based on:
+- Number of existing covers
+- Age of oldest cover videos
+- Known problematic artists/publishers
+- Cover video statistics
+
+**Important**: This tool provides risk indicators only, not a 100% guarantee. Claims can come weeks or months after upload, even for heavily modified AI covers.
+
+### Launching Cover Song Checker
+
+**Windows:**
+- Double-click `launchers/cover_song_checker.bat`
+
+**Linux/Mac:**
+- Make executable: `chmod +x launchers/cover_song_checker.sh`
+- Run: `./launchers/cover_song_checker.sh`
+
+### Checking a Single Song
+
+1. **Enter Song Information**:
+   - Type the song title in "Song Title" field
+   - Type the artist name in "Artist" field (optional but recommended)
+
+2. **Start Analysis**:
+   - Click "Check Song"
+   - The tool will search YouTube for existing cover videos
+   - Progress is shown in the log area
+
+3. **View Results**:
+   - Results appear in the table above the log
+   - Shows: Cover Count, Claims %, Strikes %, Oldest Age, Avg Views, Risk Level, Recommendation
+
+4. **View Details**:
+   - Double-click any result to see all found cover videos
+   - View video titles, URLs, views, duration, and upload dates
+   - Click "Open Selected Video in Browser" to view on YouTube
+
+### Batch Processing
+
+#### Option 1: Load from CSV
+
+1. Click "Load CSV"
+2. Select a CSV file with song data
+3. Tool will extract Song Title and Artist columns
+4. Confirm to start batch analysis
+
+#### Option 2: Select from AI-COVERS
+
+1. Click "Select from AI-COVERS"
+2. Dialog opens showing all songs organized by decade
+3. Select individual songs (use Ctrl/Cmd for multiple)
+4. Click "Analyze Selected" to start analysis
+
+#### Option 3: Scan All AI-COVERS
+
+1. Click "Scan All AI-COVERS"
+2. Tool automatically scans all songs in AI/AI-COVERS directory
+3. Confirm to start batch analysis for all songs
+
+### Understanding Risk Levels
+
+**GRUEN (Low Risk - Green)**:
+- Many existing covers (>20) without strikes
+- Covers have existed for months or years
+- Lower probability of receiving a strike
+
+**GELB (Medium Risk - Yellow)**:
+- Moderate cover history (10-20 covers)
+- Some caution advised
+- May want to check manually or use unlisted test upload
+
+**ROT (High Risk - Red)**:
+- Few or no existing covers (<10)
+- Known problematic artists (Eminem, Drake, etc.)
+- Known problematic publishers (Universal, Sony, etc.)
+- Very recent songs (<2 years old)
+- Higher probability of receiving a strike
+
+### Using Results
+
+**Copy Song Information**:
+- Right-click on any result
+- Choose "Copy Song Title", "Copy Artist", or "Copy: Song Title - Artist"
+- Text is copied to clipboard
+
+**Export Results**:
+- Click "Export Results to CSV"
+- Save all results to a CSV file for further analysis
+
+**View Cover Videos**:
+- Double-click any result
+- See all found cover videos with details
+- Open videos directly in browser
+
+### Important Limitations
+
+- **No Guarantee**: Tool provides risk indicators based on history, not absolute guarantees
+- **Delayed Claims**: Claims can come weeks or months after upload (real-world experience: 2 months delay)
+- **Stylistic Changes**: Even heavily modified AI covers can be detected and receive strikes
+- **No Actual Claim Detection**: Cannot detect actual Content ID claims/strikes without YouTube Data API v3
+- **New Songs**: Songs with no cover history cannot be assessed
+
+### Best Practices
+
+1. **Check Before Upload**: Always check risk level before uploading
+2. **GRUEN**: Generally safer, but still monitor after upload
+3. **GELB**: Consider unlisted test upload and monitor for 2-3 months
+4. **ROT**: Strongly consider obtaining proper licenses or not uploading
+5. **Monitor After Upload**: Even "safe" songs can receive delayed claims
+
+### Real-World Example
+
+**Case**: AI covers with heavily modified styles (1970s Soulful Urban Blues version of "Love The Way You Lie")
+- Upload: November 10, 2025
+- Initial Check: No detection at upload
+- Result: Copyright Strike received December 21, 2025 (almost 2 months later)
+- Publisher: Universal Music Publishing Group (UMPG)
+- Lesson: Even heavily modified covers can be detected, claims can come months later
 
 ## Suno Style Browser
 

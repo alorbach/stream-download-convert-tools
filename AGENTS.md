@@ -46,7 +46,8 @@ stream-download-convert-tools/
 │   ├── audio_modifier.py           # Individual Audio modifier
 │   ├── mp3_to_video_converter.py   # Individual MP3 to Video converter
 │   ├── video_editor.py             # Individual Video Editor
-│   └── suno_style_browser.py       # Individual Suno Style Browser
+│   ├── suno_style_browser.py       # Individual Suno Style Browser
+│   └── cover_song_checker.py       # Individual Cover Song Checker
 ├── launchers/              # Launcher scripts
 │   ├── stream_download_convert_tools_unified.bat     # Windows launcher (Unified - RECOMMENDED)
 │   ├── stream_download_convert_tools_unified.sh      # Linux/Mac launcher (Unified - RECOMMENDED)
@@ -61,7 +62,9 @@ stream-download-convert-tools/
 │   ├── video_editor.bat             # Windows launcher (Individual)
 │   ├── video_editor.sh              # Linux/Mac launcher (Individual)
 │   ├── suno_style_browser.bat       # Windows launcher (Individual)
-│   └── suno_style_browser.sh        # Linux/Mac launcher (Individual)
+│   ├── suno_style_browser.sh        # Linux/Mac launcher (Individual)
+│   ├── cover_song_checker.bat       # Windows launcher (Individual)
+│   └── cover_song_checker.sh        # Linux/Mac launcher (Individual)
 ├── requirements.txt        # Python dependencies
 ├── .gitignore             # Git ignore rules
 ├── AGENT.md               # This file
@@ -105,6 +108,13 @@ The project uses CSV files with YouTube links. Example format from `input/top100
 - **Launcher**: `stream_download_convert_tools_unified.bat/.sh` - Main launcher for unified application
 - **Individual Tools**: Still available for users who prefer separate applications
 - **Development**: When modifying functionality, update both unified and individual tools if needed
+
+#### Cover Song Checker
+- **Purpose**: Analyze copyright risk of cover songs before YouTube upload
+- **Script**: `scripts/cover_song_checker.py`
+- **Launcher**: `launchers/cover_song_checker.bat/.sh`
+- **Features**: YouTube search via yt-dlp, risk assessment, AI-COVERS integration, batch processing
+- **Note**: Provides risk indicators only, cannot detect actual Content ID claims/strikes without YouTube Data API v3
 
 #### Updating Dependencies
 1. Modify `requirements.txt`

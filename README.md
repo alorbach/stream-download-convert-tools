@@ -102,6 +102,7 @@ The original individual tools are still available for users who prefer separate 
 - `launchers/mp3_to_video_converter.bat` - MP3 to video converter only
 - `launchers/video_editor.bat` - Video editor for combining and arranging videos
 - `launchers/suno_style_browser.bat` - Suno Style Browser for AI music cover generation
+- `launchers/cover_song_checker.bat` - Cover Song Checker for copyright risk assessment before YouTube upload
 - `launchers/image_format_converter.bat` - Image & Video Format Converter for aspect ratio and format conversion
 - `launchers/mp3_wav_to_flac_converter.bat` - MP3/WAV to FLAC Converter for lossless audio conversion
 
@@ -112,6 +113,7 @@ The original individual tools are still available for users who prefer separate 
 - `launchers/mp3_to_video_converter.sh` - MP3 to video converter only
 - `launchers/video_editor.sh` - Video editor for combining and arranging videos
 - `launchers/suno_style_browser.sh` - Suno Style Browser for AI music cover generation
+- `launchers/cover_song_checker.sh` - Cover Song Checker for copyright risk assessment before YouTube upload
 - `launchers/image_format_converter.sh` - Image & Video Format Converter for aspect ratio and format conversion
 - `launchers/mp3_wav_to_flac_converter.sh` - MP3/WAV to FLAC Converter for lossless audio conversion
 
@@ -253,6 +255,59 @@ Save your video arrangements as JSON project files:
 - Extract thumbnails from videos
 - Prepare video content for social media
 - Create video compilations
+
+## Cover Song Checker (Individual Tool)
+
+Check copyright risk of cover songs before uploading to YouTube by analyzing existing cover video history.
+
+### Features
+
+- **Manual Song Entry**: Enter song title and artist manually
+- **CSV Import**: Batch process multiple songs from CSV file
+- **AI-COVERS Integration**: Scan and select songs from AI/AI-COVERS directory
+- **YouTube Search**: Automatically searches for existing cover videos using yt-dlp
+- **Risk Assessment**: Calculates risk level (GRUEN/GELB/ROT) based on:
+  - Number of existing covers
+  - Age of oldest cover
+  - Known problematic artists/publishers (Eminem, Drake, Universal Music, etc.)
+- **Results Display**: Sortable table showing all analyzed songs with statistics
+- **Detail View**: Double-click any result to see all found cover videos with details
+- **Copy Functionality**: Right-click to copy song title or artist to clipboard
+- **CSV Export**: Export all results to CSV file
+
+### Usage
+
+1. **Launch**: Double-click `launchers/cover_song_checker.bat` (Windows) or `launchers/cover_song_checker.sh` (Linux/Mac)
+
+2. **Check Single Song**:
+   - Enter song title and artist
+   - Click "Check Song"
+   - View results in table
+
+3. **Batch Processing**:
+   - Click "Load CSV" to import songs from CSV file
+   - Or click "Select from AI-COVERS" to choose songs from AI-COVERS directory
+   - Or click "Scan All AI-COVERS" to analyze all songs automatically
+
+4. **View Details**:
+   - Double-click any result to see all found cover videos
+   - View video titles, URLs, views, duration, and upload dates
+
+5. **Export Results**:
+   - Click "Export Results to CSV" to save all results
+
+### Important Notes
+
+- **No Guarantee**: Tool provides risk indicators only, not 100% guarantee
+- **Delayed Claims**: Claims can come weeks or months after upload (as per real-world experience)
+- **Stylistic Changes**: Even heavily modified AI covers can be detected and receive strikes
+- **YouTube Data API v3**: For actual claim/strike detection, YouTube Data API v3 would be needed (not implemented)
+
+### Risk Levels
+
+- **GRUEN (Low Risk)**: Many existing covers (>20) without strikes, covers exist for months/years
+- **GELB (Medium Risk)**: Moderate cover history, some caution advised
+- **ROT (High Risk)**: Few/no covers, known problematic artists, or very recent songs
 
 ## Suno Style Browser (Individual Tool)
 
@@ -657,6 +712,7 @@ stream-download-convert-tools/
 │   ├── mp3_to_video_converter.py       # Individual MP3 to Video converter
 │   ├── video_editor.py                  # Individual Video Editor
 │   ├── suno_style_browser.py            # Suno Style Browser for AI music covers
+│   ├── cover_song_checker.py            # Cover Song Checker for copyright risk assessment
 │   ├── image_format_converter.py       # Image & Video Format Converter
 │   └── mp3_wav_to_flac_converter.py    # MP3/WAV to FLAC Converter
 ├── launchers/                           # Launcher scripts
@@ -674,6 +730,8 @@ stream-download-convert-tools/
 │   ├── video_editor.sh                  # Linux/Mac launcher (Video Editor only)
 │   ├── suno_style_browser.bat           # Windows launcher (Suno Style Browser)
 │   ├── suno_style_browser.sh           # Linux/Mac launcher (Suno Style Browser)
+│   ├── cover_song_checker.bat          # Windows launcher (Cover Song Checker)
+│   ├── cover_song_checker.sh            # Linux/Mac launcher (Cover Song Checker)
 │   ├── image_format_converter.bat       # Windows launcher (Image Format Converter)
 │   ├── image_format_converter.sh        # Linux/Mac launcher (Image Format Converter)
 │   ├── mp3_wav_to_flac_converter.bat    # Windows launcher (MP3/WAV to FLAC Converter)
