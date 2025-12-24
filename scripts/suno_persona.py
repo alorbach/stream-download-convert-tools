@@ -5094,6 +5094,7 @@ TECHNICAL REQUIREMENTS:
         top_frame.pack(fill=tk.X, pady=(0, 10))
         
         ttk.Button(top_frame, text='New Song', command=self.new_song).pack(side=tk.LEFT, padx=5)
+        ttk.Button(top_frame, text='Create Full Album (AI)', command=self.create_full_album_ai).pack(side=tk.LEFT, padx=5)
         ttk.Button(top_frame, text='Clone Song', command=self.clone_song).pack(side=tk.LEFT, padx=5)
         ttk.Button(top_frame, text='Delete Song', command=self.delete_song).pack(side=tk.LEFT, padx=5)
         
@@ -6676,6 +6677,479 @@ TECHNICAL REQUIREMENTS:
                         shutil.rmtree(new_song_path)
                     except:
                         pass
+    
+    def create_full_album_ai(self):
+        """Ask AI to suggest and create a full album with a story arc."""
+        if not self.current_persona_path:
+            messagebox.showwarning('Warning', 'Please select a persona first.')
+            return
+        
+        if not self.current_persona:
+            messagebox.showwarning('Warning', 'Persona data not loaded. Please reopen or reselect the persona.')
+            return
+        
+        # Step 1: Ask for theme/topic instructions
+        theme_dialog = tk.Toplevel(self)
+        theme_dialog.title('Album Theme & Settings')
+        theme_dialog.geometry('600x400')
+        theme_dialog.transient(self)
+        theme_dialog.grab_set()
+        theme_dialog.update_idletasks()
+        
+        # Center dialog
+        try:
+            parent_x = self.winfo_rootx()
+            parent_y = self.winfo_rooty()
+            parent_w = self.winfo_width() or theme_dialog.winfo_screenwidth()
+            parent_h = self.winfo_height() or theme_dialog.winfo_screenheight()
+        except Exception:
+            parent_x = parent_y = 0
+            parent_w = theme_dialog.winfo_screenwidth()
+            parent_h = theme_dialog.winfo_screenheight()
+        dlg_w = theme_dialog.winfo_width()
+        dlg_h = theme_dialog.winfo_height()
+        pos_x = parent_x + (parent_w - dlg_w) // 2
+        pos_y = parent_y + (parent_h - dlg_h) // 2
+        theme_dialog.geometry(f'+{max(0, pos_x)}+{max(0, pos_y)}')
+        
+        main_frame = ttk.Frame(theme_dialog, padding=15)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        ttk.Label(main_frame, text='Number of Songs:', font=('TkDefaultFont', 10, 'bold')).pack(anchor=tk.W, pady=(0, 5))
+        num_songs_var = tk.StringVar(value='10')
+        num_songs_entry = ttk.Entry(main_frame, textvariable=num_songs_var, width=20)
+        num_songs_entry.pack(anchor=tk.W, pady=(0, 15))
+        
+        ttk.Label(main_frame, text='Album Theme / Topic (optional):', font=('TkDefaultFont', 10, 'bold')).pack(anchor=tk.W, pady=(0, 5))
+        ttk.Label(main_frame, text='Describe the theme, topic, or story you want the album to explore:', font=('TkDefaultFont', 8), foreground='gray').pack(anchor=tk.W, pady=(0, 5))
+        theme_text = scrolledtext.ScrolledText(main_frame, height=8, wrap=tk.WORD, width=70)
+        theme_text.pack(fill=tk.BOTH, expand=True, pady=(0, 15))
+        theme_text.focus_set()
+        
+        theme_result = [None, None]
+        
+        def theme_ok_clicked():
+            num_songs_str = num_songs_var.get().strip()
+            theme_instructions = theme_text.get('1.0', tk.END).strip()
+            
+            try:
+                num_songs = int(num_songs_str)
+                if num_songs < 2:
+                    messagebox.showwarning('Warning', 'Album must have at least 2 songs.')
+                    return
+                if num_songs > 30:
+                    messagebox.showwarning('Warning', 'Album cannot have more than 30 songs.')
+                    return
+            except ValueError:
+                messagebox.showerror('Error', 'Please enter a valid number.')
+                return
+            
+            theme_result[0] = num_songs
+            theme_result[1] = theme_instructions
+            theme_dialog.destroy()
+        
+        def theme_cancel_clicked():
+            theme_dialog.destroy()
+        
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(fill=tk.X, pady=(10, 0))
+        ttk.Button(btn_frame, text='Continue', command=theme_ok_clicked).pack(side=tk.LEFT, padx=4)
+        ttk.Button(btn_frame, text='Cancel', command=theme_cancel_clicked).pack(side=tk.LEFT, padx=4)
+        
+        theme_dialog.bind('<Return>', lambda e: theme_ok_clicked())
+        theme_dialog.bind('<Escape>', lambda e: theme_cancel_clicked())
+        
+        self.wait_window(theme_dialog)
+        
+        if theme_result[0] is None:
+            return
+        
+        num_songs = theme_result[0]
+        theme_instructions = theme_result[1]
+        
+        # Step 2: Generate album concept with AI (can be called multiple times for regeneration)
+        regenerate_flag = [False]
+        
+        while True:
+            persona = self.current_persona
+            persona_name = persona.get('name', '').strip() or 'Unnamed Persona'
+            tagline = persona.get('tagline', '').strip()
+            vibe = persona.get('vibe', '').strip()
+            visual = persona.get('visual_aesthetic', '').strip()
+            bio = persona.get('bio', '').strip()
+            genres = persona.get('genre_tags', [])
+            voice_style = persona.get('voice_style', '').strip()
+            lyrics_style = persona.get('lyrics_style', '').strip()
+            merged_style = self._get_sanitized_style_text()
+            
+            theme_clause = f"\n\nAlbum Theme/Topic Instructions:\n{theme_instructions}" if theme_instructions else ""
+            
+            prompt = (
+                f"You are creating a full concept album for the persona \"{persona_name}\".\n\n"
+                f"Persona snapshot:\n"
+                f"- Tagline: {tagline or '(empty)'}\n"
+                f"- Vibe: {vibe or '(empty)'}\n"
+                f"- Visual Aesthetic: {visual or '(empty)'}\n"
+                f"- Bio: {bio or '(empty)'}\n"
+                f"- Genres: {', '.join(genres) if genres else '(none)'}\n"
+                f"- Voice Style: {voice_style or '(empty)'}\n"
+                f"- Lyrics Style: {lyrics_style or '(empty)'}\n"
+                f"- Merged Style: {merged_style or '(empty)'}{theme_clause}\n\n"
+                f"Create a concept album with {num_songs} songs that tells a cohesive story from beginning to end.\n\n"
+                f"Requirements:\n"
+                f"1. Album Names: Provide EXACTLY 5 different album title options (2-6 words each)\n"
+                f"2. Story Arc: Describe the overall narrative/story that connects all songs (2-3 paragraphs)\n"
+                f"3. Song Options: For each of the {num_songs} songs, provide EXACTLY 5 different title options\n"
+                f"4. Each song should advance the story and build on the previous one\n"
+                f"5. Song titles should be 2-6 words each, evocative, and fit the persona\n"
+                f"6. The album should have a clear beginning, middle, and end\n"
+                f"7. Number each song position clearly (Song 1, Song 2, etc.)\n\n"
+                f"Format your response as follows:\n"
+                f"ALBUM_NAMES:\n1. [album title option 1]\n2. [album title option 2]\n3. [album title option 3]\n4. [album title option 4]\n5. [album title option 5]\n"
+                f"STORY_ARC:\n[story description here]\n"
+                f"SONG_1:\n1. [title option 1]\n2. [title option 2]\n3. [title option 3]\n4. [title option 4]\n5. [title option 5]\n"
+                f"SONG_2:\n1. [title option 1]\n2. [title option 2]\n3. [title option 3]\n4. [title option 4]\n5. [title option 5]\n"
+                f"...\n"
+                f"SONG_{num_songs}:\n1. [title option 1]\n2. [title option 2]\n3. [title option 3]\n4. [title option 4]\n5. [title option 5]\n"
+            )
+            
+            self.config(cursor='wait')
+            self.update()
+            
+            try:
+                result_ai = self.azure_ai(
+                    prompt,
+                    system_message='You are a creative music producer who creates concept albums with cohesive narratives.',
+                    profile='text',
+                    max_tokens=4000,
+                    temperature=0.85
+                )
+            except Exception as exc:
+                self.config(cursor='')
+                messagebox.showerror('Error', f'Failed to generate album concept: {exc}')
+                self.log_debug('ERROR', f'AI album generation failed: {exc}')
+                return
+            finally:
+                self.config(cursor='')
+            
+            if not result_ai.get('success'):
+                messagebox.showerror('Error', f'Failed to generate album concept: {result_ai.get("error", "Unknown error")}')
+                self.log_debug('ERROR', f'AI album generation failed: {result_ai.get("error", "Unknown error")}')
+                return
+            
+            content = result_ai.get('content', '').strip()
+            if not content:
+                messagebox.showwarning('Warning', 'No album concept returned from AI.')
+                return
+            
+            # Parse the response
+            album_name_options = []
+            story_arc = ''
+            song_options = {}  # {song_number: [option1, option2, ...]}
+            
+            lines = content.splitlines()
+            current_section = None
+            story_lines = []
+            current_song_num = None
+            
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+                
+                if line.startswith('ALBUM_NAMES:'):
+                    current_section = 'album_names'
+                    album_name_options = []
+                elif line.startswith('STORY_ARC:'):
+                    current_section = 'story'
+                    story_lines = []
+                elif line.startswith('SONG_'):
+                    # Extract song number from "SONG_1:", "SONG_2:", etc.
+                    match = re.match(r'SONG_(\d+):', line)
+                    if match:
+                        current_song_num = int(match.group(1))
+                        current_section = 'song_options'
+                        song_options[current_song_num] = []
+                elif current_section == 'album_names':
+                    # Parse album name option (format: "1. Title" or "1) Title" or just "Title")
+                    option = re.sub(r'^\s*\d+[\).\-\s]*', '', line).strip().strip('"').strip("'").strip('-').strip()
+                    if option:
+                        album_name_options.append(option)
+                elif current_section == 'story':
+                    story_lines.append(line)
+                elif current_section == 'song_options' and current_song_num:
+                    # Parse song title option (format: "1. Title" or "1) Title" or just "Title")
+                    option = re.sub(r'^\s*\d+[\).\-\s]*', '', line).strip().strip('"').strip("'").strip('-').strip()
+                    if option:
+                        if current_song_num not in song_options:
+                            song_options[current_song_num] = []
+                        song_options[current_song_num].append(option)
+            
+            story_arc = '\n'.join(story_lines).strip()
+            
+            # Validate parsed data
+            if not album_name_options:
+                # Fallback: try to extract from first few lines
+                for line in lines[:10]:
+                    if line.strip() and not line.strip().startswith(('STORY_ARC', 'SONG_', 'ALBUM_NAMES')):
+                        option = line.strip().strip('"').strip("'")
+                        if option:
+                            album_name_options.append(option)
+                            if len(album_name_options) >= 5:
+                                break
+            
+            if not album_name_options:
+                album_name_options = [f"{persona_name}'s Album"]
+            
+            # Ensure we have options for all songs
+            missing_songs = []
+            for i in range(1, num_songs + 1):
+                if i not in song_options or len(song_options[i]) == 0:
+                    missing_songs.append(i)
+            
+            if missing_songs:
+                messagebox.showwarning(
+                    'Warning',
+                    f'AI did not generate options for songs: {missing_songs}. '
+                    f'Proceeding with available options.'
+                )
+            
+            # Fill in missing songs with placeholder options
+            for i in range(1, num_songs + 1):
+                if i not in song_options or len(song_options[i]) == 0:
+                    song_options[i] = [f'Song {i}']
+            
+            # Ensure each song has at least 5 options (pad with variations if needed)
+            for i in range(1, num_songs + 1):
+                if i in song_options:
+                    while len(song_options[i]) < 5:
+                        base = song_options[i][0] if song_options[i] else f'Song {i}'
+                        song_options[i].append(f'{base} (Variation {len(song_options[i]) + 1})')
+                else:
+                    song_options[i] = [f'Song {i} Option {j}' for j in range(1, 6)]
+            
+            # Ensure we have at least 5 album name options
+            while len(album_name_options) < 5:
+                album_name_options.append(f"{persona_name}'s Album (Option {len(album_name_options) + 1})")
+            
+            # Step 3: Show preview dialog with options
+            preview_dialog = tk.Toplevel(self)
+            preview_dialog.title('Album Preview - Select Options')
+            preview_dialog.geometry('1100x700')
+            preview_dialog.transient(self)
+            preview_dialog.grab_set()
+            preview_dialog.update_idletasks()
+            
+            # Center dialog
+            try:
+                parent_x = self.winfo_rootx()
+                parent_y = self.winfo_rooty()
+                parent_w = self.winfo_width() or preview_dialog.winfo_screenwidth()
+                parent_h = self.winfo_height() or preview_dialog.winfo_screenheight()
+            except Exception:
+                parent_x = parent_y = 0
+                parent_w = preview_dialog.winfo_screenwidth()
+                parent_h = preview_dialog.winfo_screenheight()
+            dlg_w = preview_dialog.winfo_width()
+            dlg_h = preview_dialog.winfo_height()
+            pos_x = parent_x + (parent_w - dlg_w) // 2
+            pos_y = parent_y + (parent_h - dlg_h) // 2
+            preview_dialog.geometry(f'+{max(0, pos_x)}+{max(0, pos_y)}')
+            
+            # Buttons at the top
+            result = [False]
+            selected_album_name = [None]
+            selected_song_titles = [None]
+            
+            def confirm_clicked():
+                selected_album_name[0] = album_name_var.get().strip()
+                if not selected_album_name[0]:
+                    messagebox.showwarning('Warning', 'Please select an album name.')
+                    return
+                
+                selected_titles = []
+                for i in range(1, num_songs + 1):
+                    title = song_vars[i].get().strip()
+                    if not title:
+                        messagebox.showwarning('Warning', f'Please select a title for Song {i}.')
+                        return
+                    selected_titles.append(title)
+                
+                selected_song_titles[0] = selected_titles
+                result[0] = True
+                preview_dialog.destroy()
+            
+            def regenerate_clicked():
+                regenerate_flag[0] = True
+                preview_dialog.destroy()
+            
+            def cancel_clicked():
+                preview_dialog.destroy()
+            
+            btn_frame = ttk.Frame(preview_dialog)
+            btn_frame.pack(fill=tk.X, pady=(10, 10), padx=15)
+            ttk.Button(btn_frame, text='Regenerate Options', command=regenerate_clicked).pack(side=tk.LEFT, padx=4)
+            ttk.Button(btn_frame, text='Confirm & Create', command=confirm_clicked).pack(side=tk.LEFT, padx=4)
+            ttk.Button(btn_frame, text='Cancel', command=cancel_clicked).pack(side=tk.LEFT, padx=4)
+            
+            # Create scrollable frame
+            canvas = tk.Canvas(preview_dialog)
+            scrollbar = ttk.Scrollbar(preview_dialog, orient="vertical", command=canvas.yview)
+            scrollable_frame = ttk.Frame(canvas)
+            
+            scrollable_frame.bind(
+                "<Configure>",
+                lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+            )
+            
+            canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+            canvas.configure(yscrollcommand=scrollbar.set)
+            
+            # Preview content
+            main_frame = ttk.Frame(scrollable_frame, padding=15)
+            main_frame.pack(fill=tk.BOTH, expand=True)
+            
+            # Album name selection
+            ttk.Label(main_frame, text='Album Name (select one):', font=('TkDefaultFont', 10, 'bold')).pack(anchor=tk.W, pady=(0, 5))
+            album_name_var = tk.StringVar(value=album_name_options[0] if album_name_options else '')
+            album_name_combo = ttk.Combobox(main_frame, textvariable=album_name_var, values=album_name_options, width=90, state='readonly')
+            album_name_combo.pack(fill=tk.X, pady=(0, 10))
+            
+            # Story arc display
+            ttk.Label(main_frame, text='Story Arc:', font=('TkDefaultFont', 10, 'bold')).pack(anchor=tk.W, pady=(0, 5))
+            story_text = scrolledtext.ScrolledText(main_frame, height=6, wrap=tk.WORD, width=100)
+            story_text.pack(fill=tk.BOTH, expand=False, pady=(0, 10))
+            story_text.insert('1.0', story_arc if story_arc else 'No story arc provided.')
+            story_text.config(state=tk.DISABLED)
+            
+            # Songs selection
+            ttk.Label(main_frame, text=f'Song Titles (select one option for each song):', font=('TkDefaultFont', 10, 'bold')).pack(anchor=tk.W, pady=(0, 10))
+            
+            songs_container = ttk.Frame(main_frame)
+            songs_container.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+            
+            song_vars = {}
+            for i in range(1, num_songs + 1):
+                song_frame = ttk.LabelFrame(songs_container, text=f'Song {i}', padding=5)
+                song_frame.pack(fill=tk.X, pady=3, padx=5)
+                
+                options = song_options.get(i, [f'Song {i}'])
+                song_var = tk.StringVar(value=options[0] if options else f'Song {i}')
+                song_vars[i] = song_var
+                
+                song_combo = ttk.Combobox(song_frame, textvariable=song_var, values=options, width=85, state='readonly')
+                song_combo.pack(fill=tk.X)
+            
+            canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+            
+            preview_dialog.bind('<Return>', lambda e: confirm_clicked())
+            preview_dialog.bind('<Escape>', lambda e: cancel_clicked())
+            
+            self.wait_window(preview_dialog)
+            
+            # Check if user wants to regenerate
+            if regenerate_flag[0]:
+                regenerate_flag[0] = False
+                continue  # Loop back to regenerate
+            
+            if not result[0]:
+                return
+            
+            # Get final selections
+            final_album_name = selected_album_name[0]
+            final_song_titles = selected_song_titles[0]
+            break  # Exit the while loop
+        
+        # Step 4: Create album and songs
+        try:
+            self.config(cursor='wait')
+            self.update()
+            
+            # Create album
+            album_id = self._album_slug(final_album_name)
+            albums_dir = self._albums_dir()
+            if not albums_dir:
+                messagebox.showerror('Error', 'Persona path not available.')
+                return
+            
+            os.makedirs(albums_dir, exist_ok=True)
+            album_path = os.path.join(albums_dir, album_id)
+            os.makedirs(album_path, exist_ok=True)
+            
+            # Create songs
+            songs_dir = os.path.join(self.current_persona_path, 'AI-Songs')
+            created_song_ids = []
+            
+            for song_title in final_song_titles:
+                safe_name = song_title.replace(':', '_').replace('/', '_').replace('\\', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace("'", '_').replace('<', '_').replace('>', '_').replace('|', '_')
+                new_song_path = os.path.join(songs_dir, safe_name)
+                
+                if os.path.exists(new_song_path):
+                    self.log_debug('WARNING', f'Song "{safe_name}" already exists, skipping.')
+                    continue
+                
+                os.makedirs(new_song_path, exist_ok=True)
+                
+                config = {
+                    'song_name': song_title,
+                    'full_song_name': '',
+                    'lyric_ideas': '',
+                    'lyrics': '',
+                    'song_style': '',
+                    'merged_style': merged_style or '',
+                    'song_description': '',
+                    'song_description_de': '',
+                    'album_cover': '',
+                    'video_loop': '',
+                    'storyboard': [],
+                    'storyboard_seconds_per_video': 6,
+                    'storyboard_setup_count': 6,
+                    'persona_scene_percent': 40,
+                    'persona_image_preset': self.current_persona.get('current_image_preset', 'default') if self.current_persona else 'default',
+                    'album_id': album_id,
+                    'album_name': final_album_name
+                }
+                
+                save_song_config(new_song_path, config)
+                created_song_ids.append(safe_name)
+                self.log_debug('INFO', f'Created song: {song_title}')
+            
+            # Create album config
+            album_config = load_album_config(album_path)
+            album_config.update({
+                'album_id': album_id,
+                'album_name': final_album_name,
+                'language': 'EN',
+                'cover_size': '1:1 (1024x1024)',
+                'cover_format': 'PNG',
+                'video_size': '9:16 (720x1280)',
+                'songs': created_song_ids,
+                'cover_prompt': '',
+                'video_prompt': ''
+            })
+            
+            if save_album_config(album_path, album_config):
+                self.load_albums()
+                self.refresh_album_selector()
+                self.refresh_songs_list()
+                self.album_select_var.set(final_album_name)
+                self.on_album_select_combo()
+                
+                messagebox.showinfo(
+                    'Success',
+                    f'Album "{final_album_name}" created successfully with {len(created_song_ids)} song(s).\n\n'
+                    f'Story Arc:\n{story_arc[:200]}{"..." if len(story_arc) > 200 else ""}'
+                )
+                self.log_debug('INFO', f'Created full album "{final_album_name}" with {len(created_song_ids)} songs')
+            else:
+                messagebox.showerror('Error', 'Failed to save album config.')
+        
+        except Exception as e:
+            messagebox.showerror('Error', f'Failed to create album: {e}')
+            self.log_debug('ERROR', f'Failed to create album: {e}')
+        finally:
+            self.config(cursor='')
     
     def load_song_info(self):
         """Load song info into the form."""
