@@ -788,6 +788,7 @@ class PromptImprovementDialog(tk.Toplevel):
     
     def __init__(self, parent, prompt_type: str, current_prompt: str = ''):
         super().__init__(parent)
+        self.prompt_type = prompt_type
         self.title(f'Improve {prompt_type} Prompt')
         self.geometry('700x500')
         self.transient(parent)
@@ -818,7 +819,10 @@ class PromptImprovementDialog(tk.Toplevel):
         current_preview.config(state=tk.DISABLED)
         
         ttk.Label(main_frame, text='What changes would you like to make?', font=('TkDefaultFont', 8, 'bold')).pack(anchor=tk.W, pady=(5, 2))
-        ttk.Label(main_frame, text='(e.g., "Make it more dramatic", "Add more color", "Change the mood to be darker")', 
+        help_text = '(e.g., "Make it more dramatic", "Add more color", "Change the mood to be darker")'
+        if prompt_type == 'Album Cover':
+            help_text += ' (Optional: Leave empty to automatically mix song cover prompts)'
+        ttk.Label(main_frame, text=help_text, 
                  font=('TkDefaultFont', 7), foreground='gray').pack(anchor=tk.W, pady=(0, 5))
         self.improvement_request_text = scrolledtext.ScrolledText(main_frame, height=6, wrap=tk.WORD, font=('Consolas', 9))
         self.improvement_request_text.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
@@ -832,7 +836,8 @@ class PromptImprovementDialog(tk.Toplevel):
     
     def ok_clicked(self):
         improvement_request = self.improvement_request_text.get('1.0', tk.END).strip()
-        if not improvement_request:
+        # Allow empty input for Album Cover (will mix song cover prompts automatically)
+        if not improvement_request and self.prompt_type != 'Album Cover':
             messagebox.showwarning('Warning', 'Please enter what changes you would like to make.')
             return
         self.result = improvement_request
@@ -9705,32 +9710,91 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
             self.config(cursor='')
     
     def improve_album_cover_prompt_album(self):
-        """Improve the album cover prompt (album tab) using AI based on user feedback."""
+        """Improve the album cover prompt (album tab) by mixing all song cover prompts into the main album cover prompt.
+        Always allows manual improvement feedback while also automatically incorporating song cover prompts."""
         current_prompt = self.album_cover_album_text.get('1.0', tk.END).strip()
         if not current_prompt:
             messagebox.showwarning('Warning', 'Please generate an album cover prompt first.')
             return
         
-        # Open dialog to get improvement request
+        # Collect all song cover prompts from songs in the current album
+        song_cover_prompts = []
+        if self.current_album and self.current_persona_path:
+            album_songs = self.current_album.get('songs', [])
+            if album_songs:
+                songs_dir = os.path.join(self.current_persona_path, 'AI-Songs')
+                for song_folder in album_songs:
+                    song_path = os.path.join(songs_dir, song_folder)
+                    if os.path.isdir(song_path):
+                        song_config = load_song_config(song_path)
+                        song_name = song_config.get('song_name', song_folder)
+                        song_cover = song_config.get('album_cover', '').strip()
+                        if song_cover:
+                            song_cover_prompts.append({
+                                'song_name': song_name,
+                                'cover_prompt': song_cover
+                            })
+        
+        # Always show dialog for manual improvement (user can provide feedback or leave empty)
         dialog = PromptImprovementDialog(self, 'Album Cover', current_prompt)
         self.wait_window(dialog)
         
-        if not dialog.result:
+        if dialog.result is None:
             return  # User cancelled
         
-        improvement_request = dialog.result
+        improvement_request = dialog.result.strip() if dialog.result else ''
         
-        # Build improvement prompt
-        prompt = f"Improve the following album cover prompt based on these requested changes:\n\n"
-        prompt += f"REQUESTED CHANGES: {improvement_request}\n\n"
-        prompt += f"CURRENT PROMPT:\n{current_prompt}\n\n"
-        prompt += "Generate an improved version of the prompt that incorporates the requested changes while maintaining the core concept and style. Output ONLY the improved prompt text, nothing else."
+        # Build the improvement prompt
+        prompt = "Improve and enhance the following album cover prompt"
+        
+        if improvement_request:
+            prompt += f" based on these requested changes: {improvement_request}"
+        
+        if song_cover_prompts:
+            prompt += " and by incorporating elements and themes from all the individual song cover prompts provided below"
+        
+        prompt += ".\n\n"
+        prompt += f"MAIN ALBUM COVER PROMPT:\n{current_prompt}\n\n"
+        
+        if song_cover_prompts:
+            prompt += "SONG COVER PROMPTS TO INCORPORATE:\n"
+            for idx, song_data in enumerate(song_cover_prompts, 1):
+                prompt += f"\nSong {idx}: {song_data['song_name']}\n"
+                prompt += f"Cover Prompt: {song_data['cover_prompt']}\n"
+            prompt += "\n"
+        
+        prompt += "TASK: Create an improved album cover prompt that:\n"
+        prompt += "1. Maintains the core concept and style of the main album cover prompt\n"
+        
+        if improvement_request:
+            prompt += "2. Incorporates the requested manual changes\n"
+        
+        if song_cover_prompts:
+            if improvement_request:
+                prompt += "3. Intelligently incorporates visual elements, themes, colors, moods, and stylistic features from all the song cover prompts\n"
+                prompt += "4. Creates a cohesive and unified visual representation that represents the entire album\n"
+                prompt += "5. Blends the different song aesthetics harmoniously without losing the main album identity\n"
+                prompt += "6. Ensures the final prompt is detailed, evocative, and suitable for high-quality image generation\n"
+            else:
+                prompt += "2. Intelligently incorporates visual elements, themes, colors, moods, and stylistic features from all the song cover prompts\n"
+                prompt += "3. Creates a cohesive and unified visual representation that represents the entire album\n"
+                prompt += "4. Blends the different song aesthetics harmoniously without losing the main album identity\n"
+                prompt += "5. Ensures the final prompt is detailed, evocative, and suitable for high-quality image generation\n"
+        else:
+            if improvement_request:
+                prompt += "2. Incorporates the requested changes while maintaining quality and coherence\n"
+        
+        prompt += "\nOutput ONLY the improved album cover prompt text, nothing else."
+        
+        if song_cover_prompts:
+            system_message = 'You are an expert at creating cohesive visual designs. You excel at blending multiple artistic concepts into a unified whole while maintaining the core identity. Generate an improved album cover prompt that harmoniously combines the main album concept with elements from all individual song covers.'
+        else:
+            system_message = 'You are an expert at improving image generation prompts. Analyze the current prompt and requested changes, then generate an improved version that incorporates the changes while maintaining quality and coherence. Output ONLY the improved prompt text.'
         
         try:
             self.config(cursor='wait')
             self.update()
             
-            system_message = 'You are an expert at improving image generation prompts. Analyze the current prompt and requested changes, then generate an improved version that incorporates the changes while maintaining quality and coherence. Output ONLY the improved prompt text.'
             result = self.azure_ai(prompt, system_message=system_message, profile='text', max_tokens=2000, temperature=0.7)
             
             if result.get('success'):
@@ -9747,6 +9811,10 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
                     if self.current_album is not None:
                         self.current_album['cover_prompt'] = improved_prompt
                     self.log_debug('INFO', 'Album cover prompt improved and saved')
+                    if song_cover_prompts:
+                        self.log_debug('INFO', f'Mixed {len(song_cover_prompts)} song cover prompts into album cover')
+                    if improvement_request:
+                        self.log_debug('INFO', 'Applied manual improvement request')
                     messagebox.showinfo('Success', 'Improved prompt saved.')
             else:
                 messagebox.showerror('Error', f'Failed to improve prompt: {result.get("error", "Unknown error")}')
