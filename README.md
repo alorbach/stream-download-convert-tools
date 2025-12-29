@@ -103,6 +103,7 @@ The original individual tools are still available for users who prefer separate 
 - `launchers/video_editor.bat` - Video editor for combining and arranging videos
 - `launchers/suno_style_browser.bat` - Suno Style Browser for AI music cover generation
 - `launchers/cover_song_checker.bat` - Cover Song Checker for copyright risk assessment before YouTube upload
+- `launchers/song_style_analyzer.bat` - Song Style Analyzer for extracting style information and lyrics from MP3 files
 - `launchers/image_format_converter.bat` - Image & Video Format Converter for aspect ratio and format conversion
 - `launchers/mp3_wav_to_flac_converter.bat` - MP3/WAV to FLAC Converter for lossless audio conversion
 
@@ -114,6 +115,7 @@ The original individual tools are still available for users who prefer separate 
 - `launchers/video_editor.sh` - Video editor for combining and arranging videos
 - `launchers/suno_style_browser.sh` - Suno Style Browser for AI music cover generation
 - `launchers/cover_song_checker.sh` - Cover Song Checker for copyright risk assessment before YouTube upload
+- `launchers/song_style_analyzer.sh` - Song Style Analyzer for extracting style information and lyrics from MP3 files
 - `launchers/image_format_converter.sh` - Image & Video Format Converter for aspect ratio and format conversion
 - `launchers/mp3_wav_to_flac_converter.sh` - MP3/WAV to FLAC Converter for lossless audio conversion
 
@@ -600,6 +602,100 @@ Settings are stored in `mp3_to_video_converter_settings.json` in the project roo
 - Mobile-first content creation
 - Social media marketing videos
 
+## Song Style Analyzer (Individual Tool)
+
+A standalone tool for analyzing MP3 files to extract style information and lyrics for generative audio conditioning. This tool helps reverse-engineer style prompts and lyrics from existing songs for use with generative audio models like Suno V5 and Udio.
+
+### Features
+
+- **Audio Transcription**: Uses Azure Whisper API to transcribe audio and extract lyrics
+- **Style Extraction**: AI-powered analysis to extract:
+  - Genre classification (primary genre, sub-genre, fusion tags)
+  - Mood and valence
+  - Instrumentation details
+  - Production quality characteristics
+  - Suno-style prompts (comma-separated tags)
+  - Negative prompts (things to avoid)
+- **Grid View**: Results displayed in sortable table with genre, mood, duration, and vocals
+- **Detail View**: Double-click any result to see complete analysis with tabs:
+  - Summary: All style and technical information
+  - Lyrics: Full transcribed lyrics with copy button
+  - Full JSON: Complete analysis data structure
+- **Drag-and-Drop Support**: Drag MP3 files or folders directly from Explorer/Finder
+- **Batch Processing**: Process multiple files or scan directories recursively
+- **Copy Functionality**: Copy lyrics and usage suggestions to clipboard
+- **Export Options**: Export results to JSON or CSV format
+- **Metadata Validation**: Optional requirement for valid artist and song name in MP3 tags
+
+### Usage
+
+1. **Launch**: Double-click `launchers/song_style_analyzer.bat` (Windows) or `launchers/song_style_analyzer.sh` (Linux/Mac)
+
+2. **Configure Azure Settings**:
+   - Tool uses same Azure configuration as `suno_persona.py`
+   - Requires 'transcribe' profile for audio transcription
+   - Requires 'text' profile for style extraction
+   - Configure in `scripts/suno_persona_config.json`
+
+3. **Select Files**:
+   - Click "Select Single MP3 File" for individual analysis
+   - Click "Select Directory (Recursive)" to scan folders
+   - Or drag and drop MP3 files/folders onto the file list
+
+4. **Configure Options**:
+   - Enable/disable metadata requirement (requires valid artist and song name)
+   - Choose output format (JSON or CSV)
+
+5. **Start Analysis**:
+   - Click "Start Analysis"
+   - Progress bar shows processing status
+   - Results appear in grid as they complete
+   - Use "Cancel" button to stop processing
+
+6. **View Details**:
+   - Double-click any result row to open detail view
+   - Copy lyrics or usage suggestions using copy buttons
+   - View complete JSON structure
+
+7. **Export Results**:
+   - Click "Export Results" to save as JSON or CSV
+   - JSON format includes complete analysis structure
+   - CSV format includes flattened data for spreadsheet use
+
+### Output Format
+
+Results follow the task specification format with:
+- **Input Metadata**: File path, duration, format, artist, title
+- **Style Analysis**: Prompt string, genre taxonomy, technical specs
+- **Lyric Analysis**: Detected language, vocals presence, structured lyrics
+- **Usage Suggestions**: Suno style prompt and negative prompt
+
+### Requirements
+
+- Python 3.7 or higher
+- Azure OpenAI account with:
+  - Whisper deployment for transcription ('transcribe' profile)
+  - Text generation model for style analysis ('text' profile)
+- Internet connection for Azure API calls
+- MP3 files with valid metadata (optional, can be disabled)
+
+### Use Cases
+
+- Extract style information from existing songs for AI music generation
+- Create style prompts for generative audio models (Suno, Udio)
+- Analyze song characteristics for music production
+- Generate style tags and descriptions from audio files
+- Prepare data for AI cover song generation
+- Build style databases from music collections
+
+### Important Notes
+
+- Style extraction quality depends on transcription accuracy
+- Instrumental tracks may have limited style information
+- Technical specs (BPM, key, time signature) are placeholders (would require audio analysis libraries)
+- Uses same Azure configuration as `suno_persona.py` - no separate config needed
+- Processing time depends on file length and Azure API response times
+
 ## MP3/WAV to FLAC Converter (Individual Tool)
 
 A standalone tool for converting MP3 and WAV audio files to FLAC (Free Lossless Audio Codec) format:
@@ -713,6 +809,7 @@ stream-download-convert-tools/
 │   ├── video_editor.py                  # Individual Video Editor
 │   ├── suno_style_browser.py            # Suno Style Browser for AI music covers
 │   ├── cover_song_checker.py            # Cover Song Checker for copyright risk assessment
+│   ├── song_style_analyzer.py          # Song Style Analyzer for generative conditioning
 │   ├── image_format_converter.py       # Image & Video Format Converter
 │   └── mp3_wav_to_flac_converter.py    # MP3/WAV to FLAC Converter
 ├── launchers/                           # Launcher scripts
@@ -732,6 +829,8 @@ stream-download-convert-tools/
 │   ├── suno_style_browser.sh           # Linux/Mac launcher (Suno Style Browser)
 │   ├── cover_song_checker.bat          # Windows launcher (Cover Song Checker)
 │   ├── cover_song_checker.sh            # Linux/Mac launcher (Cover Song Checker)
+│   ├── song_style_analyzer.bat         # Windows launcher (Song Style Analyzer)
+│   ├── song_style_analyzer.sh           # Linux/Mac launcher (Song Style Analyzer)
 │   ├── image_format_converter.bat       # Windows launcher (Image Format Converter)
 │   ├── image_format_converter.sh        # Linux/Mac launcher (Image Format Converter)
 │   ├── mp3_wav_to_flac_converter.bat    # Windows launcher (MP3/WAV to FLAC Converter)

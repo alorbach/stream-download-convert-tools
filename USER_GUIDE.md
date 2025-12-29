@@ -11,11 +11,12 @@ Welcome to Stream Download Convert Tools! This comprehensive guide will help you
 3. [Video to MP3 Converter](#video-to-mp3-converter)
 4. [Audio Modifier](#audio-modifier)
 5. [Cover Song Checker](#cover-song-checker)
-6. [Suno Style Browser](#suno-style-browser)
-7. [Settings Configuration](#settings-configuration)
-8. [Troubleshooting](#troubleshooting)
-9. [Advanced Features](#advanced-features)
-10. [Legal and Compliance](#legal-and-compliance)
+6. [Song Style Analyzer](#song-style-analyzer)
+7. [Suno Style Browser](#suno-style-browser)
+8. [Settings Configuration](#settings-configuration)
+9. [Troubleshooting](#troubleshooting)
+10. [Advanced Features](#advanced-features)
+11. [Legal and Compliance](#legal-and-compliance)
 
 ## Getting Started
 
@@ -348,6 +349,226 @@ Before uploading a cover song to YouTube, it's important to understand the poten
 - Result: Copyright Strike received December 21, 2025 (almost 2 months later)
 - Publisher: Universal Music Publishing Group (UMPG)
 - Lesson: Even heavily modified covers can be detected, claims can come months later
+
+## Song Style Analyzer
+
+The Song Style Analyzer is a powerful tool for analyzing MP3 files to extract style information and lyrics for generative audio conditioning. It helps you reverse-engineer style prompts and lyrics from existing songs for use with generative audio models like Suno V5 and Udio.
+
+### Overview
+
+This tool performs multi-modal analysis on audio files to extract:
+- **Lyrics**: Full transcription using Azure Whisper API
+- **Style Information**: Genre, mood, instrumentation, production quality
+- **Usage Suggestions**: Suno-style prompts and negative prompts ready for AI generation
+
+### Launching Song Style Analyzer
+
+**Windows:**
+- Double-click `launchers/song_style_analyzer.bat`
+
+**Linux/Mac:**
+- Make executable: `chmod +x launchers/song_style_analyzer.sh`
+- Run: `./launchers/song_style_analyzer.sh`
+
+### Step 1: Configure Azure Settings
+
+Before using the tool, ensure Azure OpenAI is configured:
+
+1. The tool uses the same Azure configuration as `suno_persona.py`
+2. Edit `scripts/suno_persona_config.json`
+3. Configure two profiles:
+
+**Transcribe Profile (for audio transcription):**
+- Endpoint: Your Azure OpenAI endpoint
+- Deployment: Your Whisper deployment name
+- Subscription Key: Your Azure API key
+- API Version: 2024-12-01-preview
+
+**Text Profile (for style extraction):**
+- Endpoint: Your Azure OpenAI endpoint
+- Deployment: Your GPT-4 deployment name
+- Subscription Key: Your Azure API key
+- API Version: 2024-12-01-preview
+
+### Step 2: Select Files
+
+**Option 1: Single File**
+1. Click "Select Single MP3 File"
+2. Choose an MP3 file
+3. File appears in the list
+
+**Option 2: Directory Scan**
+1. Click "Select Directory (Recursive)"
+2. Choose a folder containing MP3 files
+3. Tool scans recursively and adds all MP3 files
+4. If metadata requirement is enabled, only files with valid artist/title are added
+
+**Option 3: Drag and Drop**
+1. Drag MP3 files from Explorer/Finder onto the file list
+2. Or drag entire folders to scan recursively
+3. Files are automatically added to the list
+
+### Step 3: Configure Options
+
+**Metadata Requirement:**
+- **Enabled** (default): Only processes files with valid artist and song name in MP3 tags
+- **Disabled**: Processes all MP3 files regardless of metadata
+
+**Output Format:**
+- **JSON**: Complete analysis structure (recommended for programmatic use)
+- **CSV**: Flattened data format (good for spreadsheets)
+
+### Step 4: Start Analysis
+
+1. Click "Start Analysis"
+2. Progress bar shows current file being processed
+3. Results appear in the grid as they complete
+4. Use "Cancel" button to stop processing at any time
+
+**What Happens During Analysis:**
+1. **Transcription**: Audio is transcribed using Azure Whisper API
+2. **Style Extraction**: Transcription is analyzed by Azure OpenAI to extract:
+   - Natural language style description
+   - Genre classification (primary, sub-genre, fusion tags)
+   - Mood and valence
+   - Instrumentation details
+   - Production quality
+   - Suno-style prompt (comma-separated tags)
+   - Negative prompt (things to avoid)
+
+### Step 5: View Results
+
+**Grid View:**
+- Results displayed in sortable table
+- Columns: #, Artist, Title, Genre, Mood, Duration, Vocals
+- Click column headers to sort
+- Scroll to see all results
+
+**Detail View:**
+- Double-click any result row to open detail dialog
+- Three tabs available:
+
+**Summary Tab:**
+- Complete file and analysis information
+- Style analysis details
+- Vocal analysis
+- Technical specs
+- Usage suggestions with copy buttons
+
+**Lyrics Tab:**
+- Full transcribed lyrics
+- "Copy Lyrics to Clipboard" button
+- Scrollable text view
+
+**Full JSON Tab:**
+- Complete analysis data structure
+- "Copy JSON to Clipboard" button
+- Formatted JSON for inspection
+
+### Step 6: Copy Usage Suggestions
+
+**From Summary Tab:**
+- **Copy Suno Style Prompt**: Copies only the style prompt
+- **Copy Negative Prompt**: Copies only the negative prompt
+- **Copy Both**: Copies both prompts in formatted text
+
+**From Lyrics Tab:**
+- **Copy Lyrics to Clipboard**: Copies full lyrics text
+
+All copy operations show confirmation messages.
+
+### Step 7: Export Results
+
+1. Click "Export Results"
+2. Choose save location
+3. Select format (JSON or CSV)
+4. Results are saved with all analysis data
+
+**JSON Format:**
+- Complete nested structure
+- Includes all style analysis, lyrics, and metadata
+- Best for programmatic use or detailed analysis
+
+**CSV Format:**
+- Flattened structure
+- Columns: file_path, artist, title, duration_seconds, has_vocals, detected_language, lyrics, analysis_timestamp
+- Best for spreadsheet analysis
+
+### Understanding Results
+
+**Style Analysis:**
+- **Prompt String**: Natural language description of the song's vibe and composition
+- **Primary Genre**: Main genre classification
+- **Sub Genre**: More specific genre classification
+- **Fusion Tags**: Additional genre/style tags
+- **Mood**: Emotional tone and valence
+- **Instrumentation**: List of instruments detected
+- **Production Quality**: Production style description
+
+**Usage Suggestions:**
+- **Suno Style Prompt**: Ready-to-use comma-separated tags for Suno AI
+- **Negative Prompt**: Things to avoid when generating similar content
+
+**Lyric Analysis:**
+- **Detected Language**: Language of the lyrics
+- **Has Vocals**: Whether vocals are present
+- **Structured Lyrics**: Full transcribed text
+
+### Tips for Best Results
+
+**File Selection:**
+- Use files with clear audio quality
+- Files with vocals provide better style analysis
+- Minimum 10 seconds duration recommended
+- Maximum 8 minutes (longer files may be truncated)
+
+**Metadata:**
+- Files with proper ID3 tags (artist, title) work best
+- Can disable metadata requirement for instrumental or untagged files
+
+**Style Extraction:**
+- Quality depends on transcription accuracy
+- Songs with clear lyrics produce better results
+- Instrumental tracks may have limited style information
+
+**Processing:**
+- Large batches may take time (depends on Azure API)
+- Use Cancel button if needed
+- Results are saved incrementally (can export partial results)
+
+### Troubleshooting Song Style Analyzer
+
+**Azure Configuration Errors:**
+- Verify 'transcribe' and 'text' profiles are configured in `suno_persona_config.json`
+- Check subscription keys are valid
+- Ensure API versions match your Azure deployment
+- Check log area for detailed error messages
+
+**Transcription Failures:**
+- Verify 'transcribe' profile is correctly configured
+- Check audio file is not corrupted
+- Ensure file format is supported (MP3, WAV, FLAC, M4A)
+- Files under 10 seconds may be skipped
+
+**Style Extraction Failures:**
+- Verify 'text' profile is correctly configured
+- Check transcription was successful (lyrics tab should have content)
+- Some models may not support temperature parameter (automatically handled)
+
+**No Results:**
+- Check if metadata requirement is blocking files
+- Verify files are valid MP3 format
+- Check log area for error messages
+
+### Use Cases
+
+- Extract style information from existing songs for AI music generation
+- Create style prompts for generative audio models (Suno, Udio)
+- Analyze song characteristics for music production
+- Generate style tags and descriptions from audio files
+- Prepare data for AI cover song generation
+- Build style databases from music collections
+- Reverse-engineer prompts from reference tracks
 
 ## Suno Style Browser
 
