@@ -37,9 +37,10 @@ try:
 except ImportError:
     DND_AVAILABLE = False
 
-# Try to import mutagen for MP3 metadata
+# Try to import mutagen for MP3 and FLAC metadata
 try:
     from mutagen.mp3 import MP3
+    from mutagen.flac import FLAC
     from mutagen.id3 import ID3, TIT2, TPE1, TALB, TDRC
     from mutagen.id3 import ID3NoHeaderError
     MUTAGEN_AVAILABLE = True
@@ -243,7 +244,7 @@ def call_azure_audio_transcription(config: dict, audio_file_path: str, profile: 
     
     Args:
         config: Configuration dictionary
-        audio_file_path: Path to audio file (MP3, WAV, etc.)
+        audio_file_path: Path to audio file (MP3, FLAC, WAV, etc.)
         profile: Profile name to use (default 'transcribe')
         language: Optional language code (e.g., 'en', 'de')
         response_format: Response format - 'json' for simple, 'text' for plain text
@@ -288,9 +289,17 @@ def call_azure_audio_transcription(config: dict, audio_file_path: str, profile: 
             'api-key': subscription_key
         }
         
-        # Prepare multipart form data
+        # Prepare multipart form data with appropriate MIME type
+        file_ext = os.path.splitext(audio_file_path)[1].lower()
+        if file_ext == '.flac':
+            mime_type = 'audio/flac'
+        elif file_ext == '.mp3':
+            mime_type = 'audio/mpeg'
+        else:
+            mime_type = 'audio/mpeg'  # Default fallback
+        
         files = {
-            'file': (os.path.basename(audio_file_path), open(audio_file_path, 'rb'), 'audio/mpeg')
+            'file': (os.path.basename(audio_file_path), open(audio_file_path, 'rb'), mime_type)
         }
         
         data = {
@@ -362,7 +371,7 @@ class SongStyleAnalyzerGUI(BaseAudioGUI):
         
         # Check dependencies
         if not MUTAGEN_AVAILABLE:
-            self.log_error("mutagen library not available. MP3 metadata extraction will be limited.")
+            self.log_error("mutagen library not available. Audio metadata extraction will be limited.")
         
         # Check Azure configuration
         transcribe_profile = self.ai_config.get('profiles', {}).get('transcribe', {})
@@ -407,7 +416,7 @@ class SongStyleAnalyzerGUI(BaseAudioGUI):
         file_frame = ttk.Frame(input_frame)
         file_frame.pack(fill='x', pady=5)
         
-        ttk.Button(file_frame, text="Select Single MP3 File", 
+        ttk.Button(file_frame, text="Select Audio File", 
                   command=self.select_single_file).pack(side='left', padx=5)
         ttk.Button(file_frame, text="Select Directory (Recursive)", 
                   command=self.select_directory).pack(side='left', padx=5)
@@ -437,7 +446,7 @@ class SongStyleAnalyzerGUI(BaseAudioGUI):
         label_frame.pack(fill='x', pady=(0, 5))
         ttk.Label(label_frame, text="Files to Process:").pack(side='left')
         if DND_AVAILABLE:
-            ttk.Label(label_frame, text="(Drag and drop MP3 files or folders here)", 
+            ttk.Label(label_frame, text="(Drag and drop MP3/FLAC files or folders here)", 
                      foreground='gray', font=('TkDefaultFont', 8)).pack(side='left', padx=(10, 0))
         
         list_container = ttk.Frame(list_frame)
@@ -450,7 +459,7 @@ class SongStyleAnalyzerGUI(BaseAudioGUI):
         self.file_listbox.pack(side='left', fill='both', expand=True)
         scrollbar.config(command=self.file_listbox.yview)
         
-        # Drag-and-drop support for adding MP3 files
+        # Drag-and-drop support for adding audio files
         if DND_AVAILABLE:
             try:
                 self.file_listbox.drop_target_register(DND_FILES)
@@ -542,10 +551,10 @@ class SongStyleAnalyzerGUI(BaseAudioGUI):
     
     
     def select_single_file(self):
-        """Select a single MP3 file."""
+        """Select a single audio file (MP3 or FLAC)."""
         file_path = filedialog.askopenfilename(
-            title="Select MP3 File",
-            filetypes=[("MP3 files", "*.mp3"), ("All files", "*.*")]
+            title="Select Audio File",
+            filetypes=[("Audio files", "*.mp3 *.flac"), ("MP3 files", "*.mp3"), ("FLAC files", "*.flac"), ("All files", "*.*")]
         )
         
         if file_path:
@@ -554,18 +563,18 @@ class SongStyleAnalyzerGUI(BaseAudioGUI):
             self.log(f"Selected file: {os.path.basename(file_path)}")
     
     def select_directory(self):
-        """Select a directory and scan for MP3 files."""
+        """Select a directory and scan for audio files (MP3/FLAC)."""
         directory = filedialog.askdirectory(title="Select Directory to Scan")
         
         if not directory:
             return
         
         self.log(f"Scanning directory: {directory}")
-        mp3_files = []
+        audio_files = []
         
         for root, dirs, files in os.walk(directory):
             for file in files:
-                if file.lower().endswith('.mp3'):
+                if file.lower().endswith(('.mp3', '.flac')):
                     file_path = os.path.join(root, file)
                     
                     # Check metadata if required
@@ -574,53 +583,76 @@ class SongStyleAnalyzerGUI(BaseAudioGUI):
                         if not artist or not title:
                             continue
                     
-                    mp3_files.append(file_path)
+                    audio_files.append(file_path)
         
-        if not mp3_files:
-            messagebox.showinfo("Info", "No MP3 files found (or none with valid metadata if requirement is enabled)")
+        if not audio_files:
+            messagebox.showinfo("Info", "No audio files (MP3/FLAC) found (or none with valid metadata if requirement is enabled)")
             return
         
         self.file_listbox.delete(0, tk.END)
-        for file_path in mp3_files:
+        for file_path in audio_files:
             self.file_listbox.insert(tk.END, file_path)
         
-        self.log(f"Found {len(mp3_files)} MP3 file(s)")
+        self.log(f"Found {len(audio_files)} audio file(s)")
     
     def extract_metadata(self, file_path: str) -> Tuple[Optional[str], Optional[str]]:
-        """Extract artist and title from MP3 metadata."""
+        """Extract artist and title from audio file metadata (MP3 or FLAC)."""
         if not MUTAGEN_AVAILABLE:
             return None, None
         
+        file_ext = os.path.splitext(file_path)[1].lower()
+        
         try:
-            audio = MP3(file_path, ID3=ID3)
+            # Handle MP3 files
+            if file_ext == '.mp3':
+                audio = MP3(file_path, ID3=ID3)
+                
+                # Try to get title
+                title = None
+                if audio.tags:
+                    title_tag = audio.tags.get('TIT2')
+                    if title_tag:
+                        title = str(title_tag.text[0]) if title_tag.text else None
+                    
+                    # Try alternative tag names
+                    if not title:
+                        for tag_name in ['TITLE', 'TIT2']:
+                            if tag_name in audio.tags:
+                                title = str(audio.tags[tag_name].text[0])
+                                break
+                    
+                    # Try to get artist
+                    artist = None
+                    artist_tag = audio.tags.get('TPE1')
+                    if artist_tag:
+                        artist = str(artist_tag.text[0]) if artist_tag.text else None
+                    
+                    if not artist:
+                        for tag_name in ['ARTIST', 'TPE1', 'TPE2']:
+                            if tag_name in audio.tags:
+                                artist = str(audio.tags[tag_name].text[0])
+                                break
+                    
+                    return artist, title
             
-            # Try to get title
-            title = None
-            if audio.tags:
-                title_tag = audio.tags.get('TIT2')
-                if title_tag:
-                    title = str(title_tag.text[0]) if title_tag.text else None
+            # Handle FLAC files
+            elif file_ext == '.flac':
+                audio = FLAC(file_path)
                 
-                # Try alternative tag names
-                if not title:
-                    for tag_name in ['TITLE', 'TIT2']:
-                        if tag_name in audio.tags:
-                            title = str(audio.tags[tag_name].text[0])
-                            break
-                
-                # Try to get artist
-                artist = None
-                artist_tag = audio.tags.get('TPE1')
-                if artist_tag:
-                    artist = str(artist_tag.text[0]) if artist_tag.text else None
-                
-                if not artist:
-                    for tag_name in ['ARTIST', 'TPE1', 'TPE2']:
-                        if tag_name in audio.tags:
-                            artist = str(audio.tags[tag_name].text[0])
-                            break
-                
-                return artist, title
+                if audio.tags:
+                    # Get title
+                    title = None
+                    if 'TITLE' in audio.tags:
+                        title = str(audio.tags['TITLE'][0]) if audio.tags['TITLE'] else None
+                    
+                    # Get artist
+                    artist = None
+                    if 'ARTIST' in audio.tags:
+                        artist = str(audio.tags['ARTIST'][0]) if audio.tags['ARTIST'] else None
+                    elif 'ALBUMARTIST' in audio.tags:
+                        artist = str(audio.tags['ALBUMARTIST'][0]) if audio.tags['ALBUMARTIST'] else None
+                    
+                    return artist, title
             
         except ID3NoHeaderError:
             pass
@@ -663,10 +695,10 @@ class SongStyleAnalyzerGUI(BaseAudioGUI):
         for path in paths:
             # Check if it's a directory
             if os.path.isdir(path):
-                # Scan directory for MP3 files
+                # Scan directory for audio files
                 for root, dirs, files in os.walk(path):
                     for file in files:
-                        if file.lower().endswith('.mp3'):
+                        if file.lower().endswith(('.mp3', '.flac')):
                             file_path = os.path.join(root, file)
                             
                             # Check if already in list
@@ -680,7 +712,7 @@ class SongStyleAnalyzerGUI(BaseAudioGUI):
                                 
                                 self.file_listbox.insert(tk.END, file_path)
                                 added += 1
-            elif os.path.isfile(path) and path.lower().endswith('.mp3'):
+            elif os.path.isfile(path) and path.lower().endswith(('.mp3', '.flac')):
                 # Check if already in list
                 if path not in list(self.file_listbox.get(0, tk.END)):
                     # Check metadata if required
@@ -694,7 +726,7 @@ class SongStyleAnalyzerGUI(BaseAudioGUI):
                     added += 1
         
         if added > 0:
-            self.log(f"Added {added} MP3 file(s) via drag and drop")
+            self.log(f"Added {added} audio file(s) via drag and drop")
         if skipped > 0:
             self.log(f"Skipped {skipped} file(s) (no valid metadata if requirement is enabled)")
     
@@ -786,7 +818,8 @@ class SongStyleAnalyzerGUI(BaseAudioGUI):
             }
         
         # Create prompt for style analysis
-        system_message = """You are a music analysis expert specializing in extracting style information from song lyrics and metadata. 
+        system_message = """You are a music analysis expert specializing in extracting style information from song lyrics and metadata for Suno AI music generation. 
+You understand Suno's style prompt format and best practices for generating effective style keywords and negative prompts.
 Analyze the provided song information and extract detailed style characteristics including genre, mood, instrumentation, and production qualities.
 Return your analysis in a structured JSON format."""
         
@@ -803,8 +836,38 @@ Please analyze this song and provide:
 3. Mood/Valence (mood)
 4. Instrumentation (as array, e.g., ["Electric Guitar", "Drums", "Bass", "Vocals"])
 5. Production quality description
-6. A Suno-style prompt (comma-separated tags like "128 BPM, Synthwave, Retrowave, Analog Synthesizer, Male Vocals")
-7. A negative prompt (things to avoid, comma-separated)
+6. A Suno-style prompt (suno_style_prompt) - Comma-separated style keywords/phrases up to 1000 characters
+7. A negative prompt (negative_prompt) - Clear, specific things to avoid, comma-separated
+
+CRITICAL INSTRUCTIONS FOR SUNO_STYLE_PROMPT:
+- TARGET 800-1000 characters when useful - be comprehensive and detailed, don't be brief
+- Maximum 1000 characters total (use the full space if it adds value)
+- Order keywords by importance (most important first)
+- Use the Suno Prompt Formula: [Mood] + [Genre/Era] + [Key Instruments] + [Vocal Type] + [Production/Mix Tone] + [Tempo/Energy]
+- Include: BPM (if determinable), Genre/Era, Key Instruments, Vocal Type, Production/Mix Tone, Tempo/Energy
+- Use comma-separated tags/phrases (e.g., "128 BPM, Synthwave, Retrowave, Analog Synthesizer, Male Vocals, Wide Stereo, Mid-tempo")
+- Be specific: Use "80s synth-pop" not just "pop", "analog synth bass" not just "bass"
+- Include production descriptors: "lo-fi warmth", "wide stereo", "tape-saturated", "clean and modern", "stadium reverb", "vinyl crackle", "live acoustic space"
+- Include mood descriptors: "uplifting", "melancholic", "dreamy", "energetic", "nostalgic", "heartbroken", "spiritual", "reflective"
+- Include tempo/energy: "slow tempo", "mid-tempo", "fast-paced", "high-energy", "relaxed vibe"
+- Include additional details: vocal characteristics, rhythmic patterns, harmonic elements, texture descriptions, era-specific production techniques
+- DO NOT include artist names - describe their style instead
+- Expand with additional relevant descriptors to reach 800-1000 characters when the song has rich stylistic elements
+- Examples of comprehensive style prompts (aim for this level of detail):
+  * "128 BPM, Melancholic 2000s indie rock, electric guitar with clean tone, warm synth pads, subtle reverb, male lead vocals with nostalgic vocal tone, wide cinematic mix, mid-tempo, lo-fi warmth, tape-saturated production, organic textures, gentle dynamics"
+  * "Dreamy 80s synth-pop, female vocals with breathy delivery, analog synth bass with warm sub frequencies, bright arpeggiated synths, glossy retro mix with gated reverb, mid-tempo (108 BPM), nostalgic production, wide stereo imaging, analog warmth"
+  * "Gothic, Alternative Metal, Ethereal Female Voice with ethereal reverb, atmospheric synths with dark pads, distorted rhythm guitars, deep bass lines, dark production with heavy compression, slow tempo, cinematic reverb, moody textures"
+
+CRITICAL INSTRUCTIONS FOR NEGATIVE_PROMPT:
+- Be clear and specific about what to exclude
+- Use direct language: "no vocals", "avoid distorted guitars", "no heavy bass", "exclude autotune"
+- Avoid ambiguous phrasing like "without singing unless background only" or "no sounds that are bad"
+- Focus on elements that would conflict with the desired style
+- Examples of good negative prompts:
+  * "no vocals, no risers, no heavy distortion"
+  * "avoid autotune, exclude electronic drums, no synthesizers"
+  * "no rap verses, no aggressive vocals, avoid heavy bass drops"
+- If nothing specific needs to be excluded, use empty string
 
 Return ONLY valid JSON in this exact format:
 {{
@@ -817,18 +880,18 @@ Return ONLY valid JSON in this exact format:
     "instrumentation": ["Instrument1", "Instrument2"],
     "production_quality": "Production quality description"
   }},
-  "suno_style_prompt": "BPM, Genre, Instrumentation, Vocals, Mood tags",
-  "negative_prompt": "Things to avoid, comma separated"
+  "suno_style_prompt": "BPM, Genre/Era, Key Instruments, Vocal Type, Production/Mix Tone, Tempo/Energy - up to 1000 chars, important first",
+  "negative_prompt": "Clear, specific exclusions, comma-separated, or empty string if none"
 }}
 
-If information cannot be determined, use empty strings or empty arrays. Be specific and detailed."""
+If information cannot be determined, use empty strings or empty arrays. Be specific and detailed. Prioritize accuracy over completeness."""
         
         result = call_azure_ai(
             self.ai_config,
             prompt,
             system_message=system_message,
             profile='text',
-            max_tokens=2000,
+            max_tokens=3000,  # Increased to allow for longer style prompts (up to 1000 chars)
             temperature=None  # Use None to let the function handle it (will retry without if needed)
         )
         
@@ -881,19 +944,32 @@ If information cannot be determined, use empty strings or empty arrays. Be speci
         }
     
     def analyze_file(self, file_path: str) -> Optional[Dict]:
-        """Analyze a single MP3 file."""
+        """Analyze a single audio file (MP3 or FLAC)."""
         try:
             # Extract metadata
             artist, title = self.extract_metadata(file_path)
             
-            # Get file duration
+            # Get file duration and detect format
             duration = None
+            detected_format = "unknown"
+            file_ext = os.path.splitext(file_path)[1].lower()
+            
             if MUTAGEN_AVAILABLE:
                 try:
-                    audio = MP3(file_path)
-                    duration = int(audio.info.length)
+                    if file_ext == '.mp3':
+                        audio = MP3(file_path)
+                        duration = int(audio.info.length)
+                        detected_format = "mp3"
+                    elif file_ext == '.flac':
+                        audio = FLAC(file_path)
+                        duration = int(audio.info.length)
+                        detected_format = "flac"
                 except:
-                    pass
+                    # Fallback format detection from extension
+                    if file_ext == '.mp3':
+                        detected_format = "mp3"
+                    elif file_ext == '.flac':
+                        detected_format = "flac"
             
             # Validate duration
             if duration and duration < 10:
@@ -922,7 +998,7 @@ If information cannot be determined, use empty strings or empty arrays. Be speci
                 "input_metadata": {
                     "file_path": file_path,
                     "duration_seconds": duration,
-                    "detected_format": "mp3",
+                    "detected_format": detected_format,
                     "artist": artist or "Unknown",
                     "title": title or os.path.splitext(os.path.basename(file_path))[0]
                 },
@@ -1108,8 +1184,18 @@ Usage Suggestions:
   Negative Prompt: {usage_suggestions.get('negative_prompt', 'N/A')}
 """
         
-        summary_label = ttk.Label(summary_frame, text=summary_text, justify='left', font=('TkDefaultFont', 9))
-        summary_label.pack(anchor='w', padx=10, pady=10)
+        # Use Text widget with wrapping instead of Label for proper text wrapping
+        # Get the frame's background color for seamless appearance
+        try:
+            frame_bg = summary_frame.cget('background')
+        except:
+            frame_bg = 'SystemButtonFace'  # Default Windows background
+        
+        summary_text_widget = tk.Text(summary_frame, wrap=tk.WORD, font=('TkDefaultFont', 9), 
+                                     relief='flat', bg=frame_bg, 
+                                     padx=10, pady=10, state='disabled', borderwidth=0)
+        summary_text_widget.insert('1.0', summary_text)
+        summary_text_widget.pack(fill='both', expand=True, padx=10, pady=10)
         
         # Copy buttons for Usage Suggestions
         usage_button_frame = ttk.Frame(summary_frame)
