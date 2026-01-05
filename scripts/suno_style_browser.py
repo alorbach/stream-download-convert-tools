@@ -237,18 +237,109 @@ def get_ai_covers_root() -> str:
     return os.path.join(project_root, 'AI', 'AI-COVERS')
 
 
+def parse_ai_cover_name(cover_name: str) -> dict:
+    """
+    Parse AI cover name in current format: [Song Name] - [Artist] - [Epoch Year]s [3 keywords] - AI Cover
+    Also supports old formats for backward compatibility.
+    Returns dict with keys: 'artist', 'song_name', 'style', 'decade', 'full_style'
+    Falls back to extracting decade only if format doesn't match.
+    """
+    result = {
+        'artist': '',
+        'song_name': '',
+        'style': '',
+        'decade': '',
+        'full_style': ''
+    }
+    
+    if not cover_name:
+        return result
+    
+    cover_name = cover_name.strip()
+    
+    # Try to parse current format: Song Name - Artist - 1950s Style Keywords - AI Cover
+    # Pattern: Song - Artist - 1950s Style - AI Cover
+    current_format_pattern = r'^(.+?)\s+-\s+(.+?)\s+-\s+(\d{4}s)\s+(.+?)\s+-\s+AI\s+Cover$'
+    match = re.match(current_format_pattern, cover_name, re.IGNORECASE)
+    
+    if match:
+        result['song_name'] = match.group(1).strip()
+        result['artist'] = match.group(2).strip()
+        result['decade'] = match.group(3).strip()
+        result['style'] = match.group(4).strip()
+        result['full_style'] = f"{result['decade']} {result['style']}"
+        return result
+    
+    # If that doesn't work, try a more flexible approach: split by " - " and parse
+    # Split by " - " to get parts
+    parts = cover_name.split(' - ')
+    if len(parts) >= 4 and parts[-1].upper().strip() == 'AI COVER':
+        # Current format: parts[0] = Song Name, parts[1] = Artist, parts[2] = 1950s Style Keywords
+        style_match = re.match(r'^(\d{4}s)\s+(.+)$', parts[2].strip(), re.IGNORECASE)
+        if style_match:
+            result['song_name'] = parts[0].strip()
+            result['artist'] = parts[1].strip()
+            result['decade'] = style_match.group(1).strip()
+            result['style'] = style_match.group(2).strip()
+            result['full_style'] = f"{result['decade']} {result['style']}"
+            return result
+    
+    # Try previous format: Artist "Song Name" - 1950s Style Keywords - AI Cover
+    prev_format_pattern = r'^(.+?)\s+"([^"]+)"\s+-\s+(\d{4}s)\s+(.+?)\s+-\s+AI\s+Cover$'
+    match = re.match(prev_format_pattern, cover_name, re.IGNORECASE)
+    if match:
+        result['artist'] = match.group(1).strip()
+        result['song_name'] = match.group(2).strip()
+        result['decade'] = match.group(3).strip()
+        result['style'] = match.group(4).strip()
+        result['full_style'] = f"{result['decade']} {result['style']}"
+        return result
+    
+    # Try previous format with split: Artist "Song Name" - 1950s Style Keywords - AI Cover
+    if len(parts) >= 3 and parts[-1].upper().strip() == 'AI COVER':
+        artist_song_match = re.match(r'^(.+?)\s+"([^"]+)"$', parts[0].strip())
+        style_match = re.match(r'^(\d{4}s)\s+(.+)$', parts[1].strip(), re.IGNORECASE)
+        if artist_song_match and style_match:
+            result['artist'] = artist_song_match.group(1).strip()
+            result['song_name'] = artist_song_match.group(2).strip()
+            result['decade'] = style_match.group(1).strip()
+            result['style'] = style_match.group(2).strip()
+            result['full_style'] = f"{result['decade']} {result['style']}"
+            return result
+    
+    # Fallback: Try old format: 1950s Style Keywords - Artist "Song Name" AI Cover
+    old_format_pattern = r'^(\d{4}s)\s+(.+?)\s+-\s+(.+?)\s+_([^_]+)_\s+(.+)$'
+    match = re.match(old_format_pattern, cover_name)
+    if match:
+        result['decade'] = match.group(1).strip()
+        result['style'] = match.group(2).strip()
+        result['artist'] = match.group(3).strip()
+        result['song_name'] = match.group(4).strip()
+        result['full_style'] = f"{result['decade']} {result['style']}"
+        return result
+    
+    # If no format matches, just extract decade from anywhere in the string
+    decade_match = re.search(r'(\d{4}s)', cover_name)
+    if decade_match:
+        result['decade'] = decade_match.group(1)
+    
+    return result
+
+
 def extract_decade_from_cover_name(cover_name: str) -> str:
     """
-    Extract decade from AI cover name (e.g., '1930s Gritty Slide Blues...' -> '1930s').
+    Extract decade from AI cover name (supports multiple formats).
+    Current format: Song Name - Artist - 1950s Style - AI Cover
+    Previous format: Artist "Song" - 1950s Style - AI Cover
+    Old format: 1950s Style - Artist _Song_ AI Cover
     Returns empty string if no decade found.
     """
     if not cover_name:
         return ''
-    # Match pattern like "1930s", "1940s", etc. at the start
-    match = re.match(r'^(\d{4}s)', cover_name.strip())
-    if match:
-        return match.group(1)
-    return ''
+    
+    # Use the parser to extract decade
+    parsed = parse_ai_cover_name(cover_name)
+    return parsed.get('decade', '')
 
 
 def sanitize_directory_name(name: str) -> str:
@@ -1437,6 +1528,11 @@ class SunoStyleBrowser(tk.Tk):
         self.notebook.add(song_tab, text='Song Details')
         self.create_song_tab(song_tab)
         
+        # Tab 3: Album Cover Preview
+        preview_tab = ttk.Frame(self.notebook)
+        self.notebook.add(preview_tab, text='Album Cover Preview')
+        self.create_preview_tab(preview_tab)
+        
         # Status bar
         status_frame = ttk.Frame(self)
         status_frame.pack(fill=tk.X, padx=10, pady=(0, 8))
@@ -1727,13 +1823,6 @@ class SunoStyleBrowser(tk.Tk):
         self.video_loop_text = scrolledtext.ScrolledText(video_loop_frame, height=6, wrap=tk.WORD, width=60)
         self.video_loop_text.pack(fill=tk.BOTH, expand=True)
 
-        # Album Cover Preview section
-        preview_frame = ttk.LabelFrame(main_frame, text='Album Cover Preview', padding=5)
-        preview_frame.grid(row=8, column=0, columnspan=3, sticky=tk.W+tk.E, pady=(8, 0))
-        self.album_cover_photo = None
-        self.album_cover_preview = ttk.Label(preview_frame, text='No image generated yet')
-        self.album_cover_preview.pack(fill=tk.BOTH, expand=True)
-
         # Album Cover Options (size/format)
         album_cover_opts = ttk.LabelFrame(main_frame, text='Album Cover Options', padding=5)
         album_cover_opts.grid(row=9, column=0, columnspan=3, sticky=tk.W+tk.E, pady=(8, 0))
@@ -1847,6 +1936,22 @@ class SunoStyleBrowser(tk.Tk):
         main_frame.rowconfigure(4, weight=1)
         main_frame.rowconfigure(5, weight=1)
         main_frame.rowconfigure(6, weight=1)
+    
+    def create_preview_tab(self, parent):
+        """Create the album cover preview tab."""
+        main_frame = ttk.Frame(parent, padding=10)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Initialize album cover photo if not already done
+        if not hasattr(self, 'album_cover_photo'):
+            self.album_cover_photo = None
+        
+        # Album Cover Preview section
+        preview_frame = ttk.LabelFrame(main_frame, text='Album Cover Preview', padding=5)
+        preview_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+        
+        self.album_cover_preview = ttk.Label(preview_frame, text='No image generated yet')
+        self.album_cover_preview.pack(fill=tk.BOTH, expand=True)
     
     def create_ai_tab(self, parent):
         """Create the AI prompts tab."""
@@ -2625,7 +2730,7 @@ class SunoStyleBrowser(tk.Tk):
         ai_cover_name = self.ai_cover_name_var.get().strip()
         if not ai_cover_name:
             title_appendix = self.ai_config.get('general', {}).get('title_appendix', 'Cover')
-            ai_cover_name = f"{style_keywords} - {artist} _{song_name}_ {title_appendix}"
+            ai_cover_name = f'{song_name} - {artist} - {style_keywords} - {title_appendix}'
         
         # Replace template variables
         prompt = template.replace('{SONG_TITLE}', song_name)
@@ -3060,11 +3165,30 @@ class SunoStyleBrowser(tk.Tk):
         file_type_label = 'JPEG Image' if image_format == 'jpeg' else 'PNG Image'
         file_types = [(file_type_label, f'*{file_extension}'), ('All Files', '*.*')]
         
+        # Get the correct directory path based on AI cover name
+        initial_dir = None
+        if ai_cover_name:
+            song_dir = get_song_directory_path(ai_cover_name)
+            if song_dir:
+                # Create directory if it doesn't exist
+                try:
+                    os.makedirs(song_dir, exist_ok=True)
+                    initial_dir = song_dir
+                    self.log_debug('DEBUG', f'Using AI cover directory: {song_dir}')
+                except Exception as e:
+                    self.log_debug('WARNING', f'Failed to create directory {song_dir}: {e}')
+        
+        # Fallback to default save directory if no AI cover name or directory creation failed
+        if not initial_dir:
+            initial_dir = self.get_default_save_dir()
+            self.log_debug('DEBUG', f'Using default save directory: {initial_dir}')
+        
         # Ask user where to save
         filename = filedialog.asksaveasfilename(
             title='Save Generated Album Cover',
             defaultextension=file_extension,
             filetypes=file_types,
+            initialdir=initial_dir,
             initialfile=f"{safe_basename}{file_extension}"
         )
         if not filename:
@@ -3257,9 +3381,9 @@ class SunoStyleBrowser(tk.Tk):
         if ',' in style_name:
             style_name = style_name.split(',')[0].strip()
         
-        # Generate full title in the format: "1930s Smoky Lo-Fi Swing - The Chainsmokers ft. Halsey _Closer_ Cover"
+        # Generate full title in the format: "Running Up That Hill - Kate Bush - 1950s Motown Soul Groove - AI Cover"
         title_appendix = self.ai_config.get('general', {}).get('title_appendix', 'Cover')
-        title = f"{style_name} - {artist} _{song_name}_ {title_appendix}"
+        title = f'{song_name} - {artist} - {style_name} - {title_appendix}'
         
         # SEO-optimized description structure
         desc = f"TITLE: {title}\n\n"
@@ -3388,35 +3512,17 @@ class SunoStyleBrowser(tk.Tk):
             # Create directory if it doesn't exist
             os.makedirs(song_dir, exist_ok=True)
             
-            # Handle conflicts: if directory exists but JSON doesn't match, append number
-            if os.path.exists(json_path) and json_path != self.current_song_json_path:
-                # This is a different song with same name - append number
-                base_dir = song_dir
-                counter = 1
-                while os.path.exists(json_path):
-                    new_name = f"{ai_cover_name} ({counter})"
-                    song_dir = get_song_directory_path(new_name)
-                    json_path = get_song_json_path(new_name)
-                    counter += 1
-                    if counter > 100:  # Safety limit
-                        self.log_debug('ERROR', 'Too many conflicts when saving song')
-                        return False
-                # Update AI cover name in song_details
-                song_details['ai_cover_name'] = new_name
-                ai_cover_name = new_name
-                os.makedirs(song_dir, exist_ok=True)
+            # Overwrite existing song if it exists (no conflict handling - always overwrite)
+            if os.path.exists(json_path):
+                self.log_debug('INFO', f'Overwriting existing song at {json_path}')
             
-            # Save JSON file
+            # Save JSON file (will overwrite if exists)
             with open(json_path, 'w', encoding='utf-8') as f:
                 json.dump(song_details, f, indent=4)
             
             # Update tracking variables
             self.current_song_json_path = json_path
             self.current_song_directory = song_dir
-            
-            # Update UI if name changed
-            if ai_cover_name != self.ai_cover_name_var.get().strip():
-                self.ai_cover_name_var.set(ai_cover_name)
             
             # Refresh AI covers tree
             self.refresh_ai_covers_tree()

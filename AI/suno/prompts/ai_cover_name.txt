@@ -1,14 +1,14 @@
 You are a music style expert. Generate an AI Cover Name for a cover version of "{SONG_NAME}" by "{ARTIST}" using the style keywords: {STYLE_KEYWORDS}
 
-Format: [Epoch Year]s [4 keywords] - [Artist] "[Song Name]" AI Cover
+Format: [Song Name] - [Artist] - [Epoch Year]s [3 keywords] - AI Cover
 
-Example: 1930s Smoky Lo-Fi Swing - The Chainsmokers ft. Halsey "Closer" AI Cover
+Example: Running Up That Hill (A Deal With God) - Kate Bush - 1950s Motown Soul Groove - AI Cover
 
 Rules for AI Cover Name:
-- Start with era/epoch (e.g., 1930s, 1960s, 2020s) based on the style keywords
-- Add exactly 4 descriptive keywords that best capture the musical style
-- Include full artist name as provided: "{ARTIST}"
-- Include song name in quotes: "{SONG_NAME}"
+- Start with song name (no quotes): "{SONG_NAME}"
+- Add artist name: "{ARTIST}"
+- Add era/epoch (e.g., 1930s, 1960s, 2020s) based on the style keywords
+- Add exactly 3 descriptive keywords that best capture the musical style
 - End with "AI Cover"
 - Use dashes to separate sections
 - Make it catchy and descriptive of the musical transformation
@@ -17,5 +17,5 @@ OUTPUT FORMAT:
 Output ONLY the AI Cover Name in the specified format, nothing else.
 
 Example output:
-1930s Smoky Lo-Fi Swing - The Chainsmokers ft. Halsey "Closer" AI Cover
+Running Up That Hill (A Deal With God) - Kate Bush - 1950s Motown Soul Groove - AI Cover
 
