@@ -15,6 +15,37 @@ import subprocess
 from difflib import SequenceMatcher
 from PIL import Image, ImageTk, ImageDraw, ImageFont
 
+
+def enable_long_paths(path: str) -> str:
+    """
+    Enable long path support on Windows by adding the \\?\\ prefix.
+    This allows paths longer than 260 characters (MAX_PATH) to work properly.
+    
+    Args:
+        path: The file or directory path
+        
+    Returns:
+        Path with long path prefix if on Windows and path is long enough
+    """
+    if sys.platform == 'win32':
+        # Convert to absolute path and normalize
+        path = os.path.abspath(path)
+        # Check if path is already in long path format
+        if path.startswith('\\\\?\\'):
+            return path
+        # Check if path length exceeds MAX_PATH (260 chars)
+        # Use 259 to account for null terminator
+        if len(path) > 259:
+            # Add long path prefix
+            # For UNC paths, use \\?\UNC\ instead of \\?\\
+            if path.startswith('\\\\'):
+                # UNC path: \\server\share -> \\?\UNC\server\share
+                return '\\\\?\\UNC\\' + path[2:]
+            else:
+                # Regular path: C:\path -> \\?\C:\path
+                return '\\\\?\\' + path
+    return path
+
 # Try to import mutagen for MP3 duration and lyrics extraction
 try:
     from mutagen.mp3 import MP3
@@ -2131,7 +2162,8 @@ def backup_file_if_exists(file_path: str) -> str | None:
 
 def save_persona_config(persona_path: str, config: dict):
     """Save persona config.json to persona folder. Creates backup before overwriting."""
-    config_file = os.path.join(persona_path, 'config.json')
+    persona_path = enable_long_paths(persona_path)
+    config_file = enable_long_paths(os.path.join(persona_path, 'config.json'))
     try:
         os.makedirs(persona_path, exist_ok=True)
         # Create backup before overwriting
@@ -2192,7 +2224,8 @@ def load_song_config(song_path: str) -> dict:
 
 def save_song_config(song_path: str, config: dict):
     """Save song config.json to song folder."""
-    config_file = os.path.join(song_path, 'config.json')
+    song_path = enable_long_paths(song_path)
+    config_file = enable_long_paths(os.path.join(song_path, 'config.json'))
     try:
         os.makedirs(song_path, exist_ok=True)
         with open(config_file, 'w', encoding='utf-8') as f:
@@ -3215,8 +3248,9 @@ Return only the single most important keyword, nothing else. Just one word."""
                 messagebox.showerror('Error', f'Persona "{safe_name}" already exists!')
                 return
             
+            new_persona_path = enable_long_paths(new_persona_path)
             os.makedirs(new_persona_path, exist_ok=True)
-            os.makedirs(os.path.join(new_persona_path, 'AI-Songs'), exist_ok=True)
+            os.makedirs(enable_long_paths(os.path.join(new_persona_path, 'AI-Songs')), exist_ok=True)
             
             # Get default image profile
             image_profiles = self._get_available_image_profiles()
@@ -4023,6 +4057,9 @@ Return only the single most important keyword, nothing else. Just one word."""
         
         if not image_paths:
             return
+        
+        # Enable long paths for image paths
+        image_paths = [enable_long_paths(path) for path in image_paths]
         
         self.log_debug('INFO', f'Processing {len(image_paths)} reference images...')
         self.config(cursor='wait')
@@ -6513,7 +6550,7 @@ TECHNICAL REQUIREMENTS:
         if result[0]:
             safe_name = result[0].replace(':', '_').replace('/', '_').replace('\\', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace("'", '_').replace('<', '_').replace('>', '_').replace('|', '_')
             songs_dir = os.path.join(self.current_persona_path, 'AI-Songs')
-            new_song_path = os.path.join(songs_dir, safe_name)
+            new_song_path = enable_long_paths(os.path.join(songs_dir, safe_name))
             
             if os.path.exists(new_song_path):
                 messagebox.showerror('Error', f'Song "{safe_name}" already exists!')
@@ -7078,8 +7115,9 @@ TECHNICAL REQUIREMENTS:
                 messagebox.showerror('Error', 'Persona path not available.')
                 return
             
+            albums_dir = enable_long_paths(albums_dir)
             os.makedirs(albums_dir, exist_ok=True)
-            album_path = os.path.join(albums_dir, album_id)
+            album_path = enable_long_paths(os.path.join(albums_dir, album_id))
             os.makedirs(album_path, exist_ok=True)
             
             # Create songs
@@ -7088,7 +7126,7 @@ TECHNICAL REQUIREMENTS:
             
             for song_title in final_song_titles:
                 safe_name = song_title.replace(':', '_').replace('/', '_').replace('\\', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace("'", '_').replace('<', '_').replace('>', '_').replace('|', '_')
-                new_song_path = os.path.join(songs_dir, safe_name)
+                new_song_path = enable_long_paths(os.path.join(songs_dir, safe_name))
                 
                 if os.path.exists(new_song_path):
                     self.log_debug('WARNING', f'Song "{safe_name}" already exists, skipping.')
@@ -8270,7 +8308,7 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
                 if aspect_ratio_x != '1x1':
                     aspect_ratio_suffix = aspect_ratio_x
         
-        filename = os.path.join(album_path, f'{safe_basename}{aspect_ratio_suffix}.{fmt}')
+        filename = enable_long_paths(os.path.join(album_path, f'{safe_basename}{aspect_ratio_suffix}.{fmt}'))
 
         try:
             self.config(cursor='wait')
@@ -8393,7 +8431,7 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
             os.makedirs(album_path, exist_ok=True)
             
             # Save with same basename as album cover image, but as .json file with -Video suffix
-            filename = os.path.join(album_path, f'{safe_basename}-Video{aspect_ratio_suffix}.json')
+            filename = enable_long_paths(os.path.join(album_path, f'{safe_basename}-Video{aspect_ratio_suffix}.json'))
             
             # Create backup if file exists
             backup_path = self.backup_file_if_exists(filename)
@@ -13299,6 +13337,7 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
         
         if filename:
             try:
+                filename = enable_long_paths(filename)
                 with open(filename, 'wb') as f:
                     f.write(video_bytes)
                 self.log_debug('INFO', f'Video saved to {filename}')
@@ -13478,6 +13517,7 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
         
         if filename:
             try:
+                filename = enable_long_paths(filename)
                 with open(filename, 'w', encoding='utf-8') as f:
                     f.write(content)
                 self.log_debug('INFO', f'YouTube description exported to {filename}')

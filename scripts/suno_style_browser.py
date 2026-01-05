@@ -10,6 +10,38 @@ import base64
 import urllib.parse
 import glob
 import time
+import shutil
+
+
+def enable_long_paths(path: str) -> str:
+    """
+    Enable long path support on Windows by adding the \\?\\ prefix.
+    This allows paths longer than 260 characters (MAX_PATH) to work properly.
+    
+    Args:
+        path: The file or directory path
+        
+    Returns:
+        Path with long path prefix if on Windows and path is long enough
+    """
+    if sys.platform == 'win32':
+        # Convert to absolute path and normalize
+        path = os.path.abspath(path)
+        # Check if path is already in long path format
+        if path.startswith('\\\\?\\'):
+            return path
+        # Check if path length exceeds MAX_PATH (260 chars)
+        # Use 259 to account for null terminator
+        if len(path) > 259:
+            # Add long path prefix
+            # For UNC paths, use \\?\UNC\ instead of \\?\\
+            if path.startswith('\\\\'):
+                # UNC path: \\server\share -> \\?\UNC\server\share
+                return '\\\\?\\UNC\\' + path[2:]
+            else:
+                # Regular path: C:\path -> \\?\C:\path
+                return '\\\\?\\' + path
+    return path
 
 
 class ToolTip:
@@ -373,7 +405,8 @@ def get_song_directory_path(ai_cover_name: str) -> str:
         # If no decade found, use 'Unknown' as fallback
         decade = 'Unknown'
     sanitized_name = sanitize_directory_name(ai_cover_name)
-    return os.path.join(root, decade, sanitized_name)
+    path = os.path.join(root, decade, sanitized_name)
+    return enable_long_paths(path)
 
 
 def get_song_json_path(ai_cover_name: str) -> str:
@@ -385,7 +418,8 @@ def get_song_json_path(ai_cover_name: str) -> str:
         return ''
     dir_path = get_song_directory_path(ai_cover_name)
     sanitized_name = sanitize_directory_name(ai_cover_name)
-    return os.path.join(dir_path, f'{sanitized_name}.json')
+    path = os.path.join(dir_path, f'{sanitized_name}.json')
+    return enable_long_paths(path)
 
 
 def scan_ai_covers_directory() -> dict:
@@ -3074,6 +3108,7 @@ class SunoStyleBrowser(tk.Tk):
             return
 
         try:
+            filename = enable_long_paths(filename)
             with open(filename, 'wb') as f:
                 f.write(video_bytes)
             self.log_debug('INFO', f'Video saved to {filename}')
@@ -3162,43 +3197,42 @@ class SunoStyleBrowser(tk.Tk):
 
         # Determine file extension based on format
         file_extension = '.jpg' if image_format == 'jpeg' else '.png'
-        file_type_label = 'JPEG Image' if image_format == 'jpeg' else 'PNG Image'
-        file_types = [(file_type_label, f'*{file_extension}'), ('All Files', '*.*')]
         
         # Get the correct directory path based on AI cover name
-        initial_dir = None
+        save_dir = None
         if ai_cover_name:
             song_dir = get_song_directory_path(ai_cover_name)
             if song_dir:
                 # Create directory if it doesn't exist
                 try:
                     os.makedirs(song_dir, exist_ok=True)
-                    initial_dir = song_dir
+                    save_dir = song_dir
                     self.log_debug('DEBUG', f'Using AI cover directory: {song_dir}')
                 except Exception as e:
                     self.log_debug('WARNING', f'Failed to create directory {song_dir}: {e}')
         
         # Fallback to default save directory if no AI cover name or directory creation failed
-        if not initial_dir:
-            initial_dir = self.get_default_save_dir()
-            self.log_debug('DEBUG', f'Using default save directory: {initial_dir}')
+        if not save_dir:
+            save_dir = self.get_default_save_dir()
+            self.log_debug('DEBUG', f'Using default save directory: {save_dir}')
         
-        # Ask user where to save
-        filename = filedialog.asksaveasfilename(
-            title='Save Generated Album Cover',
-            defaultextension=file_extension,
-            filetypes=file_types,
-            initialdir=initial_dir,
-            initialfile=f"{safe_basename}{file_extension}"
-        )
-        if not filename:
-            self.log_debug('INFO', 'Save image canceled by user')
-            return
-
+        # Automatically generate filename
+        filename = enable_long_paths(os.path.join(save_dir, f'{safe_basename}{file_extension}'))
+        
         try:
+            # Create backup if file exists
+            backup_path = self.backup_file_if_exists(filename)
+            
+            # Save the image
             with open(filename, 'wb') as f:
                 f.write(img_bytes)
-            self.log_debug('INFO', f'Image saved to {filename}')
+            
+            success_msg = f'Album cover saved to {filename}'
+            if backup_path:
+                success_msg += f'\n\nBackup created: {os.path.basename(backup_path)}'
+            
+            self.log_debug('INFO', success_msg)
+            
             # Persist last saved image path and dir
             try:
                 song_details = self.ai_config.get('song_details', {})
@@ -3210,6 +3244,34 @@ class SunoStyleBrowser(tk.Tk):
                 self.log_debug('ERROR', f'Failed to persist last image path: {e}')
         except Exception as e:
             self.log_debug('ERROR', f'Failed to save image: {e}')
+
+    def backup_file_if_exists(self, filepath: str) -> str | None:
+        """Create a backup of a file if it exists.
+        
+        Args:
+            filepath: Path to the file to backup
+            
+        Returns:
+            Path to the backup file if backup was created, None otherwise
+        """
+        if not os.path.exists(filepath):
+            return None
+        
+        try:
+            import datetime
+            import shutil
+            # Create backup filename with timestamp
+            base, ext = os.path.splitext(filepath)
+            timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+            backup_path = f"{base}_backup_{timestamp}{ext}"
+            
+            # Copy file to backup location
+            shutil.copy2(filepath, backup_path)
+            self.log_debug('INFO', f'Created backup: {backup_path}')
+            return backup_path
+        except Exception as e:
+            self.log_debug('WARNING', f'Failed to create backup for {filepath}: {e}')
+            return None
 
     def try_load_last_album_cover(self):
         """Attempt to load last album cover image from saved path or directory."""
@@ -3315,6 +3377,7 @@ class SunoStyleBrowser(tk.Tk):
         
         if filename:
             try:
+                filename = enable_long_paths(filename)
                 with open(filename, 'w', encoding='utf-8') as f:
                     f.write(content)
                 self.log_debug('INFO', f'YouTube description exported to {filename}')
@@ -3608,6 +3671,7 @@ class SunoStyleBrowser(tk.Tk):
             return
         
         try:
+            filename = enable_long_paths(filename)
             with open(filename, 'r', encoding='utf-8') as f:
                 song_details = json.load(f)
             
