@@ -22,6 +22,7 @@ import os
 import sys
 import threading
 import subprocess
+import json
 from pathlib import Path
 from PIL import Image, ImageTk
 
@@ -87,8 +88,17 @@ class ImageFormatConverterGUI(BaseAudioGUI):
         # Video mode for MP4 output (Forward or Forward+Reverse)
         self.video_mode_var = tk.StringVar(value="forward")
         
-        # Initialize FFmpeg manager (with safe log callback)
+        # Video duration selection (in seconds)
+        self.video_duration_var = tk.StringVar(value="0")
+        self.video_max_duration = 0  # Will be set when video is selected
+        self.last_selected_video_file = None  # Track last selected video file
+        
+        # Settings file path
         root_dir = os.path.dirname(os.path.dirname(__file__))
+        self.settings_file = os.path.join(root_dir, "image_format_converter_settings.json")
+        self.settings_loaded = False  # Flag to prevent saving during load
+        
+        # Initialize FFmpeg manager (with safe log callback)
         self.ffmpeg_manager = FFmpegManager(root_dir, log_callback=lambda msg: self._safe_log(f"[FFmpeg] {msg}"))
         
         # Aspect ratio presets (width:height) with standard resolutions
@@ -119,9 +129,18 @@ class ImageFormatConverterGUI(BaseAudioGUI):
         
         self.setup_ui()
         
+        # Load saved settings
+        self.load_settings()
+        
+        # Set up auto-save for settings
+        self.setup_auto_save()
+        
         # Check FFmpeg after UI is initialized
         if not self.ffmpeg_manager.check_ffmpeg():
             self.log("[WARNING] FFmpeg not found. Video conversion will not be available.")
+        
+        # Save settings on window close
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
     
     def setup_ui(self):
         # File selection frame
@@ -228,6 +247,15 @@ class ImageFormatConverterGUI(BaseAudioGUI):
         ttk.Radiobutton(self.video_mode_frame, text="Forward+Reverse", variable=self.video_mode_var, value="forward_reverse").pack(side='left', padx=5)
         self.video_mode_frame.grid_remove()  # Hidden by default
         
+        # Video duration selector (only visible when video file is selected and MP4 is output format)
+        self.video_duration_frame = ttk.Frame(settings_frame)
+        self.video_duration_frame.grid(row=7, column=0, columnspan=3, sticky='w', pady=5)
+        ttk.Label(self.video_duration_frame, text="Use Duration (seconds):").pack(side='left', padx=5)
+        self.duration_spinbox = ttk.Spinbox(self.video_duration_frame, from_=0, to=1000, textvariable=self.video_duration_var, width=10)
+        self.duration_spinbox.pack(side='left', padx=5)
+        ttk.Label(self.video_duration_frame, text="(0 = use full video)", foreground="gray").pack(side='left', padx=5)
+        self.video_duration_frame.grid_remove()  # Hidden by default
+        
         # Input format detection display
         ttk.Label(settings_frame, text="Input Format:").grid(row=6, column=0, sticky='w', pady=5)
         self.input_format_label = ttk.Label(settings_frame, text="No file selected", foreground="gray")
@@ -267,8 +295,35 @@ class ImageFormatConverterGUI(BaseAudioGUI):
         """Show/hide video mode options based on output format"""
         if self.output_format_var.get() == "MP4":
             self.video_mode_frame.grid()
+            # Show duration selector if we have a video file (either selected or last selected)
+            video_file = None
+            selection = self.file_listbox.curselection()
+            if selection:
+                idx = selection[0]
+                if idx < len(self.selected_files):
+                    file_path = self.selected_files[idx]
+                    if self.is_video_file(file_path):
+                        video_file = file_path
+            elif self.last_selected_video_file:
+                # Use last selected video file even if listbox lost focus
+                video_file = self.last_selected_video_file
+            
+            if video_file:
+                duration = self.get_video_duration(video_file)
+                if duration:
+                    self.video_max_duration = int(duration)
+                    self.duration_spinbox.config(to=self.video_max_duration)
+                    # Only reset if this is a different file
+                    if video_file != self.last_selected_video_file:
+                        self.video_duration_var.set("0")
+                    self.video_duration_frame.grid()
+                else:
+                    self.video_duration_frame.grid_remove()
+            else:
+                self.video_duration_frame.grid_remove()
         else:
             self.video_mode_frame.grid_remove()
+            self.video_duration_frame.grid_remove()
     
     def on_aspect_ratio_change(self, event=None):
         ratio_name = self.aspect_ratio_var.get()
@@ -326,6 +381,33 @@ class ImageFormatConverterGUI(BaseAudioGUI):
             self.log(f"[WARNING] Could not get resolution for {os.path.basename(video_file)}: {e}")
             return None, None
     
+    def get_video_duration(self, video_file):
+        """Get video duration in seconds from video file."""
+        try:
+            ffmpeg_cmd = self.ffmpeg_manager.get_ffmpeg_command()
+            probe_cmd = [ffmpeg_cmd, '-i', video_file, '-f', 'null', '-']
+            probe_result = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=10)
+            
+            for line in probe_result.stderr.split('\n'):
+                if 'Duration:' in line:
+                    try:
+                        # Extract duration string like "00:00:06.00"
+                        duration_str = line.split('Duration:')[1].split(',')[0].strip()
+                        # Parse HH:MM:SS.mmm format
+                        time_parts = duration_str.split(':')
+                        if len(time_parts) == 3:
+                            hours = float(time_parts[0])
+                            minutes = float(time_parts[1])
+                            seconds = float(time_parts[2])
+                            total_seconds = hours * 3600 + minutes * 60 + seconds
+                            return total_seconds
+                    except Exception as e:
+                        pass
+            return None
+        except Exception as e:
+            self.log(f"[WARNING] Could not get duration for {os.path.basename(video_file)}: {e}")
+            return None
+    
     def on_file_selection_change(self, event=None):
         selection = self.file_listbox.curselection()
         if selection:
@@ -336,15 +418,36 @@ class ImageFormatConverterGUI(BaseAudioGUI):
                     if self.is_video_file(file_path):
                         # Handle video file
                         width, height = self.get_video_resolution(file_path)
+                        duration = self.get_video_duration(file_path)
                         if width and height:
                             aspect_ratio = width / height if height > 0 else 0
                             ext = os.path.splitext(file_path)[1].upper().replace('.', '')
+                            duration_text = f" - {duration:.2f}s" if duration else ""
                             self.input_format_label.config(
-                                text=f"Video ({ext}) - {width}x{height} ({aspect_ratio:.2f}:1)",
+                                text=f"Video ({ext}) - {width}x{height} ({aspect_ratio:.2f}:1){duration_text}",
                                 foreground="black"
                             )
+                            
+                            # Check if this is a different video file before updating
+                            is_different_file = (file_path != self.last_selected_video_file)
+                            
+                            # Store this as the last selected video file
+                            self.last_selected_video_file = file_path
+                            
+                            # Update duration selector if MP4 output is selected
+                            if self.output_format_var.get() == "MP4" and duration:
+                                self.video_max_duration = int(duration)
+                                self.duration_spinbox.config(to=self.video_max_duration)
+                                # Only reset duration if this is a different video file
+                                if is_different_file:
+                                    self.video_duration_var.set("0")  # Reset to full video
+                                self.video_duration_frame.grid()
+                            else:
+                                self.video_duration_frame.grid_remove()
                         else:
                             self.input_format_label.config(text=f"Video - Unable to read resolution", foreground="orange")
+                            self.last_selected_video_file = None
+                            self.video_duration_frame.grid_remove()
                     else:
                         # Handle image file
                         with Image.open(file_path) as img:
@@ -355,10 +458,37 @@ class ImageFormatConverterGUI(BaseAudioGUI):
                                 text=f"{format_name} - {width}x{height} ({aspect_ratio:.2f}:1)",
                                 foreground="black"
                             )
+                        # Hide duration selector for images
+                        self.last_selected_video_file = None
+                        self.video_duration_frame.grid_remove()
                 except Exception as e:
                     self.input_format_label.config(text=f"Error reading file: {str(e)}", foreground="red")
+                    self.last_selected_video_file = None
+                    self.video_duration_frame.grid_remove()
         else:
-            self.input_format_label.config(text="No file selected", foreground="gray")
+            # No selection in listbox - but keep duration selector visible if we have a video file and MP4 output
+            if self.last_selected_video_file and self.output_format_var.get() == "MP4":
+                # Keep the duration selector visible - don't hide it when listbox loses focus
+                # Only update the label if it's not already showing video info
+                if "Video" not in self.input_format_label.cget("text"):
+                    # Try to get info from last selected video file
+                    try:
+                        if os.path.exists(self.last_selected_video_file):
+                            width, height = self.get_video_resolution(self.last_selected_video_file)
+                            duration = self.get_video_duration(self.last_selected_video_file)
+                            if width and height:
+                                aspect_ratio = width / height if height > 0 else 0
+                                ext = os.path.splitext(self.last_selected_video_file)[1].upper().replace('.', '')
+                                duration_text = f" - {duration:.2f}s" if duration else ""
+                                self.input_format_label.config(
+                                    text=f"Video ({ext}) - {width}x{height} ({aspect_ratio:.2f}:1){duration_text}",
+                                    foreground="black"
+                                )
+                    except:
+                        pass
+            else:
+                self.input_format_label.config(text="No file selected", foreground="gray")
+                self.video_duration_frame.grid_remove()
     
     def select_files(self):
         files = filedialog.askopenfilenames(
@@ -391,8 +521,10 @@ class ImageFormatConverterGUI(BaseAudioGUI):
     
     def clear_selection(self):
         self.selected_files.clear()
+        self.last_selected_video_file = None
         self.update_file_list()
         self.input_format_label.config(text="No file selected", foreground="gray")
+        self.video_duration_frame.grid_remove()
         self.log("[INFO] Selection cleared")
     
     def update_file_list(self):
@@ -737,18 +869,49 @@ class ImageFormatConverterGUI(BaseAudioGUI):
             # Get video mode for MP4 output
             video_mode = self.video_mode_var.get() if output_format == "MP4" else "forward"
             
+            # Get selected duration (0 means use full video)
+            try:
+                selected_duration = float(self.video_duration_var.get())
+                if selected_duration <= 0:
+                    selected_duration = None  # Use full video
+            except:
+                selected_duration = None
+            
             if video_mode == "forward_reverse":
                 # Create forward-reverse video
                 temp_video = os.path.join(os.path.dirname(output_path), f"temp_forward_reverse_{os.path.basename(output_path)}")
                 
                 # Step 1: Create forward-reverse segment
-                temp_cmd = [ffmpeg_cmd, '-y', '-i', input_path,
-                           '-filter_complex', 
-                           f'[0:v]{scale_filter}[v_scaled];[0:v]{scale_filter}[v_scaled2];[v_scaled2]reverse[v_rev];[v_scaled][v_rev]concat=n=2:v=1:a=0[v_final]',
-                           '-map', '[v_final]']
+                temp_cmd = [ffmpeg_cmd, '-y', '-i', input_path]
                 
-                # Copy audio from first input (forward part)
+                # Build filter complex: forward segment + reverse segment
+                # If duration is specified, use trim filter to limit input within the filter complex
+                # This ensures the output duration is not limited by -t parameter
+                if selected_duration:
+                    # Use trim filter to limit input to selected_duration, then create forward+reverse
+                    # The trim happens inside the filter, so output can be longer than input
+                    filter_complex = (
+                        f'[0:v]trim=duration={selected_duration},setpts=PTS-STARTPTS,{scale_filter}[v_forward];'
+                        f'[0:v]trim=duration={selected_duration},setpts=PTS-STARTPTS,{scale_filter},reverse[v_reverse];'
+                        f'[v_forward][v_reverse]concat=n=2:v=1:a=0[v_final]'
+                    )
+                else:
+                    # No duration limit - use full video
+                    filter_complex = (
+                        f'[0:v]{scale_filter}[v_scaled];'
+                        f'[0:v]{scale_filter}[v_scaled2];'
+                        f'[v_scaled2]reverse[v_rev];'
+                        f'[v_scaled][v_rev]concat=n=2:v=1:a=0[v_final]'
+                    )
+                
+                temp_cmd.extend(['-filter_complex', filter_complex, '-map', '[v_final]'])
+                
+                # Handle audio: for forward+reverse, we want audio only for the forward part
+                # If duration is specified, trim audio to that duration
+                if selected_duration:
+                    temp_cmd.extend(['-filter:a', f'atrim=duration={selected_duration},asetpts=PTS-STARTPTS'])
                 temp_cmd.extend(['-map', '0:a?'])
+                
                 temp_cmd.extend(['-c:v', 'libx264', '-preset', 'medium', '-crf', '23'])
                 temp_cmd.extend(['-c:a', 'aac', '-b:a', '192k'])
                 temp_cmd.append(temp_video)
@@ -778,6 +941,10 @@ class ImageFormatConverterGUI(BaseAudioGUI):
                 # Forward only
                 # Build FFmpeg command
                 cmd = [ffmpeg_cmd, '-i', input_path, '-vf', scale_filter]
+                
+                # Add duration limit if specified
+                if selected_duration:
+                    cmd.extend(['-t', str(selected_duration)])
                 
                 # Set output format and codec (videos always output as MP4)
                 cmd.extend(['-c:v', 'libx264', '-preset', 'medium', '-crf', '23'])
@@ -931,6 +1098,90 @@ class ImageFormatConverterGUI(BaseAudioGUI):
         else:
             self.root.config(cursor="")
             self.progress_label.config(text="")
+    
+    def load_settings(self):
+        """Load saved settings from JSON file"""
+        try:
+            if os.path.exists(self.settings_file):
+                with open(self.settings_file, 'r', encoding='utf-8') as f:
+                    settings = json.load(f)
+                    
+                # Load aspect ratio
+                if 'aspect_ratio' in settings:
+                    aspect_ratio = settings['aspect_ratio']
+                    if aspect_ratio in self.aspect_ratios:
+                        self.aspect_ratio_var.set(aspect_ratio)
+                    else:
+                        # Try to parse custom ratio
+                        if 'custom_width' in settings and 'custom_height' in settings:
+                            self.custom_width_var.set(str(settings['custom_width']))
+                            self.custom_height_var.set(str(settings['custom_height']))
+                
+                # Load custom ratio
+                if 'custom_width' in settings:
+                    self.custom_width_var.set(str(settings['custom_width']))
+                if 'custom_height' in settings:
+                    self.custom_height_var.set(str(settings['custom_height']))
+                
+                # Load crop position
+                if 'crop_position' in settings:
+                    self.crop_position_var.set(settings['crop_position'])
+                
+                # Load output format
+                if 'output_format' in settings:
+                    self.output_format_var.set(settings['output_format'])
+                
+                # Load video mode
+                if 'video_mode' in settings:
+                    self.video_mode_var.set(settings['video_mode'])
+                
+                # Load video duration
+                if 'video_duration' in settings:
+                    self.video_duration_var.set(str(settings['video_duration']))
+                
+                self.log("[INFO] Settings loaded from file")
+        except Exception as e:
+            self.log(f"[WARNING] Could not load settings: {e}")
+        finally:
+            self.settings_loaded = True
+    
+    def save_settings(self):
+        """Save current settings to JSON file"""
+        # Don't save during initial load
+        if not self.settings_loaded:
+            return
+        
+        try:
+            settings = {
+                'aspect_ratio': self.aspect_ratio_var.get(),
+                'custom_width': self.custom_width_var.get(),
+                'custom_height': self.custom_height_var.get(),
+                'crop_position': self.crop_position_var.get(),
+                'output_format': self.output_format_var.get(),
+                'video_mode': self.video_mode_var.get(),
+                'video_duration': self.video_duration_var.get()
+            }
+            
+            with open(self.settings_file, 'w', encoding='utf-8') as f:
+                json.dump(settings, f, indent=2)
+        except Exception as e:
+            self.log(f"[WARNING] Could not save settings: {e}")
+    
+    def setup_auto_save(self):
+        """Set up automatic saving when settings change"""
+        # Trace changes to all setting variables
+        self.aspect_ratio_var.trace('w', lambda *args: self.save_settings())
+        self.custom_width_var.trace('w', lambda *args: self.save_settings())
+        self.custom_height_var.trace('w', lambda *args: self.save_settings())
+        self.crop_position_var.trace('w', lambda *args: self.save_settings())
+        self.output_format_var.trace('w', lambda *args: self.save_settings())
+        self.video_mode_var.trace('w', lambda *args: self.save_settings())
+        self.video_duration_var.trace('w', lambda *args: self.save_settings())
+    
+    def on_closing(self):
+        """Handle window closing - save settings and destroy window"""
+        self.save_settings()
+        self.root.destroy()
 
 
 def main():
