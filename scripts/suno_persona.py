@@ -119,26 +119,39 @@ def get_config_path() -> str:
     return os.path.join(script_dir, 'suno_persona_config.json')
 
 
-def resolve_personas_path() -> str:
-    """Resolve default Personas path in AI/Personas/ relative to project root."""
+def get_project_root(config: dict = None) -> str:
+    """
+    Get the project root directory.
+    If config is provided and contains a base_path setting, use that.
+    Otherwise, calculate from script location.
+    """
+    if config:
+        base_path = config.get('general', {}).get('base_path', '').strip()
+        if base_path and os.path.exists(base_path) and os.path.isdir(base_path):
+            return os.path.abspath(base_path)
+    
+    # Fall back to calculated path
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.abspath(os.path.join(script_dir, os.pardir))
+    return os.path.abspath(os.path.join(script_dir, os.pardir))
+
+
+def resolve_personas_path(config: dict = None) -> str:
+    """Resolve default Personas path in AI/Personas/ relative to project root."""
+    project_root = get_project_root(config)
     default_path = os.path.join(project_root, 'AI', 'Personas')
     return default_path
 
 
-def resolve_prompts_path() -> str:
+def resolve_prompts_path(config: dict = None) -> str:
     """Resolve default prompts path in AI/suno/prompts/ relative to project root."""
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.abspath(os.path.join(script_dir, os.pardir))
+    project_root = get_project_root(config)
     default_path = os.path.join(project_root, 'AI', 'suno', 'prompts')
     return default_path
 
 
-def resolve_styles_csv_path() -> str:
+def resolve_styles_csv_path(config: dict = None) -> str:
     """Resolve default styles CSV path in AI/suno/suno_sound_styles.csv relative to project root."""
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.abspath(os.path.join(script_dir, os.pardir))
+    project_root = get_project_root(config)
     return os.path.join(project_root, 'AI', 'suno', 'suno_sound_styles.csv')
 
 
@@ -153,14 +166,13 @@ def get_styles_csv_path(config: dict) -> str:
     if os.path.isabs(csv_path) and os.path.exists(csv_path):
         return csv_path
 
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.abspath(os.path.join(script_dir, os.pardir))
+    project_root = get_project_root(config)
     candidate = os.path.join(project_root, csv_path)
 
     if os.path.exists(candidate):
         return candidate
 
-    return resolve_styles_csv_path()
+    return resolve_styles_csv_path(config)
 
 
 def load_styles_from_csv(csv_path: str) -> list[dict]:
@@ -183,6 +195,7 @@ def load_config() -> dict:
     config_path = get_config_path()
     default_config = {
         "general": {
+            "base_path": "",
             "personas_path": "AI/Personas",
             "default_save_path": "",
             "styles_csv_path": "AI/suno/suno_sound_styles.csv"
@@ -272,19 +285,18 @@ def get_personas_path(config: dict) -> str:
     if os.path.isabs(personas_path) and os.path.exists(personas_path):
         return personas_path
     
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.abspath(os.path.join(script_dir, os.pardir))
+    project_root = get_project_root(config)
     full_path = os.path.join(project_root, personas_path)
     
     if os.path.exists(full_path):
         return full_path
     
-    return resolve_personas_path()
+    return resolve_personas_path(config)
 
 
-def get_prompt_template(template_name: str) -> str:
+def get_prompt_template(template_name: str, config: dict = None) -> str:
     """Get prompt template by name from file system."""
-    prompts_dir = resolve_prompts_path()
+    prompts_dir = resolve_prompts_path(config)
     template_file = os.path.join(prompts_dir, f'{template_name}.txt')
     
     try:
@@ -1314,19 +1326,27 @@ class SettingsDialog(tk.Toplevel):
         general_data = self.config.get('general', {})
         self.general_vars = {}
         
-        ttk.Label(general_frame, text='Personas Directory:', font=('TkDefaultFont', 9, 'bold')).grid(row=0, column=0, sticky=tk.W, pady=(5, 2), columnspan=3)
-        ttk.Label(general_frame, text='Path:', font=('TkDefaultFont', 8)).grid(row=1, column=0, sticky=tk.W, pady=5, padx=(10, 0))
+        # Base Path
+        ttk.Label(general_frame, text='Base Path:', font=('TkDefaultFont', 9, 'bold')).grid(row=0, column=0, sticky=tk.W, pady=(5, 2), columnspan=3)
+        ttk.Label(general_frame, text='Project root directory (leave empty to auto-detect):', font=('TkDefaultFont', 8)).grid(row=1, column=0, sticky=tk.W, pady=5, padx=(10, 0))
+        self.general_vars['base_path'] = tk.StringVar(value=general_data.get('base_path', ''))
+        base_path_entry = ttk.Entry(general_frame, textvariable=self.general_vars['base_path'], width=40)
+        base_path_entry.grid(row=1, column=1, pady=5, padx=5, sticky=tk.W)
+        ttk.Button(general_frame, text='Browse...', command=self.browse_base_path).grid(row=1, column=2, pady=5, padx=5)
+        
+        ttk.Label(general_frame, text='Personas Directory:', font=('TkDefaultFont', 9, 'bold')).grid(row=2, column=0, sticky=tk.W, pady=(15, 2), columnspan=3)
+        ttk.Label(general_frame, text='Path:', font=('TkDefaultFont', 8)).grid(row=3, column=0, sticky=tk.W, pady=5, padx=(10, 0))
         self.general_vars['personas_path'] = tk.StringVar(value=general_data.get('personas_path', 'AI/Personas'))
         path_entry = ttk.Entry(general_frame, textvariable=self.general_vars['personas_path'], width=40)
-        path_entry.grid(row=1, column=1, pady=5, padx=5, sticky=tk.W)
-        ttk.Button(general_frame, text='Browse...', command=self.browse_personas_path).grid(row=1, column=2, pady=5, padx=5)
+        path_entry.grid(row=3, column=1, pady=5, padx=5, sticky=tk.W)
+        ttk.Button(general_frame, text='Browse...', command=self.browse_personas_path).grid(row=3, column=2, pady=5, padx=5)
 
-        ttk.Label(general_frame, text='Styles CSV (for style picker):', font=('TkDefaultFont', 9, 'bold')).grid(row=2, column=0, sticky=tk.W, pady=(10, 2), columnspan=3)
-        ttk.Label(general_frame, text='Path:', font=('TkDefaultFont', 8)).grid(row=3, column=0, sticky=tk.W, pady=5, padx=(10, 0))
+        ttk.Label(general_frame, text='Styles CSV (for style picker):', font=('TkDefaultFont', 9, 'bold')).grid(row=4, column=0, sticky=tk.W, pady=(15, 2), columnspan=3)
+        ttk.Label(general_frame, text='Path:', font=('TkDefaultFont', 8)).grid(row=5, column=0, sticky=tk.W, pady=5, padx=(10, 0))
         self.general_vars['styles_csv_path'] = tk.StringVar(value=general_data.get('styles_csv_path', 'AI/suno/suno_sound_styles.csv'))
         styles_entry = ttk.Entry(general_frame, textvariable=self.general_vars['styles_csv_path'], width=40)
-        styles_entry.grid(row=3, column=1, pady=5, padx=5, sticky=tk.W)
-        ttk.Button(general_frame, text='Browse...', command=self.browse_styles_csv).grid(row=3, column=2, pady=5, padx=5)
+        styles_entry.grid(row=5, column=1, pady=5, padx=5, sticky=tk.W)
+        ttk.Button(general_frame, text='Browse...', command=self.browse_styles_csv).grid(row=5, column=2, pady=5, padx=5)
         
         profiles = self.config.get('profiles', {})
         
@@ -1412,9 +1432,20 @@ class SettingsDialog(tk.Toplevel):
         ttk.Button(btn_frame, text='Save', command=self.save_settings).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_frame, text='Cancel', command=self.destroy).pack(side=tk.LEFT, padx=5)
     
+    def browse_base_path(self):
+        """Browse for a base path directory."""
+        current = self.general_vars['base_path'].get()
+        initial_dir = current if current and os.path.exists(current) else os.getcwd()
+        
+        path = filedialog.askdirectory(
+            title='Select Base Path (Project Root)',
+            initialdir=initial_dir
+        )
+        if path:
+            self.general_vars['base_path'].set(path)
+    
     def browse_personas_path(self):
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        project_root = os.path.abspath(os.path.join(script_dir, os.pardir))
+        project_root = get_project_root(self.config)
         initial_dir = os.path.join(project_root, 'AI', 'Personas')
         
         if not os.path.exists(initial_dir):
@@ -1436,8 +1467,7 @@ class SettingsDialog(tk.Toplevel):
                 self.general_vars['personas_path'].set(path)
 
     def browse_styles_csv(self):
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        project_root = os.path.abspath(os.path.join(script_dir, os.pardir))
+        project_root = get_project_root(self.config)
         initial_dir = os.path.join(project_root, 'AI', 'suno')
 
         if not os.path.exists(initial_dir):
@@ -1579,6 +1609,7 @@ class SettingsDialog(tk.Toplevel):
     
     def save_settings(self):
         general = {
+            'base_path': self.general_vars['base_path'].get(),
             'personas_path': self.general_vars['personas_path'].get(),
             'default_save_path': self.config.get('general', {}).get('default_save_path', ''),
             'styles_csv_path': self.general_vars['styles_csv_path'].get()
@@ -9284,7 +9315,7 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
             "=== END PHRASE MIXING ===\n"
         )
 
-        template = get_prompt_template('merge_styles')
+        template = get_prompt_template('merge_styles', self.ai_config)
         if template:
             # Override template's default prioritization with weighted approach
             # Let the AI decide how to mix based on the percentages
@@ -13531,7 +13562,7 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
         if style_name and ',' in style_name:
             style_name = style_name.split(',')[0].strip()
         
-        template = get_prompt_template('youtube_hashtags')
+        template = get_prompt_template('youtube_hashtags', self.ai_config)
         if not template:
             self.log_debug('ERROR', 'Failed to load youtube_hashtags template')
             return self._generate_fallback_hashtags(song_name, persona_name, style_name)

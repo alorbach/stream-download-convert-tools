@@ -216,10 +216,25 @@ class ImprovedPromptResultDialog(tk.Toplevel):
         self.destroy()
 
 
-def resolve_csv_path() -> str:
-    """Resolve default CSV path in AI/suno/suno_sound_styles.csv relative to project root."""
+def get_project_root(config: dict = None) -> str:
+    """
+    Get the project root directory.
+    If config is provided and contains a base_path setting, use that.
+    Otherwise, calculate from script location.
+    """
+    if config:
+        base_path = config.get('general', {}).get('base_path', '').strip()
+        if base_path and os.path.exists(base_path) and os.path.isdir(base_path):
+            return os.path.abspath(base_path)
+    
+    # Fall back to calculated path
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.abspath(os.path.join(script_dir, os.pardir))
+    return os.path.abspath(os.path.join(script_dir, os.pardir))
+
+
+def resolve_csv_path(config: dict = None) -> str:
+    """Resolve default CSV path in AI/suno/suno_sound_styles.csv relative to project root."""
+    project_root = get_project_root(config)
     default_path = os.path.join(project_root, 'AI', 'suno', 'suno_sound_styles.csv')
     return default_path
 
@@ -230,10 +245,9 @@ def get_config_path() -> str:
     return os.path.join(script_dir, 'suno_style_browser_config.json')
 
 
-def resolve_prompts_path() -> str:
+def resolve_prompts_path(config: dict = None) -> str:
     """Resolve default prompts path in AI/suno/prompts/ relative to project root."""
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.abspath(os.path.join(script_dir, os.pardir))
+    project_root = get_project_root(config)
     default_path = os.path.join(project_root, 'AI', 'suno', 'prompts')
     return default_path
 
@@ -250,8 +264,7 @@ def get_csv_file_path(config: dict) -> str:
         return csv_file
     
     # Try it as a filename in the AI/suno directory
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.abspath(os.path.join(script_dir, os.pardir))
+    project_root = get_project_root(config)
     suno_dir = os.path.join(project_root, 'AI', 'suno')
     full_path = os.path.join(suno_dir, csv_file)
     
@@ -259,14 +272,13 @@ def get_csv_file_path(config: dict) -> str:
         return full_path
     
     # Fall back to default
-    return resolve_csv_path()
+    return resolve_csv_path(config)
 
 
-def get_ai_covers_root() -> str:
-    """Get the path to AI/AI-COVERS directory relative to project root."""
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.abspath(os.path.join(script_dir, os.pardir))
-    return os.path.join(project_root, 'AI', 'AI-COVERS')
+def get_ai_covers_root(config: dict = None) -> str:
+    """Get the path to AI-COVERS directory relative to project root."""
+    project_root = get_project_root(config)
+    return os.path.join(project_root, 'AI-COVERS')
 
 
 def parse_ai_cover_name(cover_name: str) -> dict:
@@ -392,14 +404,14 @@ def sanitize_directory_name(name: str) -> str:
     return sanitized
 
 
-def get_song_directory_path(ai_cover_name: str) -> str:
+def get_song_directory_path(ai_cover_name: str, config: dict = None) -> str:
     """
     Get the full directory path for a song based on its AI cover name.
-    Creates directory structure: AI/AI-COVERS/{decade}/{sanitized_cover_name}/
+    Creates directory structure: AI-COVERS/{decade}/{sanitized_cover_name}/
     """
     if not ai_cover_name:
         return ''
-    root = get_ai_covers_root()
+    root = get_ai_covers_root(config)
     decade = extract_decade_from_cover_name(ai_cover_name)
     if not decade:
         # If no decade found, use 'Unknown' as fallback
@@ -409,25 +421,25 @@ def get_song_directory_path(ai_cover_name: str) -> str:
     return enable_long_paths(path)
 
 
-def get_song_json_path(ai_cover_name: str) -> str:
+def get_song_json_path(ai_cover_name: str, config: dict = None) -> str:
     """
     Get the JSON file path for a song based on its AI cover name.
-    Returns path like: AI/AI-COVERS/{decade}/{sanitized_cover_name}/{sanitized_cover_name}.json
+    Returns path like: AI-COVERS/{decade}/{sanitized_cover_name}/{sanitized_cover_name}.json
     """
     if not ai_cover_name:
         return ''
-    dir_path = get_song_directory_path(ai_cover_name)
+    dir_path = get_song_directory_path(ai_cover_name, config)
     sanitized_name = sanitize_directory_name(ai_cover_name)
     path = os.path.join(dir_path, f'{sanitized_name}.json')
     return enable_long_paths(path)
 
 
-def scan_ai_covers_directory() -> dict:
+def scan_ai_covers_directory(config: dict = None) -> dict:
     """
-    Scan the AI/AI-COVERS directory and return structure: {decade: [song_info_dicts...]}
+    Scan the AI-COVERS directory and return structure: {decade: [song_info_dicts...]}
     Each song_info_dict contains: 'directory', 'json_path', 'ai_cover_name', 'song_name', 'artist'
     """
-    root = get_ai_covers_root()
+    root = get_ai_covers_root(config)
     structure = {}
     
     if not os.path.exists(root):
@@ -484,6 +496,7 @@ def load_config() -> dict:
     config_path = get_config_path()
     default_config = {
         "general": {
+            "base_path": "",
             "csv_file_path": "suno/suno_sound_styles.csv",
             "default_save_path": "",
             "title_appendix": "Cover"
@@ -611,9 +624,9 @@ def load_styles(csv_path: str):
     return styles
 
 
-def get_prompt_template(template_name: str) -> str:
+def get_prompt_template(template_name: str, config: dict = None) -> str:
     """Get prompt template by name from file system."""
-    prompts_dir = resolve_prompts_path()
+    prompts_dir = resolve_prompts_path(config)
     template_file = os.path.join(prompts_dir, f'{template_name}.txt')
     
     try:
@@ -1208,31 +1221,39 @@ class SettingsDialog(tk.Toplevel):
         general_data = self.config.get('general', {})
         self.general_vars = {}
         
+        # Base Path
+        ttk.Label(general_frame, text='Base Path:', font=('TkDefaultFont', 9, 'bold')).grid(row=0, column=0, sticky=tk.W, pady=(5, 2), columnspan=3)
+        ttk.Label(general_frame, text='Project root directory (leave empty to auto-detect):', font=('TkDefaultFont', 8)).grid(row=1, column=0, sticky=tk.W, pady=5, padx=(10, 0))
+        self.general_vars['base_path'] = tk.StringVar(value=general_data.get('base_path', ''))
+        base_path_entry = ttk.Entry(general_frame, textvariable=self.general_vars['base_path'], width=40)
+        base_path_entry.grid(row=1, column=1, pady=5, padx=5, sticky=tk.W)
+        ttk.Button(general_frame, text='Browse...', command=self.browse_base_path).grid(row=1, column=2, pady=5, padx=5)
+        
         # CSV File Path
-        ttk.Label(general_frame, text='Suno Styles CSV File:', font=('TkDefaultFont', 9, 'bold')).grid(row=0, column=0, sticky=tk.W, pady=(5, 2), columnspan=3)
-        ttk.Label(general_frame, text='Filename:', font=('TkDefaultFont', 8)).grid(row=1, column=0, sticky=tk.W, pady=5, padx=(10, 0))
+        ttk.Label(general_frame, text='Suno Styles CSV File:', font=('TkDefaultFont', 9, 'bold')).grid(row=2, column=0, sticky=tk.W, pady=(15, 2), columnspan=3)
+        ttk.Label(general_frame, text='Filename:', font=('TkDefaultFont', 8)).grid(row=3, column=0, sticky=tk.W, pady=5, padx=(10, 0))
         self.general_vars['csv_file_path'] = tk.StringVar(value=general_data.get('csv_file_path', 'suno_sound_styles.csv'))
         csv_entry = ttk.Entry(general_frame, textvariable=self.general_vars['csv_file_path'], width=40)
-        csv_entry.grid(row=1, column=1, pady=5, padx=5, sticky=tk.W)
-        ttk.Button(general_frame, text='Browse...', command=self.browse_csv).grid(row=1, column=2, pady=5, padx=5)
+        csv_entry.grid(row=3, column=1, pady=5, padx=5, sticky=tk.W)
+        ttk.Button(general_frame, text='Browse...', command=self.browse_csv).grid(row=3, column=2, pady=5, padx=5)
         
         # Default Save Path
-        ttk.Label(general_frame, text='Default Save Location:', font=('TkDefaultFont', 9, 'bold')).grid(row=2, column=0, sticky=tk.W, pady=(15, 2), columnspan=3)
-        ttk.Label(general_frame, text='Path:', font=('TkDefaultFont', 8)).grid(row=3, column=0, sticky=tk.W, pady=5, padx=(10, 0))
+        ttk.Label(general_frame, text='Default Save Location:', font=('TkDefaultFont', 9, 'bold')).grid(row=4, column=0, sticky=tk.W, pady=(15, 2), columnspan=3)
+        ttk.Label(general_frame, text='Path:', font=('TkDefaultFont', 8)).grid(row=5, column=0, sticky=tk.W, pady=5, padx=(10, 0))
         self.general_vars['default_save_path'] = tk.StringVar(value=general_data.get('default_save_path', ''))
         save_path_entry = ttk.Entry(general_frame, textvariable=self.general_vars['default_save_path'], width=40)
-        save_path_entry.grid(row=3, column=1, pady=5, padx=5, sticky=tk.W)
-        ttk.Button(general_frame, text='Browse...', command=self.browse_save_path).grid(row=3, column=2, pady=5, padx=5)
+        save_path_entry.grid(row=5, column=1, pady=5, padx=5, sticky=tk.W)
+        ttk.Button(general_frame, text='Browse...', command=self.browse_save_path).grid(row=5, column=2, pady=5, padx=5)
         
         ttk.Label(general_frame, text='Note: Leave empty to use current working directory', 
-                 font=('TkDefaultFont', 7, 'italic')).grid(row=4, column=0, sticky=tk.W, pady=(0, 5), padx=(10, 0), columnspan=3)
+                 font=('TkDefaultFont', 7, 'italic')).grid(row=6, column=0, sticky=tk.W, pady=(0, 5), padx=(10, 0), columnspan=3)
         
         # Title Appendix
-        ttk.Label(general_frame, text='Title Appendix:', font=('TkDefaultFont', 9, 'bold')).grid(row=5, column=0, sticky=tk.W, pady=(15, 2), columnspan=3)
-        ttk.Label(general_frame, text='Text appended to titles (e.g., "Cover", "AI Cover"):', font=('TkDefaultFont', 8)).grid(row=6, column=0, sticky=tk.W, pady=5, padx=(10, 0))
+        ttk.Label(general_frame, text='Title Appendix:', font=('TkDefaultFont', 9, 'bold')).grid(row=7, column=0, sticky=tk.W, pady=(15, 2), columnspan=3)
+        ttk.Label(general_frame, text='Text appended to titles (e.g., "Cover", "AI Cover"):', font=('TkDefaultFont', 8)).grid(row=8, column=0, sticky=tk.W, pady=5, padx=(10, 0))
         self.general_vars['title_appendix'] = tk.StringVar(value=general_data.get('title_appendix', 'Cover'))
         title_appendix_entry = ttk.Entry(general_frame, textvariable=self.general_vars['title_appendix'], width=40)
-        title_appendix_entry.grid(row=6, column=1, pady=5, padx=5, sticky=tk.W)
+        title_appendix_entry.grid(row=8, column=1, pady=5, padx=5, sticky=tk.W)
         
         # Get profiles from config
         profiles = self.config.get('profiles', {})
@@ -1279,10 +1300,21 @@ class SettingsDialog(tk.Toplevel):
         ttk.Button(btn_frame, text='Cancel', command=self.destroy).pack(side=tk.LEFT, padx=5)
     
     
+    def browse_base_path(self):
+        """Browse for a base path directory."""
+        current = self.general_vars['base_path'].get()
+        initial_dir = current if current and os.path.exists(current) else os.getcwd()
+        
+        path = filedialog.askdirectory(
+            title='Select Base Path (Project Root)',
+            initialdir=initial_dir
+        )
+        if path:
+            self.general_vars['base_path'].set(path)
+    
     def browse_csv(self):
         """Browse for a CSV file."""
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        project_root = os.path.abspath(os.path.join(script_dir, os.pardir))
+        project_root = get_project_root(self.config)
         suno_dir = os.path.join(project_root, 'AI', 'suno')
         
         initial_dir = suno_dir if os.path.exists(suno_dir) else project_root
@@ -1314,6 +1346,7 @@ class SettingsDialog(tk.Toplevel):
     def save_settings(self):
         # Update general settings in config
         general = {
+            'base_path': self.general_vars['base_path'].get(),
             'csv_file_path': self.general_vars['csv_file_path'].get(),
             'default_save_path': self.general_vars['default_save_path'].get(),
             'title_appendix': self.general_vars['title_appendix'].get()
@@ -2138,7 +2171,7 @@ class SunoStyleBrowser(tk.Tk):
         self.ai_covers_item_map.clear()
         
         # Scan directory structure
-        structure = scan_ai_covers_directory()
+        structure = scan_ai_covers_directory(self.ai_config)
         
         if not structure:
             self.ai_covers_tree.insert('', tk.END, text='No AI covers found', values=('',))
@@ -2474,7 +2507,7 @@ class SunoStyleBrowser(tk.Tk):
         self.update()
         
         # Get prompt template
-        template = get_prompt_template('merge_styles')
+        template = get_prompt_template('merge_styles', self.ai_config)
         if not template:
             self.log_debug('ERROR', 'Failed to load merge_styles template')
             return
@@ -2541,7 +2574,7 @@ class SunoStyleBrowser(tk.Tk):
                  self.merged_style_text.insert('1.0', 'Step 1/2: Merging styles...')
                  self.update()
 
-                 template = get_prompt_template('merge_styles')
+                 template = get_prompt_template('merge_styles', self.ai_config)
                  if not template:
                     self.log_debug('ERROR', 'Failed to load merge_styles template')
                     return
@@ -2580,7 +2613,7 @@ class SunoStyleBrowser(tk.Tk):
         self.update()
         
         # Get prompt template
-        template = get_prompt_template('transform_style')
+        template = get_prompt_template('transform_style', self.ai_config)
         if not template:
             self.log_debug('ERROR', 'Failed to load transform_style template')
             return
@@ -2636,7 +2669,7 @@ class SunoStyleBrowser(tk.Tk):
         self.update()
         
         # Get prompt template
-        template = get_prompt_template('ai_cover_name')
+        template = get_prompt_template('ai_cover_name', self.ai_config)
         if not template:
             self.log_debug('ERROR', 'Failed to load ai_cover_name template')
             return
@@ -2753,7 +2786,7 @@ class SunoStyleBrowser(tk.Tk):
         self.update()
         
         # Get prompt template
-        template = get_prompt_template('album_cover')
+        template = get_prompt_template('album_cover', self.ai_config)
         if not template:
             self.log_debug('ERROR', 'Failed to load album_cover template')
             return
@@ -3390,7 +3423,7 @@ class SunoStyleBrowser(tk.Tk):
         style_name = style_description if style_description else style_info
         
         # Get prompt template
-        template = get_prompt_template('youtube_hashtags')
+        template = get_prompt_template('youtube_hashtags', self.ai_config)
         if not template:
             self.log_debug('ERROR', 'Failed to load youtube_hashtags template')
             # Fallback to basic hashtags if template fails
@@ -3569,8 +3602,8 @@ class SunoStyleBrowser(tk.Tk):
         
         try:
             # Get directory path for this song
-            song_dir = get_song_directory_path(ai_cover_name)
-            json_path = get_song_json_path(ai_cover_name)
+            song_dir = get_song_directory_path(ai_cover_name, self.ai_config)
+            json_path = get_song_json_path(ai_cover_name, self.ai_config)
             
             # Create directory if it doesn't exist
             os.makedirs(song_dir, exist_ok=True)
@@ -3832,8 +3865,8 @@ class SunoStyleBrowser(tk.Tk):
             old_json = self.current_song_json_path
             
             # Calculate new paths
-            new_dir = get_song_directory_path(new_name)
-            new_json = get_song_json_path(new_name)
+            new_dir = get_song_directory_path(new_name, self.ai_config)
+            new_json = get_song_json_path(new_name, self.ai_config)
             
             # Check if target exists
             if os.path.exists(new_json) and new_json != old_json:
@@ -3895,7 +3928,7 @@ class SunoStyleBrowser(tk.Tk):
     def show_style_derivation_dialog(self):
         """Show dialog to load style from an existing song."""
         # Scan all songs
-        structure = scan_ai_covers_directory()
+        structure = scan_ai_covers_directory(self.ai_config)
         if not structure:
             messagebox.showinfo('No Songs', 'No AI covers found. Create some songs first.')
             return
@@ -4051,7 +4084,7 @@ Version: 1.0"""
                 self.log_debug('ERROR', 'Failed to save settings.')
 
     def choose_csv(self):
-        initial = os.path.dirname(self.csv_path) if os.path.exists(self.csv_path) else os.path.dirname(resolve_csv_path())
+        initial = os.path.dirname(self.csv_path) if os.path.exists(self.csv_path) else os.path.dirname(resolve_csv_path(self.ai_config))
         path = filedialog.askopenfilename(
             title='Select Suno Styles CSV',
             filetypes=[('CSV Files', '*.csv')],
