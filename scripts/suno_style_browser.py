@@ -246,9 +246,9 @@ def get_config_path() -> str:
 
 
 def resolve_prompts_path(config: dict = None) -> str:
-    """Resolve default prompts path in AI/suno/prompts/ relative to project root."""
-    project_root = get_project_root(config)
-    default_path = os.path.join(project_root, 'AI', 'suno', 'prompts')
+    """Resolve default prompts path in AI/suno/prompts/ relative to running directory."""
+    running_dir = os.getcwd()
+    default_path = os.path.join(running_dir, 'AI', 'suno', 'prompts')
     return default_path
 
 
@@ -499,7 +499,8 @@ def load_config() -> dict:
             "base_path": "",
             "csv_file_path": "suno/suno_sound_styles.csv",
             "default_save_path": "",
-            "title_appendix": "Cover"
+            "title_appendix": "Cover",
+            "maker_links": "• Subscribe: [Your Channel Link]"
         },
         "profiles": {
             "text": {
@@ -1188,7 +1189,7 @@ class SettingsDialog(tk.Toplevel):
     def __init__(self, parent, config):
         super().__init__(parent)
         self.title('Settings')
-        self.geometry('600x500')
+        self.geometry('600x650')
         self.transient(parent)
         self.grab_set()
         
@@ -1254,6 +1255,13 @@ class SettingsDialog(tk.Toplevel):
         self.general_vars['title_appendix'] = tk.StringVar(value=general_data.get('title_appendix', 'Cover'))
         title_appendix_entry = ttk.Entry(general_frame, textvariable=self.general_vars['title_appendix'], width=40)
         title_appendix_entry.grid(row=8, column=1, pady=5, padx=5, sticky=tk.W)
+
+        # Maker links for YouTube descriptions
+        ttk.Label(general_frame, text='Maker Links (YouTube description):', font=('TkDefaultFont', 9, 'bold')).grid(row=9, column=0, sticky=tk.W, pady=(15, 2), columnspan=3)
+        ttk.Label(general_frame, text='Lines added under the LINKS section (one per line):', font=('TkDefaultFont', 8)).grid(row=10, column=0, sticky=tk.W, pady=5, padx=(10, 0), columnspan=3)
+        self.maker_links_text = scrolledtext.ScrolledText(general_frame, height=4, wrap=tk.WORD, font=('Consolas', 9))
+        self.maker_links_text.grid(row=11, column=0, columnspan=3, sticky=tk.EW, pady=(0, 10), padx=(10, 0))
+        self.maker_links_text.insert('1.0', general_data.get('maker_links', '• Subscribe: [Your Channel Link]'))
         
         # Get profiles from config
         profiles = self.config.get('profiles', {})
@@ -1349,7 +1357,8 @@ class SettingsDialog(tk.Toplevel):
             'base_path': self.general_vars['base_path'].get(),
             'csv_file_path': self.general_vars['csv_file_path'].get(),
             'default_save_path': self.general_vars['default_save_path'].get(),
-            'title_appendix': self.general_vars['title_appendix'].get()
+            'title_appendix': self.general_vars['title_appendix'].get(),
+            'maker_links': self.maker_links_text.get('1.0', tk.END).strip()
         }
         
         # Update profiles in config
@@ -1407,6 +1416,19 @@ class SunoStyleBrowser(tk.Tk):
         if save_path and os.path.exists(save_path) and os.path.isdir(save_path):
             return save_path
         return os.getcwd()
+    
+    def get_album_cover_save_dir(self) -> str:
+        """Get the directory for saving album covers, using configured basepath."""
+        project_root = get_project_root(self.ai_config)
+        # Use basepath (project root) for album covers
+        album_covers_dir = os.path.join(project_root, 'album_covers')
+        try:
+            os.makedirs(album_covers_dir, exist_ok=True)
+            return album_covers_dir
+        except Exception as e:
+            # Fallback to project root if subdirectory creation fails
+            self.log_debug('WARNING', f'Failed to create album_covers directory: {e}, using project root')
+            return project_root
     
     def get_album_cover_image_size(self) -> str:
         """Get the image size string for album cover images.
@@ -3234,7 +3256,7 @@ class SunoStyleBrowser(tk.Tk):
         # Get the correct directory path based on AI cover name
         save_dir = None
         if ai_cover_name:
-            song_dir = get_song_directory_path(ai_cover_name)
+            song_dir = get_song_directory_path(ai_cover_name, self.ai_config)
             if song_dir:
                 # Create directory if it doesn't exist
                 try:
@@ -3244,10 +3266,10 @@ class SunoStyleBrowser(tk.Tk):
                 except Exception as e:
                     self.log_debug('WARNING', f'Failed to create directory {song_dir}: {e}')
         
-        # Fallback to default save directory if no AI cover name or directory creation failed
+        # Fallback to album cover save directory (using basepath) if no AI cover name or directory creation failed
         if not save_dir:
-            save_dir = self.get_default_save_dir()
-            self.log_debug('DEBUG', f'Using default save directory: {save_dir}')
+            save_dir = self.get_album_cover_save_dir()
+            self.log_debug('DEBUG', f'Using album cover save directory (basepath): {save_dir}')
         
         # Automatically generate filename
         filename = enable_long_paths(os.path.join(save_dir, f'{safe_basename}{file_extension}'))
@@ -3534,9 +3556,12 @@ class SunoStyleBrowser(tk.Tk):
         
         # Links section (placeholder for actual links)
         desc += "🔗 LINKS\n"
-        desc += "• Subscribe: [Your Channel Link]\n"
-        desc += "• Instagram: [Your Instagram]\n"
-        desc += "• Twitter: [Your Twitter]\n\n"
+        maker_links = self.ai_config.get('general', {}).get('maker_links', '').strip()
+        if maker_links:
+            desc += maker_links + '\n'
+        else:
+            desc += "• Subscribe: [Your Channel Link]\n"
+        desc += "\n"
         
         # Disclaimer (important for avoiding strikes)
         desc += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"

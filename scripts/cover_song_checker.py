@@ -106,6 +106,7 @@ class CoverSongCheckerGUI(BaseAudioGUI):
         
         ttk.Button(btn_frame, text="Check Song", command=self.check_song).pack(side='left', padx=5)
         ttk.Button(btn_frame, text="Load CSV", command=self.load_csv).pack(side='left', padx=5)
+        ttk.Button(btn_frame, text="Load from Input Folder", command=self.load_csv_from_input).pack(side='left', padx=5)
         ttk.Button(btn_frame, text="Select from AI-COVERS", command=self.select_from_ai_covers).pack(side='left', padx=5)
         ttk.Button(btn_frame, text="Scan All AI-COVERS", command=self.scan_ai_covers).pack(side='left', padx=5)
         ttk.Button(btn_frame, text="Clear Results", command=self.clear_results).pack(side='left', padx=5)
@@ -206,38 +207,167 @@ class CoverSongCheckerGUI(BaseAudioGUI):
         thread.start()
     
     def load_csv(self):
-        """Load songs from CSV file"""
+        """Load songs from CSV file via file dialog"""
         file_path = filedialog.askopenfilename(
             title="Select CSV File",
-            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+            initialdir=os.path.join(self.root_dir, 'input')
         )
         
         if not file_path:
             return
         
+        self._process_csv_file(file_path)
+    
+    def load_csv_from_input(self):
+        """Load CSV file from input folder"""
+        input_dir = os.path.join(self.root_dir, 'input')
+        
+        if not os.path.exists(input_dir):
+            messagebox.showerror("Error", f"Input directory not found: {input_dir}")
+            return
+        
+        # Get list of CSV files
+        csv_files = [f for f in os.listdir(input_dir) if f.lower().endswith('.csv')]
+        
+        if not csv_files:
+            messagebox.showwarning("Warning", f"No CSV files found in {input_dir}")
+            return
+        
+        # If only one file, use it directly
+        if len(csv_files) == 1:
+            file_path = os.path.join(input_dir, csv_files[0])
+            self.log(f"Loading CSV from input folder: {csv_files[0]}")
+            self._process_csv_file(file_path)
+            return
+        
+        # Multiple files - show selection dialog
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Select CSV File from Input Folder")
+        dialog.geometry("500x400")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        # Center dialog
+        dialog.update_idletasks()
+        x = self.root.winfo_x() + (self.root.winfo_width() // 2) - (dialog.winfo_width() // 2)
+        y = self.root.winfo_y() + (self.root.winfo_height() // 2) - (dialog.winfo_height() // 2)
+        dialog.geometry(f"+{x}+{y}")
+        
+        # Main frame
+        main_frame = ttk.Frame(dialog, padding=10)
+        main_frame.pack(fill='both', expand=True)
+        
+        ttk.Label(main_frame, text="Select a CSV file to load:", 
+                 font=('TkDefaultFont', 9, 'bold')).pack(anchor='w', pady=(0, 5))
+        
+        # Listbox for files
+        listbox_frame = ttk.Frame(main_frame)
+        listbox_frame.pack(fill='both', expand=True, pady=5)
+        
+        scrollbar = ttk.Scrollbar(listbox_frame)
+        scrollbar.pack(side='right', fill='y')
+        
+        listbox = tk.Listbox(listbox_frame, yscrollcommand=scrollbar.set, font=('TkDefaultFont', 9))
+        listbox.pack(side='left', fill='both', expand=True)
+        scrollbar.config(command=listbox.yview)
+        
+        # Populate listbox
+        for csv_file in sorted(csv_files):
+            listbox.insert(tk.END, csv_file)
+        
+        listbox.selection_set(0)  # Select first item
+        
+        # Buttons
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(fill='x', pady=(10, 0))
+        
+        def load_selected():
+            selection = listbox.curselection()
+            if selection:
+                selected_file = csv_files[selection[0]]
+                file_path = os.path.join(input_dir, selected_file)
+                dialog.destroy()
+                self.log(f"Loading CSV from input folder: {selected_file}")
+                self._process_csv_file(file_path)
+        
+        ttk.Button(btn_frame, text="Load Selected", command=load_selected).pack(side='right', padx=5)
+        ttk.Button(btn_frame, text="Cancel", command=dialog.destroy).pack(side='right', padx=5)
+        
+        # Double-click to load
+        def on_double_click(event):
+            load_selected()
+        
+        listbox.bind('<Double-1>', on_double_click)
+    
+    def _process_csv_file(self, file_path):
+        """Process a CSV file and extract songs"""
         try:
+            self.log(f"Loading CSV file: {os.path.basename(file_path)}")
+            
             with open(file_path, 'r', encoding='utf-8') as f:
                 reader = csv.DictReader(f)
                 songs = []
-                for row in reader:
-                    # Try different column names
-                    song_title = row.get('Song Title') or row.get('song_title') or row.get('Title') or row.get('title') or ''
-                    artist = row.get('Artist') or row.get('artist') or row.get('Artist(s)') or ''
+                skipped_rows = 0
+                
+                for row_num, row in enumerate(reader, start=2):  # Start at 2 (header is row 1)
+                    # Try different column name variations
+                    song_title = (row.get('Song Title') or row.get('song_title') or 
+                                row.get('Title') or row.get('title') or 
+                                row.get('Song') or row.get('song') or '').strip()
                     
-                    if song_title:
-                        songs.append((song_title, artist))
+                    artist = (row.get('Artist') or row.get('artist') or 
+                            row.get('Artist(s)') or row.get('Artists') or 
+                            row.get('artist(s)') or '').strip()
+                    
+                    # Skip rows with N/A or empty song titles
+                    if not song_title or song_title.upper() == 'N/A':
+                        skipped_rows += 1
+                        continue
+                    
+                    # Clean up song title (remove quotes if present)
+                    song_title = song_title.strip('"\'')
+                    artist = artist.strip('"\'')
+                    
+                    songs.append((song_title, artist))
                 
                 if not songs:
-                    messagebox.showwarning("Warning", "No songs found in CSV file")
+                    messagebox.showwarning("Warning", 
+                        f"No valid songs found in CSV file.\n"
+                        f"Skipped {skipped_rows} empty/invalid rows.")
                     return
                 
+                # Log summary
+                self.log(f"Loaded {len(songs)} songs from CSV")
+                if skipped_rows > 0:
+                    self.log(f"Skipped {skipped_rows} invalid/empty rows")
+                
+                # Show preview
+                preview_text = f"Found {len(songs)} songs in CSV file:\n\n"
+                for i, (title, artist) in enumerate(songs[:5], 1):
+                    preview_text += f"{i}. {title}"
+                    if artist:
+                        preview_text += f" - {artist}"
+                    preview_text += "\n"
+                if len(songs) > 5:
+                    preview_text += f"... and {len(songs) - 5} more\n"
+                
+                preview_text += "\nStart analysis?"
+                
                 # Ask for confirmation
-                if messagebox.askyesno("Confirm", f"Found {len(songs)} songs. Start analysis?"):
+                if messagebox.askyesno("Confirm", preview_text):
+                    self.log(f"Starting analysis for {len(songs)} songs")
                     thread = threading.Thread(target=self.analyze_multiple_songs, args=(songs,), daemon=True)
                     thread.start()
         
+        except FileNotFoundError:
+            messagebox.showerror("Error", f"File not found: {file_path}")
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to load CSV: {str(e)}")
+            error_msg = f"Failed to load CSV: {str(e)}"
+            self.log(f"Error: {error_msg}")
+            messagebox.showerror("Error", error_msg)
+            import traceback
+            self.log(f"Traceback: {traceback.format_exc()}")
     
     def select_from_ai_covers(self):
         """Open dialog to select individual songs from AI-COVERS directory"""
