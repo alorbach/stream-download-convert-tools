@@ -35,6 +35,42 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from lib.base_gui import BaseAudioGUI
 
 
+def get_config_path():
+    """Get the path to the config.json file in the script's directory."""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(script_dir, 'cover_song_checker_config.json')
+
+
+def load_config():
+    """Load configuration from JSON file."""
+    config_path = get_config_path()
+    default_config = {
+        'ai_covers_base_dir': ''  # Empty means use default: root_dir/AI/AI-COVERS
+    }
+    
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                user_config = json.load(f)
+                default_config.update(user_config)
+        except Exception as e:
+            print(f"Error loading config: {e}, using defaults")
+    
+    return default_config
+
+
+def save_config(config):
+    """Save configuration to JSON file."""
+    config_path = get_config_path()
+    try:
+        with open(config_path, 'w', encoding='utf-8') as f:
+            json.dump(config, f, indent=2, ensure_ascii=False)
+        return True
+    except Exception as e:
+        print(f"Error saving config: {e}")
+        return False
+
+
 class CoverSongCheckerGUI(BaseAudioGUI):
     def __init__(self, root):
         super().__init__(root, "Cover Song Checker")
@@ -42,6 +78,12 @@ class CoverSongCheckerGUI(BaseAudioGUI):
         
         self.results = []
         self.is_analyzing = False
+        
+        # Load configuration
+        self.config = load_config()
+        
+        # Initialize UMPG artist list
+        self.umpg_artists = self._load_umpg_artists()
         
         # Get ffmpeg path for yt-dlp - check first to ensure path is set
         ffmpeg_found = self.check_ffmpeg()
@@ -64,11 +106,30 @@ class CoverSongCheckerGUI(BaseAudioGUI):
             self.log(f"Checked: {self.ffmpeg_manager.ffmpeg_folder}")
     
     def setup_ui(self):
+        # Create menu bar
+        menubar = tk.Menu(self.root)
+        self.root.config(menu=menubar)
+        
+        # Settings menu
+        settings_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="Settings", menu=settings_menu)
+        settings_menu.add_command(label="Configure AI-COVERS Directory...", command=self.open_settings)
+        
         # Main frame (no tabs, single view)
         main_frame = ttk.Frame(self.root)
         main_frame.pack(fill='both', expand=True, padx=5, pady=5)
         
         self.setup_check_tab(main_frame)
+    
+    def get_ai_covers_path(self):
+        """Get the path to AI-COVERS directory from config or default."""
+        base_dir = self.config.get('ai_covers_base_dir', '').strip()
+        
+        if base_dir and os.path.exists(base_dir) and os.path.isdir(base_dir):
+            return base_dir
+        
+        # Default: use root_dir/AI/AI-COVERS
+        return os.path.join(self.root_dir, 'AI', 'AI-COVERS')
     
     def setup_check_tab(self, parent):
         frame = ttk.LabelFrame(parent, text="Song Information", padding=10)
@@ -130,7 +191,7 @@ class CoverSongCheckerGUI(BaseAudioGUI):
         
         self.results_tree = ttk.Treeview(tree_container, columns=(
             'Song Title', 'Artist', 'Cover Count', 'Claims %', 'Strikes %', 
-            'Oldest Age', 'Avg Views', 'Risk Level', 'Recommendation'
+            'Oldest Age', 'Avg Views', 'UMPG', 'Risk Level', 'Recommendation'
         ), show='headings', yscrollcommand=scroll_y.set, xscrollcommand=scroll_x.set, height=8)
         
         scroll_y.config(command=self.results_tree.yview)
@@ -144,6 +205,7 @@ class CoverSongCheckerGUI(BaseAudioGUI):
         self.results_tree.heading('Strikes %', text='Strikes %')
         self.results_tree.heading('Oldest Age', text='Oldest Age')
         self.results_tree.heading('Avg Views', text='Avg Views')
+        self.results_tree.heading('UMPG', text='UMPG')
         self.results_tree.heading('Risk Level', text='Risk Level')
         self.results_tree.heading('Recommendation', text='Recommendation')
         
@@ -155,6 +217,7 @@ class CoverSongCheckerGUI(BaseAudioGUI):
         self.results_tree.column('Strikes %', width=80)
         self.results_tree.column('Oldest Age', width=120)
         self.results_tree.column('Avg Views', width=120)
+        self.results_tree.column('UMPG', width=60)
         self.results_tree.column('Risk Level', width=100)
         self.results_tree.column('Recommendation', width=300)
         
@@ -168,6 +231,9 @@ class CoverSongCheckerGUI(BaseAudioGUI):
         # Bind right-click for context menu
         self.results_tree.bind('<Button-3>', self.on_result_right_click)  # Windows
         self.results_tree.bind('<Button-2>', self.on_result_right_click)  # Mac/Linux
+        
+        # Configure tag colors for UMPG
+        self.results_tree.tag_configure('umpg', foreground='red', font=('TkDefaultFont', 9, 'bold'))
         
         # Export button for results
         export_btn_frame = ttk.Frame(results_frame)
@@ -188,6 +254,95 @@ class CoverSongCheckerGUI(BaseAudioGUI):
         self.log_text.insert(tk.END, f"{datetime.now().strftime('%H:%M:%S')} - {message}\n")
         self.log_text.see(tk.END)
         self.root.update_idletasks()
+    
+    def _load_umpg_artists(self):
+        """Load list of artists represented by Universal Music Publishing Group (UMPG)
+        
+        Based on information from UMPG official websites and Wikipedia.
+        UMPG distributes copyright strikes, so artists represented by them
+        are at higher risk for copyright issues.
+        """
+        ump_artists = {
+            # Global major artists (from Wikipedia and UMPG global)
+            'Taylor Swift', 'Bad Bunny', 'Drake', 'Kendrick Lamar', 'The Weeknd',
+            'Rosalia', 'Steve Lacy', 'Elton John', 'Adele', 'SZA', 'Harry Styles',
+            'Post Malone', 'Bob Dylan', 'Sting', 'Neil Diamond', 'Billie Eilish',
+            'Alicia Keys', 'Brandi Carlile',
+            
+            # Germany/Europe (UMPG DE)
+            'ABBA', 'Ariana Grande', 'Axwell', 'Alejandro Sanz',
+            
+            # USA / Nashville (Country)
+            'Sam Hunt', 'Keith Urban', 'Luke Combs', 'Shania Twain', 'Maren Morris',
+            
+            # Additional major artists commonly associated with UMPG
+            'Coldplay', 'Florence + The Machine', 'Florence and the Machine',
+            'The Rolling Stones', 'Paul McCartney', 'John Lennon', 'George Harrison',
+            'Ringo Starr', 'The Beatles', 'U2', 'Bon Jovi', 'Guns N\' Roses',
+            'Metallica', 'Red Hot Chili Peppers', 'Pearl Jam', 'Nirvana',
+            'Green Day', 'Blink-182', 'Linkin Park', 'Eminem', 'Dr. Dre',
+            '50 Cent', 'Snoop Dogg', 'Ice Cube', 'Jay-Z', 'Kanye West',
+            'Rihanna', 'Beyonce', 'Lady Gaga', 'Katy Perry', 'Bruno Mars',
+            'Justin Timberlake', 'Justin Bieber', 'Ed Sheeran', 'Sam Smith',
+            'Dua Lipa', 'The Weeknd', 'Lana Del Rey', 'Lorde', 'Halsey',
+            'Imagine Dragons', 'Maroon 5', 'OneRepublic', 'The Chainsmokers',
+            'Calvin Harris', 'David Guetta', 'Avicii', 'Swedish House Mafia',
+            'Skrillex', 'Deadmau5', 'Tiësto', 'Armin van Buuren',
+            
+            # Additional songwriters and producers
+            'Max Martin', 'Shellback', 'Dr. Luke', 'Ryan Tedder', 'Benny Blanco',
+            'Pharrell Williams', 'Timbaland', 'The-Dream', 'Tricky Stewart',
+        }
+        
+        # Create normalized lookup (case-insensitive, handle variations)
+        normalized_lookup = {}
+        for artist in ump_artists:
+            # Store original and normalized versions
+            normalized = artist.lower().strip()
+            normalized_lookup[normalized] = artist
+            # Also store without special characters for fuzzy matching
+            normalized_clean = re.sub(r'[^\w\s]', '', normalized)
+            if normalized_clean != normalized:
+                normalized_lookup[normalized_clean] = artist
+        
+        return normalized_lookup
+    
+    def check_umpg_artist(self, artist_name):
+        """Check if an artist is represented by UMPG
+        
+        Args:
+            artist_name: Name of the artist to check
+            
+        Returns:
+            tuple: (is_umpg, match_info) where is_umpg is bool and match_info is str
+        """
+        if not artist_name or not artist_name.strip():
+            return False, ''
+        
+        artist_lower = artist_name.lower().strip()
+        artist_clean = re.sub(r'[^\w\s]', '', artist_lower)
+        
+        # Direct match
+        if artist_lower in self.umpg_artists:
+            return True, self.umpg_artists[artist_lower]
+        
+        # Clean match (without special characters)
+        if artist_clean in self.umpg_artists:
+            return True, self.umpg_artists[artist_clean]
+        
+        # Partial match (check if artist name contains or is contained in UMPG artist)
+        for ump_artist_norm, ump_artist_orig in self.umpg_artists.items():
+            ump_artist_clean = re.sub(r'[^\w\s]', '', ump_artist_norm)
+            
+            # Check if artist name is contained in UMPG artist name
+            if artist_lower in ump_artist_norm or artist_clean in ump_artist_clean:
+                return True, ump_artist_orig
+            
+            # Check if UMPG artist name is contained in artist name
+            if ump_artist_norm in artist_lower or ump_artist_clean in artist_clean:
+                return True, ump_artist_orig
+        
+        return False, ''
     
     def check_song(self):
         """Check a single song"""
@@ -371,7 +526,7 @@ class CoverSongCheckerGUI(BaseAudioGUI):
     
     def select_from_ai_covers(self):
         """Open dialog to select individual songs from AI-COVERS directory"""
-        ai_covers_path = os.path.join(self.root_dir, 'AI', 'AI-COVERS')
+        ai_covers_path = self.get_ai_covers_path()
         
         if not os.path.exists(ai_covers_path):
             messagebox.showerror("Error", f"AI-COVERS directory not found: {ai_covers_path}")
@@ -551,7 +706,7 @@ class CoverSongCheckerGUI(BaseAudioGUI):
     
     def scan_ai_covers(self):
         """Scan AI/AI-COVERS directory for all songs and analyze them"""
-        ai_covers_path = os.path.join(self.root_dir, 'AI', 'AI-COVERS')
+        ai_covers_path = self.get_ai_covers_path()
         
         if not os.path.exists(ai_covers_path):
             messagebox.showerror("Error", f"AI-COVERS directory not found: {ai_covers_path}")
@@ -652,6 +807,11 @@ class CoverSongCheckerGUI(BaseAudioGUI):
             
             if not covers:
                 self.log(f"No cover videos found for: {song_title}")
+                # Check UMPG representation even if no covers found
+                is_umpg, ump_artist_match = self.check_umpg_artist(artist)
+                if is_umpg:
+                    self.log(f"UMPG WARNING: Artist '{artist}' is represented by UMPG (matched: {ump_artist_match})")
+                
                 result = {
                     'song_title': song_title,
                     'artist': artist,
@@ -662,6 +822,8 @@ class CoverSongCheckerGUI(BaseAudioGUI):
                     'strikes_percent': 0,
                     'oldest_age': 'N/A',
                     'avg_views': 0,
+                    'is_umpg': is_umpg,
+                    'ump_artist_match': ump_artist_match,
                     'risk_level': 'ROT',
                     'recommendation': 'RISKY - No cover history found',
                     'covers': [],  # Store empty list
@@ -694,8 +856,13 @@ class CoverSongCheckerGUI(BaseAudioGUI):
             self.log(f"  Claims detected: {analysis['claims_count']} ({analysis['claims_percent']:.1f}%)")
             self.log(f"  Strikes detected: {analysis['strikes_count']} ({analysis['strikes_percent']:.1f}%)")
             
+            # Check UMPG representation
+            is_umpg, ump_artist_match = self.check_umpg_artist(artist)
+            if is_umpg:
+                self.log(f"UMPG WARNING: Artist '{artist}' is represented by UMPG (matched: {ump_artist_match})")
+            
             # Calculate risk level
-            risk_level, recommendation = self.calculate_risk(analysis, song_title, artist)
+            risk_level, recommendation = self.calculate_risk(analysis, song_title, artist, is_umpg)
             
             result = {
                 'song_title': song_title,
@@ -707,6 +874,8 @@ class CoverSongCheckerGUI(BaseAudioGUI):
                 'strikes_percent': analysis['strikes_percent'],
                 'oldest_age': analysis['oldest_age'],
                 'avg_views': analysis['avg_views'],
+                'is_umpg': is_umpg,
+                'ump_artist_match': ump_artist_match,
                 'risk_level': risk_level,
                 'recommendation': recommendation,
                 'covers': covers,  # Store cover videos for detail view
@@ -949,8 +1118,15 @@ class CoverSongCheckerGUI(BaseAudioGUI):
             'oldest_date': oldest_date
         }
     
-    def calculate_risk(self, analysis, song_title, artist):
-        """Calculate risk level and recommendation"""
+    def calculate_risk(self, analysis, song_title, artist, is_umpg=False):
+        """Calculate risk level and recommendation
+        
+        Args:
+            analysis: Analysis data dictionary
+            song_title: Song title
+            artist: Artist name
+            is_umpg: Whether artist is represented by UMPG (increases risk)
+        """
         cover_count = analysis['cover_count']
         oldest_date = analysis['oldest_date']
         avg_views = analysis['avg_views']
@@ -959,20 +1135,32 @@ class CoverSongCheckerGUI(BaseAudioGUI):
         problematic_publishers = ['Universal', 'Sony', 'Warner', 'EMI']
         is_problematic = any(pub.lower() in (song_title + ' ' + artist).lower() for pub in problematic_publishers)
         
-        # Known problematic artists (based on real-world case)
-        problematic_artists = ['Eminem', 'Drake', 'Rihanna', 'Taylor Swift', 'Ariana Grande']
-        is_problematic_artist = any(art.lower() in artist.lower() for art in problematic_artists)
+        # UMPG representation significantly increases risk (they distribute copyright strikes)
+        ump_risk_note = ''
+        if is_umpg:
+            ump_risk_note = ' - UMPG represented (high strike risk)'
         
         # Risk calculation
         if cover_count == 0:
             risk_level = 'ROT'
-            recommendation = 'RISKY - No cover history found'
+            if is_umpg:
+                recommendation = f'RISKY - No cover history found{ump_risk_note}'
+            else:
+                recommendation = 'RISKY - No cover history found'
         
         elif cover_count < 3:
             risk_level = 'ROT'
-            recommendation = 'RISKY - Very few covers exist'
+            if is_umpg:
+                recommendation = f'RISKY - Very few covers exist{ump_risk_note}'
+            else:
+                recommendation = 'RISKY - Very few covers exist'
         
-        elif is_problematic_artist or is_problematic:
+        elif is_umpg:
+            # UMPG artists are always high risk, regardless of cover count
+            risk_level = 'ROT'
+            recommendation = f'RISKY - UMPG represented artist{ump_risk_note}'
+        
+        elif is_problematic:
             risk_level = 'ROT'
             recommendation = 'RISKY - Known problematic publisher/artist'
         
@@ -1003,6 +1191,11 @@ class CoverSongCheckerGUI(BaseAudioGUI):
         result_index = len(self.results)
         self.results.append(result)
         
+        # Format UMPG status
+        ump_status = 'YES' if result.get('is_umpg', False) else 'NO'
+        if result.get('is_umpg', False) and result.get('ump_artist_match'):
+            ump_status = 'YES*'  # Indicate match found
+        
         # Add to tree
         item = self.results_tree.insert('', 'end', values=(
             result['song_title'],
@@ -1012,6 +1205,7 @@ class CoverSongCheckerGUI(BaseAudioGUI):
             f"{result['strikes_percent']:.1f}%",
             result['oldest_age'],
             f"{result['avg_views']:,}",
+            ump_status,
             result['risk_level'],
             result['recommendation']
         ), tags=(str(result_index),))
@@ -1023,6 +1217,15 @@ class CoverSongCheckerGUI(BaseAudioGUI):
             self.results_tree.set(item, 'Risk Level', 'GELB')
         elif result['risk_level'] == 'ROT':
             self.results_tree.set(item, 'Risk Level', 'ROT')
+        
+        # Highlight UMPG status
+        if result.get('is_umpg', False):
+            self.results_tree.set(item, 'UMPG', 'YES*')
+            # Tag for styling if needed
+            current_tags = list(self.results_tree.item(item, 'tags'))
+            if 'umpg' not in current_tags:
+                current_tags.append('umpg')
+                self.results_tree.item(item, tags=current_tags)
     
     def on_result_double_click(self, event):
         """Handle double-click on result to show details"""
@@ -1127,6 +1330,14 @@ class CoverSongCheckerGUI(BaseAudioGUI):
         summary_frame = ttk.LabelFrame(main_frame, text="Summary", padding=10)
         summary_frame.pack(fill='x', pady=(0, 10))
         
+        ump_info = ''
+        if result.get('is_umpg', False):
+            match_info = result.get('ump_artist_match', '')
+            ump_info = f"\nUMPG Representation: YES (matched: {match_info})"
+            ump_info += "\nWARNING: UMPG distributes copyright strikes - HIGH RISK"
+        else:
+            ump_info = "\nUMPG Representation: NO"
+        
         info_text = f"""
 Song: {result['song_title']}
 Artist: {result['artist']}
@@ -1134,7 +1345,7 @@ Cover Count: {result['cover_count']}
 Risk Level: {result['risk_level']}
 Recommendation: {result['recommendation']}
 Oldest Cover Age: {result['oldest_age']}
-Average Views: {result['avg_views']:,}
+Average Views: {result['avg_views']:,}{ump_info}
         """.strip()
         
         ttk.Label(summary_frame, text=info_text, justify='left', font=('TkDefaultFont', 9)).pack(anchor='w')
@@ -1285,11 +1496,14 @@ Average Views: {result['avg_views']:,}
                 writer = csv.DictWriter(f, fieldnames=[
                     'Song Title', 'Artist', 'Cover Count', 'Claims Count', 
                     'Strikes Count', 'Claims %', 'Strikes %', 'Oldest Age', 
-                    'Avg Views', 'Risk Level', 'Recommendation'
+                    'Avg Views', 'UMPG', 'UMPG Match', 'Risk Level', 'Recommendation'
                 ])
                 writer.writeheader()
                 
                 for result in self.results:
+                    ump_status = 'YES' if result.get('is_umpg', False) else 'NO'
+                    ump_match = result.get('ump_artist_match', '')
+                    
                     writer.writerow({
                         'Song Title': result['song_title'],
                         'Artist': result['artist'],
@@ -1300,6 +1514,8 @@ Average Views: {result['avg_views']:,}
                         'Strikes %': f"{result['strikes_percent']:.1f}",
                         'Oldest Age': result['oldest_age'],
                         'Avg Views': result['avg_views'],
+                        'UMPG': ump_status,
+                        'UMPG Match': ump_match,
                         'Risk Level': result['risk_level'],
                         'Recommendation': result['recommendation']
                     })
@@ -1308,6 +1524,120 @@ Average Views: {result['avg_views']:,}
         
         except Exception as e:
             messagebox.showerror("Error", f"Failed to export CSV: {str(e)}")
+    
+    def open_settings(self):
+        """Open settings dialog"""
+        dialog = SettingsDialog(self.root, self.config)
+        self.root.wait_window(dialog)
+        
+        if dialog.result:
+            # Update config
+            self.config = dialog.result
+            save_config(self.config)
+            self.log("Settings saved")
+            messagebox.showinfo("Settings", "Settings saved successfully")
+
+
+class SettingsDialog(tk.Toplevel):
+    """Settings dialog for configuring AI-COVERS base directory"""
+    
+    def __init__(self, parent, config):
+        super().__init__(parent)
+        self.title("Settings - Cover Song Checker")
+        self.geometry("600x200")
+        self.transient(parent)
+        self.grab_set()
+        
+        self.config = config.copy()
+        self.result = None
+        
+        # Center dialog
+        self.update_idletasks()
+        x = parent.winfo_x() + (parent.winfo_width() // 2) - (self.winfo_width() // 2)
+        y = parent.winfo_y() + (parent.winfo_height() // 2) - (self.winfo_height() // 2)
+        self.geometry(f"+{x}+{y}")
+        
+        self.create_widgets()
+    
+    def create_widgets(self):
+        main_frame = ttk.Frame(self, padding=20)
+        main_frame.pack(fill='both', expand=True)
+        
+        # AI-COVERS Base Directory
+        ttk.Label(main_frame, text="AI-COVERS Base Directory:", 
+                 font=('TkDefaultFont', 9, 'bold')).pack(anchor='w', pady=(0, 5))
+        
+        ttk.Label(main_frame, 
+                 text="Leave empty to use default: <Project Root>/AI/AI-COVERS", 
+                 font=('TkDefaultFont', 8, 'italic')).pack(anchor='w', pady=(0, 10))
+        
+        path_frame = ttk.Frame(main_frame)
+        path_frame.pack(fill='x', pady=5)
+        
+        self.path_var = tk.StringVar(value=self.config.get('ai_covers_base_dir', ''))
+        path_entry = ttk.Entry(path_frame, textvariable=self.path_var, width=50)
+        path_entry.pack(side='left', fill='x', expand=True, padx=(0, 5))
+        
+        ttk.Button(path_frame, text="Browse...", command=self.browse_directory).pack(side='left')
+        
+        # Current path display
+        current_path = self.path_var.get().strip()
+        if not current_path:
+            # Calculate default path (same logic as in get_ai_covers_path)
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            root_dir = os.path.abspath(os.path.join(script_dir, os.pardir))
+            default_path = os.path.join(root_dir, 'AI', 'AI-COVERS')
+            current_path = f"Default: {default_path}"
+        else:
+            current_path = f"Current: {current_path}"
+        
+        self.path_label = ttk.Label(main_frame, text=current_path, 
+                 font=('TkDefaultFont', 8), foreground='gray')
+        self.path_label.pack(anchor='w', pady=(5, 0))
+        
+        # Update path display when path changes
+        def update_path_display(*args):
+            path = self.path_var.get().strip()
+            if not path:
+                script_dir = os.path.dirname(os.path.abspath(__file__))
+                root_dir = os.path.abspath(os.path.join(script_dir, os.pardir))
+                default_path = os.path.join(root_dir, 'AI', 'AI-COVERS')
+                self.path_label.config(text=f"Default: {default_path}")
+            else:
+                self.path_label.config(text=f"Current: {path}")
+        
+        self.path_var.trace('w', update_path_display)
+        
+        # Buttons
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(fill='x', pady=(20, 0))
+        
+        ttk.Button(btn_frame, text="Save", command=self.save_settings).pack(side='right', padx=5)
+        ttk.Button(btn_frame, text="Cancel", command=self.cancel).pack(side='right', padx=5)
+    
+    def browse_directory(self):
+        """Browse for AI-COVERS directory"""
+        current = self.path_var.get()
+        initial_dir = current if current and os.path.exists(current) else os.getcwd()
+        
+        path = filedialog.askdirectory(
+            title="Select AI-COVERS Base Directory",
+            initialdir=initial_dir
+        )
+        
+        if path:
+            self.path_var.set(path)
+    
+    def save_settings(self):
+        """Save settings and close dialog"""
+        self.config['ai_covers_base_dir'] = self.path_var.get().strip()
+        self.result = self.config
+        self.destroy()
+    
+    def cancel(self):
+        """Cancel without saving"""
+        self.result = None
+        self.destroy()
 
 
 def main():
