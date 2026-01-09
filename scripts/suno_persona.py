@@ -5415,12 +5415,12 @@ TECHNICAL REQUIREMENTS:
         desc_frame.bind("<Button-5>", on_mousewheel_descriptions)
 
         ttk.Label(desc_frame, text='Song Description:', font=('TkDefaultFont', 9, 'bold')).grid(row=0, column=0, sticky=tk.NW, pady=5)
-        self.song_description_text = scrolledtext.ScrolledText(desc_frame, height=4, wrap=tk.WORD, width=60)
+        self.song_description_text = scrolledtext.ScrolledText(desc_frame, height=8, wrap=tk.WORD, width=60)
         self.song_description_text.grid(row=0, column=1, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
         ttk.Button(desc_frame, text='Generate (EN)', command=self.generate_song_description).grid(row=0, column=2, padx=5, pady=5, sticky=tk.N)
 
         ttk.Label(desc_frame, text='Song Description (German):', font=('TkDefaultFont', 9, 'bold')).grid(row=1, column=0, sticky=tk.NW, pady=5)
-        self.song_description_de_text = scrolledtext.ScrolledText(desc_frame, height=5, wrap=tk.WORD, width=60)
+        self.song_description_de_text = scrolledtext.ScrolledText(desc_frame, height=9, wrap=tk.WORD, width=60)
         self.song_description_de_text.grid(row=1, column=1, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
         ttk.Button(desc_frame, text='Generate (DE)', command=self.generate_song_description_de).grid(row=1, column=2, padx=5, pady=5, sticky=tk.N)
 
@@ -6089,9 +6089,61 @@ TECHNICAL REQUIREMENTS:
                                                         values=spotify_genres, state='readonly', width=30)
         spotify_category_secondary_combo.grid(row=0, column=1, sticky=tk.W, padx=5)
         
+        # Platform links
+        links_frame = ttk.Frame(main_frame)
+        links_frame.grid(row=2, column=0, columnspan=2, sticky=tk.W+tk.E, pady=8, padx=5)
+        
+        ttk.Label(links_frame, text='YouTube URL:', font=('TkDefaultFont', 9, 'bold')).grid(row=0, column=0, sticky=tk.W, padx=(0, 6))
+        self.youtube_link_var = tk.StringVar()
+        ttk.Entry(links_frame, textvariable=self.youtube_link_var, width=70).grid(row=0, column=1, sticky=tk.W+tk.E, padx=5)
+        
+        ttk.Label(links_frame, text='Spotify URL:', font=('TkDefaultFont', 9, 'bold')).grid(row=1, column=0, sticky=tk.W, padx=(0, 6), pady=(6, 0))
+        self.spotify_link_var = tk.StringVar()
+        ttk.Entry(links_frame, textvariable=self.spotify_link_var, width=70).grid(row=1, column=1, sticky=tk.W+tk.E, padx=5, pady=(6, 0))
+        
+        ttk.Label(links_frame, text='Apple Music URL:', font=('TkDefaultFont', 9, 'bold')).grid(row=2, column=0, sticky=tk.W, padx=(0, 6), pady=(6, 0))
+        self.apple_link_var = tk.StringVar()
+        ttk.Entry(links_frame, textvariable=self.apple_link_var, width=70).grid(row=2, column=1, sticky=tk.W+tk.E, padx=5, pady=(6, 0))
+        
         category_frame.columnconfigure(1, weight=1)
         secondary_category_frame.columnconfigure(1, weight=1)
+        links_frame.columnconfigure(1, weight=1)
         main_frame.columnconfigure(0, weight=1)
+
+    def _format_distribution_links_block(self, include_label: bool = True, lang: str = 'en') -> str:
+        """Format streaming links as a small block with optional label."""
+        yt = self.youtube_link_var.get().strip() if hasattr(self, 'youtube_link_var') else ''
+        sp = self.spotify_link_var.get().strip() if hasattr(self, 'spotify_link_var') else ''
+        ap = self.apple_link_var.get().strip() if hasattr(self, 'apple_link_var') else ''
+        
+        lines = []
+        if include_label and (yt or sp or ap):
+            lines.append("Links:" if lang != 'de' else "Links:")
+        if ap:
+            lines.append(f"Apple Music: {ap}")
+        if sp:
+            lines.append(f"Spotify: {sp}")
+        if yt:
+            lines.append(f"YouTube: {yt}")
+        return '\n'.join(lines).strip()
+
+    def _format_structured_description(self, text: str, lang: str = 'en') -> str:
+        """Ensure labeled sections each start on their own line with blank lines between."""
+        if not text:
+            return ''
+        labels = ['Story:', 'Persona:', 'Sound:', 'Spark:'] if lang != 'de' else ['Story:', 'Persona:', 'Sound:', 'Idee:', 'Idee/Prompt:']
+        formatted = text.strip()
+        for lbl in labels:
+            formatted = re.sub(r'\s*' + re.escape(lbl), f'\n\n{lbl}', formatted, flags=re.IGNORECASE)
+        formatted = formatted.strip()
+        formatted = re.sub(r'\n{3,}', '\n\n', formatted)
+        # remove leading blank lines if any
+        formatted = formatted.lstrip('\n')
+        return formatted
+
+    def _get_tools_footer(self) -> str:
+        """Footer line for English descriptions listing tools used."""
+        return "TOOLS: gpt-chat-5.2+Python (Selfwritten) | MUSIC: Suno | VIDEO: gpt-image-1.5, grok imagine"
 
     def ai_suggest_spotify_category(self):
         """Use AI to analyze the song and suggest the appropriate Spotify category."""
@@ -6194,6 +6246,13 @@ TECHNICAL REQUIREMENTS:
                             suggested_secondary = genre
                             break
                 
+                # Fallback: if nothing returned, try heuristic guess from style/lyrics
+                if not suggested_primary:
+                    fallback_text = " ".join([song_style, merged_style, genre_tags_text or '', lyrics_sample if 'lyrics_sample' in locals() else '']).strip()
+                    suggested_primary = self._guess_spotify_category(fallback_text, spotify_genres)
+                    if suggested_primary:
+                        self.log_debug('INFO', f'Heuristic Spotify category fallback used: {suggested_primary}')
+                
                 if suggested_primary:
                     self.spotify_category_var.set(suggested_primary)
                     self.log_debug('INFO', f'AI suggested primary Spotify category: {suggested_primary}')
@@ -6205,6 +6264,7 @@ TECHNICAL REQUIREMENTS:
                         self.log_debug('INFO', f'AI suggested only primary category: {suggested_primary}')
                 else:
                     self.log_debug('WARNING', f'AI response did not match any category. Response: {ai_text}')
+                    messagebox.showwarning('AI Decide', 'Keine Kategorie erkannt. Bitte manuell waehlen oder erneut versuchen.')
             else:
                 error_msg = result.get('error', 'Unknown error')
                 self.log_debug('ERROR', f'AI category suggestion failed: {error_msg}')
@@ -6227,6 +6287,43 @@ TECHNICAL REQUIREMENTS:
             if genre.lower() in text_lower or text_lower in genre.lower():
                 return genre
         
+        return None
+
+    def _guess_spotify_category(self, text: str, spotify_genres: list) -> str | None:
+        """Heuristic fallback guess for Spotify category."""
+        if not text:
+            return None
+        t = text.lower()
+        keyword_map = {
+            'r&b': 'R&B/Soul',
+            'soul': 'R&B/Soul',
+            'hip hop': 'Hip Hop/Rap',
+            'rap': 'Hip Hop/Rap',
+            'trap': 'Hip Hop/Rap',
+            'rock': 'Rock',
+            'metal': 'Metal',
+            'jazz': 'Jazz',
+            'blues': 'Blues',
+            'classical': 'Classical',
+            'orchestra': 'Classical',
+            'pop': 'Pop',
+            'dance': 'Dance',
+            'electronic': 'Electronic',
+            'edm': 'Electronic',
+            'house': 'Dance',
+            'techno': 'Electronic',
+            'country': 'Country',
+            'folk': 'Folk',
+            'latin': 'Latin',
+            'reggae': 'Reggae',
+            'singer songwriter': 'Singer/Songwriter',
+            'vocal': 'Vocal',
+            'soundtrack': 'Soundtrack'
+        }
+        for key, genre in keyword_map.items():
+            if key in t:
+                if genre in spotify_genres:
+                    return genre
         return None
 
     def on_storyboard_select(self, event=None):
@@ -6597,7 +6694,10 @@ TECHNICAL REQUIREMENTS:
                 'song_style': '',
                 'merged_style': '',
                 'song_description': '',
-                'song_description_de': '',
+                    'song_description_de': '',
+                    'youtube_link': '',
+                    'spotify_link': '',
+                    'apple_music_link': '',
                 'album_cover': '',
                 'video_loop': '',
                 'storyboard': [],
@@ -7174,6 +7274,9 @@ TECHNICAL REQUIREMENTS:
                     'merged_style': merged_style or '',
                     'song_description': '',
                     'song_description_de': '',
+                    'youtube_link': '',
+                    'spotify_link': '',
+                    'apple_music_link': '',
                     'album_cover': '',
                     'video_loop': '',
                     'storyboard': [],
@@ -7296,6 +7399,12 @@ TECHNICAL REQUIREMENTS:
             self.spotify_category_var.set(self.current_song.get('spotify_category', ''))
         if hasattr(self, 'spotify_category_secondary_var'):
             self.spotify_category_secondary_var.set(self.current_song.get('spotify_category_secondary', ''))
+        if hasattr(self, 'youtube_link_var'):
+            self.youtube_link_var.set(self.current_song.get('youtube_link', ''))
+        if hasattr(self, 'spotify_link_var'):
+            self.spotify_link_var.set(self.current_song.get('spotify_link', ''))
+        if hasattr(self, 'apple_link_var'):
+            self.apple_link_var.set(self.current_song.get('apple_music_link', ''))
         
         # Check if MP3 file exists and enable/disable play button
         self.update_play_button()
@@ -7334,6 +7443,12 @@ TECHNICAL REQUIREMENTS:
             self.spotify_category_var.set('')
         if hasattr(self, 'spotify_category_secondary_var'):
             self.spotify_category_secondary_var.set('')
+        if hasattr(self, 'youtube_link_var'):
+            self.youtube_link_var.set('')
+        if hasattr(self, 'spotify_link_var'):
+            self.spotify_link_var.set('')
+        if hasattr(self, 'apple_link_var'):
+            self.apple_link_var.set('')
         self.scene_final_prompts = {}
     
     def get_mp3_filepath(self) -> str:
@@ -7796,6 +7911,9 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
             'song_description_de': self.song_description_de_text.get('1.0', tk.END).strip() if hasattr(self, 'song_description_de_text') else self.current_song.get('song_description_de', '') if self.current_song else '',
             'album_cover': self.album_cover_text.get('1.0', tk.END).strip(),
             'video_loop': self.video_loop_text.get('1.0', tk.END).strip(),
+            'youtube_link': self.youtube_link_var.get().strip() if hasattr(self, 'youtube_link_var') else '',
+            'spotify_link': self.spotify_link_var.get().strip() if hasattr(self, 'spotify_link_var') else '',
+            'apple_music_link': self.apple_link_var.get().strip() if hasattr(self, 'apple_link_var') else '',
             'storyboard': self.get_storyboard_data() if hasattr(self, 'storyboard_tree') else [],
             'storyboard_seconds_per_video': int(self.storyboard_seconds_var.get() or '6') if hasattr(self, 'storyboard_seconds_var') else 6,
             'storyboard_image_size': self.storyboard_image_size_var.get() if hasattr(self, 'storyboard_image_size_var') else '3:2 (1536x1024)',
@@ -9041,7 +9159,7 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
             self.config(cursor='')
 
     def generate_song_description(self):
-        """Generate a concise song description (<=500 chars) using AI."""
+        """Generate a structured English song blurb for Facebook."""
         if not self.current_persona:
             messagebox.showwarning('Warning', 'Please select a persona first.')
             return
@@ -9058,17 +9176,26 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
             return
         
         prompt = (
-            f"Write a concise, engaging description for the song '{full_song_name}' "
+            f"Create a short, structured Facebook post for the song '{full_song_name}' "
             f"by the AI persona '{persona_name}'. "
-            f"Keep it promotional and vivid, avoid hashtags and bullet points."
+            "Keep it human, vivid, and promotional. Avoid hashtags, emojis, bullet symbols, and quotes. "
+            "Use 3-5 labeled lines, each 1-2 sentences max, like:"
+            " Story: <what the song is about>"
+            " Persona: <who the persona is / their role or backstory>"
+            " Sound: <core sound styles, instruments, vibe>"
+            " (optional) Spark: <what inspired the prompt or mood>"
+            "Place each labeled line on its own line and insert a blank line between sections for readability."
         )
         if style:
-            prompt += f"\nStyle / vibe hints: {style}"
+            prompt += f"\nSound style hints: {style}"
         if lyric_ideas:
             prompt += f"\nLyric ideas or themes: {lyric_ideas[:400]}"
         if lyrics:
             prompt += f"\nUse the mood of these lyrics (optional, do not quote): {lyrics[:600]}"
-        prompt += "\nHard limit: 500 characters max. Aim for 400-500 chars. Return plain text, no quotes."
+        prompt += (
+            "\nLength cap: about 650 characters total. Return only the 3-5 labeled lines."
+            " Keep style words in English. Preserve the blank lines between sections."
+        )
         
         self.log_debug('INFO', 'Generating song description...')
         self.config(cursor='wait')
@@ -9077,13 +9204,20 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
         try:
             result = self.azure_ai(prompt, profile='text')
             if result['success']:
-                desc_raw = result['content'].strip().replace('\n', ' ')
+                desc_raw = result['content'].strip()
                 desc = self._sanitize_style_keywords(desc_raw)
-                if len(desc) > 500:
-                    desc = desc[:500].rstrip()
+                desc = self._format_structured_description(desc, lang='en')
+                if len(desc) > 700:
+                    desc = desc[:700].rstrip()
+                links_block = self._format_distribution_links_block()
+                if links_block:
+                    desc = f"{desc}\n\n{links_block}"
+                tools_block = self._get_tools_footer()
+                if tools_block:
+                    desc = f"{desc}\n\n{tools_block}"
                 self.song_description_text.delete('1.0', tk.END)
                 self.song_description_text.insert('1.0', desc)
-                self.log_debug('INFO', f'Song description generated ({len(desc)} chars)')
+                self.log_debug('INFO', f'Song description generated ({len(desc)} chars including links)')
             else:
                 messagebox.showerror('Error', f'Failed to generate song description: {result["error"]}')
                 self.log_debug('ERROR', f'Failed to generate song description: {result["error"]}')
@@ -9094,7 +9228,7 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
             self.config(cursor='')
 
     def generate_song_description_de(self):
-        """Generate a structured German song description using AI."""
+        """Generate a structured German song blurb for Facebook."""
         if not self.current_persona:
             messagebox.showwarning('Warning', 'Please select a persona first.')
             return
@@ -9111,15 +9245,16 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
             return
         
         prompt = (
-            f"Erstelle einen kompakten, strukturierten deutschen Beschreibungstext fuer den Song '{full_song_name}' "
+            f"Erstelle einen strukturierten deutschen Facebook-Text fuer den Song '{full_song_name}' "
             f"von der KI-Persona '{persona_name}'. "
-            "Zu jedem geposteten Song muss eine kurze Beschreibung hinzugefuegt werden. "
-            "Beantworte knapp: Worum geht es im Song? Was macht ihn besonders? Welche Stimmung hat er? "
-            "Was war die Idee hinter dem Prompt? Warum? "
-            "Binde explizit Stil/Vibe und Persona-Infos ein. "
-            "Stilbegriffe muessen nicht uebersetzt werden; englische Style-Woerter duerfen unveraendert bleiben. "
-            "Nutze kurze Abschnitte mit Labels, je Abschnitt ein Satz (z. B. Kurzbeschreibung:, Stil/Vibe:, Persona:, Idee/Prompt:, Stimmung:, Besonderes:). "
-            "Keine Bullet-Symbole oder Hashtags. Zeilenumbrueche zwischen Abschnitten sind ok."
+            "Kein Marketing-Sprech, aber lebendig und verstaendlich. Keine Hashtags, Emojis oder Aufzaehlungs-Bullets. "
+            "Nutze 3-5 kurze Zeilen mit Labels, je Zeile 1-2 Saetze, z. B.: "
+            " Story: <kurz worum es geht> "
+            " Persona: <wer die Persona ist, Rolle/Backstory> "
+            " Sound: <wichtigste Sound-Styles, Instrumente, Vibe> "
+            " (optional) Idee: <was den Prompt oder die Stimmung inspiriert hat> "
+            "Stil/Vibe-Begriffe koennen englisch bleiben. "
+            "Jede beschriftete Zeile steht einzeln und wird durch eine Leerzeile getrennt, damit es wie kurze Abschnitte wirkt."
         )
         if style:
             prompt += f"\nStil/Vibe: {style}"
@@ -9127,7 +9262,11 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
             prompt += f"\nIdeen oder Themen: {lyric_ideas[:400]}"
         if lyrics:
             prompt += f"\nStimmung aus diesen Lyrics (optional, nicht zitieren): {lyrics[:600]}"
-        prompt += "\nLiefere nur den strukturierten Text mit Labels, keine weiteren Hinweise."
+        prompt += (
+            "\nZeichenlimit: etwa 650 Zeichen gesamt. "
+            "Liefere nur die 3-5 beschrifteten Zeilen, sonst nichts. "
+            "Blanko-Zeilen zwischen den Abschnitten beibehalten."
+        )
         
         self.log_debug('INFO', 'Generating German song description...')
         self.config(cursor='wait')
@@ -9138,9 +9277,15 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
             if result['success']:
                 desc_raw = result['content'].strip()
                 desc = self._sanitize_style_keywords(desc_raw)
+                desc = self._format_structured_description(desc, lang='de')
+                if len(desc) > 750:
+                    desc = desc[:750].rstrip()
+                links_block = self._format_distribution_links_block(lang='de')
+                if links_block:
+                    desc = f"{desc}\n\n{links_block}"
                 self.song_description_de_text.delete('1.0', tk.END)
                 self.song_description_de_text.insert('1.0', desc)
-                self.log_debug('INFO', f'German song description generated ({len(desc)} chars)')
+                self.log_debug('INFO', f'German song description generated ({len(desc)} chars including links)')
             else:
                 messagebox.showerror('Error', f'Failed to generate German song description: {result["error"]}')
                 self.log_debug('ERROR', f'Failed to generate German song description: {result["error"]}')
@@ -10376,6 +10521,14 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
             "Do not group phrases together; assign a specific start time to every individual word."
             "Do not include any other text or formatting."
         )
+        # Optionally append the already-known lyrics to guide alignment
+        if hasattr(self, 'lyrics_text'):
+            known_lyrics = self.lyrics_text.get('1.0', tk.END).strip()
+            if known_lyrics:
+                transcription_prompt += (
+                    "\n\nHere are the original suno song lyrics for alignment with what you detect from the song:\n"
+                    f"{known_lyrics}"
+                )
 
         self.config(cursor='wait')
         self.update()
@@ -13483,19 +13636,19 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
         desc += f"Style: {merged_style}\n"
         desc += f"Video Type: AI-Generated Music\n\n"
         
-        # Add music platform links if available
-        spotify_link = self.current_persona.get('spotify_link', '').strip()
-        itunes_link = self.current_persona.get('itunes_link', '').strip()
-        youtube_music_link = self.current_persona.get('youtube_music_link', '').strip()
+        # Add music platform links if available (persona-level or song-level overrides)
+        spotify_link = (self.spotify_link_var.get().strip() if hasattr(self, 'spotify_link_var') else '') or self.current_persona.get('spotify_link', '').strip()
+        itunes_link = (self.apple_link_var.get().strip() if hasattr(self, 'apple_link_var') else '') or self.current_persona.get('itunes_link', '').strip()
+        youtube_music_link = (self.youtube_link_var.get().strip() if hasattr(self, 'youtube_link_var') else '') or self.current_persona.get('youtube_music_link', '').strip()
         
         if spotify_link or itunes_link or youtube_music_link:
             desc += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             desc += "🎵 LISTEN ON\n"
             desc += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            if itunes_link:
+                desc += f"Apple Music: {itunes_link}\n"
             if spotify_link:
                 desc += f"Spotify: {spotify_link}\n"
-            if itunes_link:
-                desc += f"iTunes: {itunes_link}\n"
             if youtube_music_link:
                 desc += f"YouTube Music: {youtube_music_link}\n"
             desc += "\n"
@@ -13530,6 +13683,9 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
         content += f"Song Style: {song_style}\n"
         content += f"Merged Style: {merged_style}\n"
         content += f"Lyrics: {lyrics}\n"
+        links_block = self._format_distribution_links_block(include_label=False)
+        if links_block:
+            content += "Links:\n" + links_block + "\n"
         content += f"Album Cover Prompt: {album_cover}\n"
         content += f"Video Loop Prompt: {video_loop}\n"
         content += "\n" + "=" * 70 + "\n"
