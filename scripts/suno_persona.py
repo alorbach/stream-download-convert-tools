@@ -10584,49 +10584,83 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
                                     'text': text_seg
                                 })
                     elif text_only:
-                        # No segments available - estimate timestamps based on text length and song duration
-                        # Split text into sentences/phrases and distribute evenly
-                        self.log_debug('WARNING', 'No segments/words in transcription; estimating timestamps based on song duration')
+                        import re
+                        # If raw text already contains timestamped lines like "MM:SS=word",
+                        # use those timestamps instead of estimating.
+                        timestamped_lines = []
+                        for line in text_only.splitlines():
+                            match = re.match(r'(\d{2}):(\d{2})=(.+)', line.strip())
+                            if match:
+                                minutes = int(match.group(1))
+                                seconds = int(match.group(2))
+                                start_sec = minutes * 60 + seconds
+                                text_part = match.group(3).strip()
+                                if text_part:
+                                    timestamped_lines.append((start_sec, text_part))
                         
-                        # Get song duration
-                        song_duration = self.get_mp3_duration(mp3_path)
-                        if song_duration > 0:
-                            # Split text into sentences (by periods, commas, or line breaks)
-                            import re
-                            # Split by sentence endings, commas, or natural breaks
-                            sentences = re.split(r'[.!?]\s+|[,\n]', text_only)
-                            sentences = [s.strip() for s in sentences if s.strip()]
+                        if timestamped_lines:
+                            song_duration = self.get_mp3_duration(mp3_path)
+                            for i, (start_sec, text_part) in enumerate(timestamped_lines):
+                                # Use next start as end boundary when available; otherwise fall back to song duration if known.
+                                if i + 1 < len(timestamped_lines):
+                                    end_sec = timestamped_lines[i + 1][0]
+                                else:
+                                    end_sec = song_duration if song_duration > 0 else None
+                                
+                                entry = {
+                                    'timestamp': start_sec,
+                                    'timestamp_formatted': f"{int(start_sec // 60)}:{int(start_sec % 60):02d}",
+                                    'text': text_part
+                                }
+                                
+                                if end_sec is not None:
+                                    entry['end_timestamp'] = end_sec
+                                    entry['end_timestamp_formatted'] = f"{int(end_sec // 60)}:{int(end_sec % 60):02d}"
+                                
+                                lyrics_json.append(entry)
+                        else:
+                            # No segments available - estimate timestamps based on text length and song duration
+                            # Split text into sentences/phrases and distribute evenly
+                            self.log_debug('WARNING', 'No segments/words in transcription; estimating timestamps based on song duration')
                             
-                            if sentences:
-                                # Distribute timestamps evenly across song duration
-                                time_per_sentence = song_duration / len(sentences)
-                                for i, sentence in enumerate(sentences):
-                                    estimated_start = i * time_per_sentence
-                                    minutes = int(estimated_start // 60)
-                                    seconds = int(estimated_start % 60)
-                                    timestamp_str = f"{minutes}:{seconds:02d}"
+                            # Get song duration
+                            song_duration = self.get_mp3_duration(mp3_path)
+                            if song_duration > 0:
+                                # Split text into sentences (by periods, commas, or line breaks)
+                                # Split by sentence endings, commas, or natural breaks
+                                sentences = re.split(r'[.!?]\s+|[,\n]', text_only)
+                                sentences = [s.strip() for s in sentences if s.strip()]
+                                
+                                if sentences:
+                                    # Distribute timestamps evenly across song duration
+                                    time_per_sentence = song_duration / len(sentences)
+                                    for i, sentence in enumerate(sentences):
+                                        estimated_start = i * time_per_sentence
+                                        minutes = int(estimated_start // 60)
+                                        seconds = int(estimated_start % 60)
+                                        timestamp_str = f"{minutes}:{seconds:02d}"
+                                        lyrics_json.append({
+                                            'timestamp': estimated_start,
+                                            'timestamp_formatted': timestamp_str,
+                                            'text': sentence,
+                                            'estimated': True  # Mark as estimated
+                                        })
+                                else:
+                                    # Fallback: treat entire text as one entry
                                     lyrics_json.append({
-                                        'timestamp': estimated_start,
-                                        'timestamp_formatted': timestamp_str,
-                                        'text': sentence,
-                                        'estimated': True  # Mark as estimated
+                                        'timestamp': 0.0,
+                                        'timestamp_formatted': '0:00',
+                                        'text': text_only,
+                                        'estimated': True
                                     })
                             else:
-                                # Fallback: treat entire text as one entry
+                                # No duration available - just use 0:00
                                 lyrics_json.append({
                                     'timestamp': 0.0,
                                     'timestamp_formatted': '0:00',
                                     'text': text_only,
                                     'estimated': True
                                 })
-                        else:
-                            # No duration available - just use 0:00
-                            lyrics_json.append({
-                                'timestamp': 0.0,
-                                'timestamp_formatted': '0:00',
-                                'text': text_only,
-                                'estimated': True
-                            })
                     
                     # Save formatted JSON with timestamps
                     if lyrics_json and self.current_song_path:
