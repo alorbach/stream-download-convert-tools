@@ -8932,6 +8932,12 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
         
         def process_lyrics():
             operation = operation_var.get()
+            target_lang = lang_var.get() if operation == 'translate' else ''
+            custom_instructions = custom_text.get('1.0', tk.END).strip() if operation == 'custom' else ''
+            
+            if operation == 'custom' and not custom_instructions:
+                messagebox.showwarning('Warning', 'Please enter custom instructions.')
+                return
             
             self.log_debug('INFO', f'Processing lyrics with operation: {operation}')
             dialog.destroy()
@@ -8960,7 +8966,6 @@ Return ONLY the improved lyrics with section labels like [Verse 1], [Chorus], et
                     system_message = "You are an expert lyricist who improves song lyrics while maintaining their essence and structure."
                 
                 elif operation == 'translate':
-                    target_lang = lang_var.get()
                     lang_names = {'de': 'German', 'en': 'English', 'es': 'Spanish', 'fr': 'French', 'it': 'Italian'}
                     target_lang_name = lang_names.get(target_lang, 'German')
                     
@@ -8983,12 +8988,6 @@ Return ONLY the translated lyrics with section labels."""
                     system_message = f"You are an expert translator specializing in song lyrics, translating to {target_lang_name} while maintaining singability and emotional impact."
                 
                 elif operation == 'custom':
-                    custom_instructions = custom_text.get('1.0', tk.END).strip()
-                    if not custom_instructions:
-                        messagebox.showwarning('Warning', 'Please enter custom instructions.')
-                        self.config(cursor='')
-                        return
-                    
                     prompt = f"""Modify the following song lyrics according to the custom instructions below.
 
 ORIGINAL LYRICS:
