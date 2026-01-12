@@ -281,6 +281,89 @@ def get_ai_covers_root(config: dict = None) -> str:
     return os.path.join(project_root, 'AI-COVERS')
 
 
+def resolve_analysis_data_path(config: dict = None) -> str:
+    """Resolve path to SongStyleAnalyzer JSON outputs (default: data/)."""
+    rel = ''
+    if config:
+        rel = (config.get('general', {}) or {}).get('analysis_data_path', '') or ''
+    rel = rel.strip() if isinstance(rel, str) else ''
+    if not rel:
+        rel = 'data'
+    if os.path.isabs(rel):
+        return rel
+    return os.path.join(get_project_root(config), rel)
+
+
+def _load_song_style_analyzer_entries_from_file(json_path: str) -> list[dict]:
+    """Load entries from SongStyleAnalyzer JSON (list) or single dict."""
+    try:
+        with open(json_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except Exception:
+        return []
+
+    if isinstance(data, list):
+        entries = data
+    elif isinstance(data, dict):
+        # Some exports might wrap results; also support single-entry dict.
+        if isinstance(data.get('results'), list):
+            entries = data.get('results', [])
+        else:
+            entries = [data]
+    else:
+        return []
+
+    out = []
+    for e in entries:
+        if not isinstance(e, dict):
+            continue
+        # Heuristic: only accept SongStyleAnalyzer-like objects
+        if 'style_analysis' in e or 'agent_usage_suggestions' in e or 'input_metadata' in e:
+            out.append(e)
+    return out
+
+
+def _analysis_entry_display_name(entry: dict) -> str:
+    meta = entry.get('input_metadata', {}) or {}
+    title = str(meta.get('title', '') or '').strip()
+    artist = str(meta.get('artist', '') or '').strip()
+    if title and artist and artist.lower() != 'unknown':
+        return f'{title} - {artist}'
+    if title:
+        return title
+    task_id = str(entry.get('task_id', '') or '').strip()
+    return task_id or 'Unknown'
+
+
+def _analysis_entry_style_text(entry: dict, source: str = 'suno_style_prompt') -> str:
+    source = (source or '').strip().lower()
+    if source == 'prompt_string':
+        style_analysis = entry.get('style_analysis', {}) or {}
+        return str(style_analysis.get('prompt_string', '') or '').strip()
+    if source == 'taxonomy_compact':
+        style_analysis = entry.get('style_analysis', {}) or {}
+        taxonomy = style_analysis.get('taxonomy', {}) or {}
+        primary = str(taxonomy.get('primary_genre', '') or '').strip()
+        sub = str(taxonomy.get('sub_genre', '') or '').strip()
+        mood = str(taxonomy.get('mood', '') or '').strip()
+        tags = taxonomy.get('fusion_tags', []) or []
+        if not isinstance(tags, list):
+            tags = []
+        parts = []
+        if primary:
+            parts.append(primary)
+        if sub and sub.lower() != primary.lower():
+            parts.append(sub)
+        if tags:
+            parts.append(', '.join([str(t).strip() for t in tags if str(t).strip()]))
+        if mood:
+            parts.append(mood)
+        return ', '.join([p for p in parts if p])
+    # default: suno_style_prompt
+    usage = entry.get('agent_usage_suggestions', {}) or {}
+    return str(usage.get('suno_style_prompt', '') or '').strip()
+
+
 def parse_ai_cover_name(cover_name: str) -> dict:
     """
     Parse AI cover name in current format: [Song Name] - [Artist] - [Epoch Year]s [3 keywords] - AI Cover
@@ -500,7 +583,8 @@ def load_config() -> dict:
             "csv_file_path": "suno/suno_sound_styles.csv",
             "default_save_path": "",
             "title_appendix": "Cover",
-            "maker_links": "• Subscribe: [Your Channel Link]"
+            "maker_links": "• Subscribe: [Your Channel Link]",
+            "analysis_data_path": "data"
         },
         "profiles": {
             "text": {
@@ -1473,6 +1557,7 @@ class SunoStyleBrowser(tk.Tk):
         song_menu.add_command(label='Rename Song...', command=self.show_rename_dialog, accelerator='F2')
         song_menu.add_separator()
         song_menu.add_command(label='Load Style from Song...', command=self.show_style_derivation_dialog)
+        song_menu.add_command(label='Load Style from Analysis (data/*.json)...', command=self.show_style_import_from_analysis_dialog)
         
         settings_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label='Settings', menu=settings_menu)
@@ -4061,6 +4146,162 @@ class SunoStyleBrowser(tk.Tk):
         
         dialog.bind('<Return>', lambda e: do_load())
         dialog.bind('<Escape>', lambda e: dialog.destroy())
+
+    def show_style_import_from_analysis_dialog(self):
+        """Load style text from SongStyleAnalyzer JSON in data/."""
+        entries = None
+        json_path = ''
+
+        # Reuse last loaded analysis without re-opening file picker
+        cache = getattr(self, '_analysis_import_cache', None)
+        if isinstance(cache, dict):
+            cached_path = str(cache.get('path', '') or '')
+            cached_entries = cache.get('entries')
+            if cached_path and isinstance(cached_entries, list) and os.path.exists(cached_path):
+                reuse = messagebox.askyesno(
+                    'Reuse last analysis?',
+                    f'Reuse the last loaded analysis file?\n\n{cached_path}\n\n(Choose No to load a different file.)'
+                )
+                if reuse:
+                    json_path = cached_path
+                    entries = cached_entries
+
+        if entries is None:
+            data_dir = resolve_analysis_data_path(self.ai_config)
+            initial_dir = data_dir if os.path.isdir(data_dir) else os.getcwd()
+            json_path = filedialog.askopenfilename(
+                title='Select analysis JSON file (SongStyleAnalyzer output)',
+                initialdir=initial_dir,
+                filetypes=[('JSON Files', '*.json'), ('All Files', '*.*')]
+            )
+            if not json_path:
+                return
+            entries = _load_song_style_analyzer_entries_from_file(json_path)
+
+        if not entries:
+            messagebox.showwarning('Warning', f'No valid SongStyleAnalyzer entries found in:\n{json_path}')
+            return
+
+        # Cache for next time (in-memory only)
+        try:
+            self._analysis_import_cache = {'path': json_path, 'entries': entries}
+        except Exception:
+            pass
+
+        dialog = tk.Toplevel(self)
+        dialog.title('Load Style from Analysis')
+        dialog.geometry('760x520')
+        dialog.transient(self)
+        dialog.grab_set()
+
+        dialog.update_idletasks()
+        x = self.winfo_x() + (self.winfo_width() // 2) - (dialog.winfo_width() // 2)
+        y = self.winfo_y() + (self.winfo_height() // 2) - (dialog.winfo_height() // 2)
+        dialog.geometry(f"+{x}+{y}")
+
+        top = ttk.Frame(dialog, padding=10)
+        top.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(top, text='Select entry:', font=('TkDefaultFont', 9, 'bold')).pack(anchor=tk.W)
+        filter_var = tk.StringVar()
+        filter_entry = ttk.Entry(top, textvariable=filter_var)
+        filter_entry.pack(fill=tk.X, pady=(6, 4))
+        status_var = tk.StringVar(value='')
+        ttk.Label(top, textvariable=status_var, foreground='gray').pack(anchor=tk.W, pady=(0, 8))
+
+        list_frame = ttk.Frame(top)
+        list_frame.pack(fill=tk.BOTH, expand=True)
+        lb = tk.Listbox(list_frame, exportselection=False)
+        sb = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=lb.yview)
+        lb.config(yscrollcommand=sb.set)
+        lb.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+
+        def _entry_search_blob(entry: dict) -> str:
+            parts = []
+            parts.append(_analysis_entry_display_name(entry))
+            parts.append(_analysis_entry_style_text(entry, source='suno_style_prompt'))
+            parts.append(_analysis_entry_style_text(entry, source='prompt_string'))
+            parts.append(_analysis_entry_style_text(entry, source='taxonomy_compact'))
+            usage = entry.get('agent_usage_suggestions', {}) or {}
+            parts.append(str(usage.get('negative_prompt', '') or ''))
+            return ' '.join([p for p in parts if p]).lower()
+
+        display = []
+        for e in entries:
+            name = _analysis_entry_display_name(e)
+            display.append({'name': name, 'entry': e, 'blob': _entry_search_blob(e)})
+        display.sort(key=lambda x: x['name'].lower())
+        filtered = {'items': display}
+
+        def repopulate():
+            raw = filter_var.get().strip().lower()
+            terms = [t for t in re.split(r'[\s,]+', raw) if t]
+            lb.delete(0, tk.END)
+            items = display
+            if terms:
+                items = []
+                for it in display:
+                    blob = it.get('blob', '')
+                    if all((t in blob) for t in terms):
+                        items.append(it)
+            filtered['items'] = items
+            for it in items:
+                lb.insert(tk.END, it.get('name', ''))
+            status_var.set(f'Matches: {len(items)}/{len(display)}')
+
+        repopulate()
+        filter_entry.bind('<KeyRelease>', lambda _e: repopulate())
+
+        opts = ttk.LabelFrame(top, text='Options', padding=10)
+        opts.pack(fill=tk.X, pady=(10, 0))
+
+        source_var = tk.StringVar(value='suno_style_prompt')
+        ttk.Label(opts, text='Source:').grid(row=0, column=0, sticky=tk.W)
+        ttk.Radiobutton(opts, text='Suno style prompt', variable=source_var, value='suno_style_prompt').grid(row=0, column=1, sticky=tk.W, padx=(10, 0))
+        ttk.Radiobutton(opts, text='Prompt string', variable=source_var, value='prompt_string').grid(row=0, column=2, sticky=tk.W, padx=(10, 0))
+        ttk.Radiobutton(opts, text='Taxonomy compact', variable=source_var, value='taxonomy_compact').grid(row=0, column=3, sticky=tk.W, padx=(10, 0))
+
+        target_var = tk.StringVar(value='styles')
+        ttk.Label(opts, text='Target:').grid(row=1, column=0, sticky=tk.W, pady=(8, 0))
+        ttk.Radiobutton(opts, text='Styles field', variable=target_var, value='styles').grid(row=1, column=1, sticky=tk.W, padx=(10, 0), pady=(8, 0))
+        ttk.Radiobutton(opts, text='Merged style field', variable=target_var, value='merged_style').grid(row=1, column=2, sticky=tk.W, padx=(10, 0), pady=(8, 0))
+
+        def do_load():
+            sel = lb.curselection()
+            if not sel:
+                messagebox.showwarning('Warning', 'Please select an entry.')
+                return
+            idx = sel[0]
+            items = filtered['items']
+            if idx < 0 or idx >= len(items):
+                return
+            name = items[idx].get('name', '')
+            entry = items[idx].get('entry', {})
+            style_text = _analysis_entry_style_text(entry, source=source_var.get())
+            style_text = (style_text or '').strip()
+            if not style_text:
+                messagebox.showwarning('Warning', f'No style text found for: {name}')
+                return
+
+            if target_var.get() == 'merged_style':
+                self.merged_style_text.delete('1.0', tk.END)
+                self.merged_style_text.insert('1.0', style_text)
+            else:
+                self.styles_text.delete('1.0', tk.END)
+                self.styles_text.insert('1.0', style_text)
+            self.log_debug('INFO', f'Loaded analysis style: {name}')
+            dialog.destroy()
+
+        btns = ttk.Frame(top)
+        btns.pack(fill=tk.X, pady=(10, 0))
+        ttk.Button(btns, text='Load', command=do_load).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(btns, text='Cancel', command=dialog.destroy).pack(side=tk.LEFT)
+
+        lb.bind('<Double-Button-1>', lambda _e: do_load())
+        dialog.bind('<Return>', lambda _e: do_load())
+        dialog.bind('<Escape>', lambda _e: dialog.destroy())
+        filter_entry.focus_set()
     
     def show_shortcuts(self):
         """Show keyboard shortcuts dialog."""
