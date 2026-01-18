@@ -2341,6 +2341,8 @@ def load_song_config(song_path: str) -> dict:
         'album_cover_size': '1:1 (1024x1024)',
         'album_cover_format': 'PNG',
         'video_loop_size': '9:16 (720x1280)',
+        'video_loop_duration': 6,
+        'video_loop_multiscene': False,
         'overlay_lyrics_on_image': False,
         'embed_lyrics_in_prompt': True,
         'embed_keywords_in_prompt': False,
@@ -5493,6 +5495,17 @@ TECHNICAL REQUIREMENTS:
                                              state='readonly', width=18)
         video_loop_size_combo.pack(side=tk.LEFT, padx=2)
         
+        ttk.Label(video_loop_toolbar, text='Duration:', font=('TkDefaultFont', 8)).pack(side=tk.LEFT, padx=(10, 2))
+        self.video_loop_duration_var = tk.StringVar(value='6')
+        video_loop_duration_spin = ttk.Spinbox(video_loop_toolbar, from_=2, to=30, textvariable=self.video_loop_duration_var, width=4)
+        video_loop_duration_spin.pack(side=tk.LEFT, padx=2)
+        ttk.Label(video_loop_toolbar, text='sec', font=('TkDefaultFont', 8)).pack(side=tk.LEFT)
+        
+        self.video_loop_multiscene_var = tk.BooleanVar(value=False)
+        multiscene_cb = ttk.Checkbutton(video_loop_toolbar, text='Multi-Scene (2s)', variable=self.video_loop_multiscene_var)
+        multiscene_cb.pack(side=tk.LEFT, padx=(10, 2))
+        create_tooltip(multiscene_cb, 'Generate scene-switching prompt with scene changes every 2 seconds')
+        
         self.video_loop_text = scrolledtext.ScrolledText(video_loop_frame, height=6, wrap=tk.WORD, width=60)
         self.video_loop_text.pack(fill=tk.BOTH, expand=True)
         
@@ -7501,6 +7514,10 @@ TECHNICAL REQUIREMENTS:
             self.album_cover_format_var.set(self.current_song.get('album_cover_format', 'PNG'))
         if hasattr(self, 'video_loop_size_var'):
             self.video_loop_size_var.set(self.current_song.get('video_loop_size', '9:16 (720x1280)'))
+        if hasattr(self, 'video_loop_duration_var'):
+            self.video_loop_duration_var.set(str(self.current_song.get('video_loop_duration', 6)))
+        if hasattr(self, 'video_loop_multiscene_var'):
+            self.video_loop_multiscene_var.set(self.current_song.get('video_loop_multiscene', False))
         
         # Load extracted lyrics
         if hasattr(self, 'extracted_lyrics_text'):
@@ -7553,6 +7570,10 @@ TECHNICAL REQUIREMENTS:
             self.song_description_de_text.delete('1.0', tk.END)
         self.album_cover_text.delete('1.0', tk.END)
         self.video_loop_text.delete('1.0', tk.END)
+        if hasattr(self, 'video_loop_duration_var'):
+            self.video_loop_duration_var.set('6')
+        if hasattr(self, 'video_loop_multiscene_var'):
+            self.video_loop_multiscene_var.set(False)
         if hasattr(self, 'overlay_lyrics_var'):
             self.overlay_lyrics_var.set(False)
         if hasattr(self, 'embed_lyrics_var'):
@@ -8040,6 +8061,8 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
             'album_cover_size': self.album_cover_size_var.get() if hasattr(self, 'album_cover_size_var') else '1:1 (1024x1024)',
             'album_cover_format': self.album_cover_format_var.get() if hasattr(self, 'album_cover_format_var') else 'PNG',
             'video_loop_size': self.video_loop_size_var.get() if hasattr(self, 'video_loop_size_var') else '9:16 (720x1280)',
+            'video_loop_duration': int(self.video_loop_duration_var.get() or 6) if hasattr(self, 'video_loop_duration_var') else 6,
+            'video_loop_multiscene': bool(self.video_loop_multiscene_var.get()) if hasattr(self, 'video_loop_multiscene_var') else False,
             'overlay_lyrics_on_image': bool(self.overlay_lyrics_var.get()) if hasattr(self, 'overlay_lyrics_var') else False,
             'embed_lyrics_in_prompt': bool(self.embed_lyrics_var.get()) if hasattr(self, 'embed_lyrics_var') else True,
             'embed_keywords_in_prompt': bool(self.embed_keywords_var.get()) if hasattr(self, 'embed_keywords_var') else False,
@@ -10907,7 +10930,7 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
             self.config(cursor='')
     
     def generate_video_loop(self):
-        """Generate video loop prompt."""
+        """Generate video loop prompt. Supports multi-scene mode with scene switches every 2 seconds."""
         if not self.current_persona:
             messagebox.showwarning('Warning', 'Please select a persona first.')
             return
@@ -10920,6 +10943,12 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
         if not album_cover:
             messagebox.showwarning('Warning', 'Please generate an album cover prompt first.')
             return
+        
+        # Get multi-scene settings
+        is_multiscene = self.video_loop_multiscene_var.get() if hasattr(self, 'video_loop_multiscene_var') else False
+        video_duration = int(self.video_loop_duration_var.get() or 6) if hasattr(self, 'video_loop_duration_var') else 6
+        scene_duration = 2  # Scene switch every 2 seconds
+        num_scenes = video_duration // scene_duration if is_multiscene else 1
         
         # Check if persona reference images exist
         safe_name = self._safe_persona_basename()
@@ -10951,18 +10980,38 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
         if vibe:
             prompt += f"\n\nPersona Vibe: {vibe}"
         
+        # Add multi-scene instructions if enabled
+        if is_multiscene and num_scenes > 1:
+            prompt += f"\n\n=== MULTI-SCENE VIDEO LOOP ({video_duration} seconds total) ==="
+            prompt += f"\n\nCreate a {video_duration}-second video loop with {num_scenes} distinct scenes, each lasting {scene_duration} seconds."
+            prompt += "\n\nIMPORTANT MULTI-SCENE REQUIREMENTS:"
+            prompt += "\n- Each scene must be visually distinct but thematically connected"
+            prompt += "\n- Use DIRECT CAMERA CUTS between scenes (NO smooth transitions, NO fades, NO morphing)"
+            prompt += "\n- The persona/character must appear consistently across all scenes"
+            prompt += "\n- Scene changes should feel dynamic and match the music energy"
+            prompt += "\n- Each scene should have a different camera angle, setting, or composition"
+            prompt += "\n\nFormat your output as:"
+            for i in range(num_scenes):
+                start_time = i * scene_duration
+                end_time = start_time + scene_duration
+                prompt += f"\n\n[{start_time}s-{end_time}s] Scene {i+1}: [describe the scene]"
+        
         # If reference images exist, use vision API to analyze them
         if reference_images:
             prompt += f"\n\nAnalyze the provided reference images of this persona and create a video loop prompt that matches the character's visual appearance, styling, and aesthetic from these images."
             prompt += "\n\nIMPORTANT: The video loop must fully incorporate ALL visual characteristics from the persona's Visual Aesthetic and Base Image Prompt descriptions above."
-            prompt += "\n\nCreate a seamless looping video prompt suitable for music visualization that incorporates ALL of the persona's visual characteristics, appearance, styling, and aesthetic."
+            if not is_multiscene:
+                prompt += "\n\nCreate a seamless looping video prompt suitable for music visualization that incorporates ALL of the persona's visual characteristics, appearance, styling, and aesthetic."
             
-            self.log_debug('INFO', f'Generating video loop prompt using {len(reference_images)} reference images...')
+            self.log_debug('INFO', f'Generating {"multi-scene " if is_multiscene else ""}video loop prompt using {len(reference_images)} reference images...')
             self.config(cursor='wait')
             self.update()
             
             try:
-                system_message = 'You are a professional video prompt generator for music visualizers. Analyze the reference images and create a video loop prompt that matches the character\'s visual appearance. Generate clean, artistic, SFW video prompts suitable for music content. Output ONLY the final video prompt text with no explanations.'
+                if is_multiscene:
+                    system_message = f'You are a professional video prompt generator for music visualizers. Create a {video_duration}-second multi-scene video with {num_scenes} distinct scenes ({scene_duration}s each). Analyze the reference images and ensure the character appears consistently across all scenes. Generate clean, artistic, SFW video prompts suitable for music content. Output ONLY the final video prompt text with scene timestamps.'
+                else:
+                    system_message = 'You are a professional video prompt generator for music visualizers. Analyze the reference images and create a video loop prompt that matches the character\'s visual appearance. Generate clean, artistic, SFW video prompts suitable for music content. Output ONLY the final video prompt text with no explanations.'
                 result = self.azure_vision(reference_images, prompt, system_message=system_message, profile='text')
             except Exception as e:
                 messagebox.showerror('Error', f'Error generating video loop prompt: {e}')
@@ -10970,14 +11019,18 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
                 return
         else:
             prompt += "\n\nIMPORTANT: The video loop must fully incorporate ALL visual characteristics from the persona's Visual Aesthetic and Base Image Prompt descriptions above."
-            prompt += "\n\nCreate a seamless looping video prompt suitable for music visualization that incorporates ALL of the persona's visual characteristics, appearance, styling, and aesthetic."
+            if not is_multiscene:
+                prompt += "\n\nCreate a seamless looping video prompt suitable for music visualization that incorporates ALL of the persona's visual characteristics, appearance, styling, and aesthetic."
             
-            self.log_debug('INFO', 'Generating video loop prompt (no reference images available)...')
+            self.log_debug('INFO', f'Generating {"multi-scene " if is_multiscene else ""}video loop prompt (no reference images available)...')
             self.config(cursor='wait')
             self.update()
             
             try:
-                system_message = 'You are a professional video prompt generator for music visualizers. Generate clean, artistic, SFW video prompts suitable for music content. Output ONLY the final video prompt text with no explanations.'
+                if is_multiscene:
+                    system_message = f'You are a professional video prompt generator for music visualizers. Create a {video_duration}-second multi-scene video with {num_scenes} distinct scenes ({scene_duration}s each). Generate clean, artistic, SFW video prompts suitable for music content. Output ONLY the final video prompt text with scene timestamps.'
+                else:
+                    system_message = 'You are a professional video prompt generator for music visualizers. Generate clean, artistic, SFW video prompts suitable for music content. Output ONLY the final video prompt text with no explanations.'
                 result = self.azure_ai(prompt, system_message, profile='text')
             except Exception as e:
                 messagebox.showerror('Error', f'Error generating video loop prompt: {e}')
@@ -10991,7 +11044,8 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
                 video_prompt = self._sanitize_style_keywords(video_prompt_raw)
                 self.video_loop_text.delete('1.0', tk.END)
                 self.video_loop_text.insert('1.0', video_prompt)
-                self.log_debug('INFO', 'Video loop prompt generated successfully')
+                mode_str = f'multi-scene ({num_scenes} scenes)' if is_multiscene else 'single scene'
+                self.log_debug('INFO', f'Video loop prompt generated successfully ({mode_str})')
             else:
                 messagebox.showerror('Error', f'Failed to generate video loop prompt: {result["error"]}')
                 self.log_debug('ERROR', f'Failed to generate video loop prompt: {result["error"]}')
