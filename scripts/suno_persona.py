@@ -3506,8 +3506,15 @@ Return only the single most important keyword, nothing else. Just one word."""
                 text_widget.pack(fill=tk.BOTH, expand=True)
                 
                 btn_frame = ttk.Frame(scrollable_frame)
-                btn_frame.grid(row=row, column=2, padx=5, pady=5)
-                ttk.Button(btn_frame, text='AI Enhance', command=lambda k=key: self.ai_enhance_persona_field(k)).pack()
+                btn_frame.grid(row=row, column=2, padx=5, pady=5, sticky=tk.N)
+                
+                # Special handling for lyrics_style field - add Generate and Improve buttons
+                if key == 'lyrics_style':
+                    ttk.Button(btn_frame, text='Generate', command=self.generate_lyrics_style).pack(fill=tk.X, pady=(0, 2))
+                    ttk.Button(btn_frame, text='Improve', command=self.improve_lyrics_style).pack(fill=tk.X, pady=(0, 2))
+                    ttk.Button(btn_frame, text='AI Enhance', command=lambda k=key: self.ai_enhance_persona_field(k)).pack(fill=tk.X)
+                else:
+                    ttk.Button(btn_frame, text='AI Enhance', command=lambda k=key: self.ai_enhance_persona_field(k)).pack()
                 
                 self.persona_widgets[key] = text_widget
             else:
@@ -4515,6 +4522,245 @@ Return only the single most important keyword, nothing else. Just one word."""
             self.log_debug('ERROR', f'Error enhancing {field_key}: {e}')
         finally:
             self.config(cursor='')
+    
+    def generate_lyrics_style(self):
+        """Generate a comprehensive lyrics_style based on persona data."""
+        if not self.current_persona:
+            messagebox.showwarning('Warning', 'Please select a persona first.')
+            return
+        
+        persona_name = self.current_persona.get('name', '')
+        tagline = self.current_persona.get('tagline', '')
+        vibe = self.current_persona.get('vibe', '')
+        bio = self.current_persona.get('bio', '')
+        voice_style = self.current_persona.get('voice_style', '')
+        visual_aesthetic = self.current_persona.get('visual_aesthetic', '')
+        genre_tags = self.current_persona.get('genre_tags', [])
+        genre_text = ', '.join(genre_tags) if isinstance(genre_tags, list) else str(genre_tags or '')
+        
+        prompt = f"""Analyze this musical persona and generate a comprehensive LYRICS STYLE definition.
+
+=== PERSONA DATA ===
+Name: {persona_name}
+Tagline: {tagline}
+Vibe: {vibe}
+Bio: {bio[:500] if bio else 'Not provided'}
+Voice Style: {voice_style}
+Visual Aesthetic: {visual_aesthetic}
+Genre Tags: {genre_text}
+
+=== TASK ===
+Create a detailed lyrics_style definition that will guide AI lyric generation for this persona.
+
+The lyrics_style should define:
+1. NARRATIVE APPROACH: How stories are told (first-person confessional, third-person observer, stream of consciousness, etc.)
+2. EMOTIONAL REGISTER: The emotional range and intensity (raw vulnerability, controlled tension, explosive catharsis, etc.)
+3. IMAGERY PREFERENCES: Types of images and metaphors that fit this persona (urban decay, natural elements, technological, domestic, etc.)
+4. VOCABULARY LEVEL: Word choice character (street vernacular, poetic elevated, technical jargon, simple direct, etc.)
+5. THEMATIC OBSESSIONS: Recurring themes this persona would explore (loss, rebellion, love, identity, survival, etc.)
+6. STRUCTURAL TENDENCIES: Preferred lyrical structures (short punchy lines, flowing prose-like verses, call-and-response, etc.)
+7. UNIQUE VOICE MARKERS: Specific phrases, verbal tics, or stylistic signatures that make this persona distinctive
+
+=== CRITICAL RULES ===
+- Be SPECIFIC to this persona - avoid generic descriptions
+- Focus on what makes this artist's lyrics UNIQUE and RECOGNIZABLE
+- Include guidance that helps AVOID cliched or overused imagery
+- The style should feel like a creative brief for a songwriter
+
+=== OUTPUT FORMAT ===
+Provide a single paragraph (150-250 words) that captures all these elements in a flowing, usable style definition.
+Do NOT use bullet points or numbered lists - write it as cohesive prose.
+Output ONLY the lyrics_style text, no explanations or labels."""
+
+        system_message = (
+            "You are a music industry A&R specialist and lyricist who creates detailed artist style guides. "
+            "Your output will be used directly as a lyrics_style field to guide AI lyric generation. "
+            "Be specific, creative, and focused on what makes each artist unique. "
+            "Output ONLY the style definition text - no labels, explanations, or formatting."
+        )
+        
+        self.log_debug('INFO', 'Generating lyrics_style from persona data...')
+        self.config(cursor='wait')
+        self.update()
+        
+        try:
+            result = self.azure_ai(prompt, system_message=system_message, profile='text', max_tokens=1000)
+            
+            if result['success']:
+                generated_style = result['content'].strip()
+                # Clean up any markdown or labels
+                generated_style = generated_style.replace('**', '').replace('*', '').strip()
+                # Remove common prefixes if AI added them
+                for prefix in ['Lyrics Style:', 'lyrics_style:', 'Style:', 'Here is', 'Here\'s']:
+                    if generated_style.lower().startswith(prefix.lower()):
+                        generated_style = generated_style[len(prefix):].strip()
+                
+                # Update the lyrics_style widget
+                if 'lyrics_style' in self.persona_widgets:
+                    widget = self.persona_widgets['lyrics_style']
+                    if isinstance(widget, scrolledtext.ScrolledText):
+                        widget.delete('1.0', tk.END)
+                        widget.insert('1.0', generated_style)
+                
+                self.log_debug('INFO', 'lyrics_style generated successfully')
+                messagebox.showinfo('Success', 'Lyrics style generated from persona data.')
+            else:
+                messagebox.showerror('Error', f'Failed to generate lyrics_style: {result["error"]}')
+                self.log_debug('ERROR', f'Failed to generate lyrics_style: {result["error"]}')
+        except Exception as e:
+            messagebox.showerror('Error', f'Error generating lyrics_style: {e}')
+            self.log_debug('ERROR', f'Error generating lyrics_style: {e}')
+        finally:
+            self.config(cursor='')
+    
+    def improve_lyrics_style(self):
+        """Improve the existing lyrics_style with user customization options."""
+        if not self.current_persona:
+            messagebox.showwarning('Warning', 'Please select a persona first.')
+            return
+        
+        # Get current lyrics_style
+        current_style = ''
+        if 'lyrics_style' in self.persona_widgets:
+            widget = self.persona_widgets['lyrics_style']
+            if isinstance(widget, scrolledtext.ScrolledText):
+                current_style = widget.get('1.0', tk.END).strip()
+        
+        if not current_style:
+            # If empty, offer to generate instead
+            if messagebox.askyesno('No Lyrics Style', 'No lyrics style defined yet. Would you like to generate one from persona data?'):
+                self.generate_lyrics_style()
+            return
+        
+        # Create improvement dialog
+        dialog = tk.Toplevel(self)
+        dialog.title('Improve Lyrics Style')
+        dialog.geometry('600x500')
+        dialog.transient(self)
+        dialog.grab_set()
+        
+        main_frame = ttk.Frame(dialog, padding=10)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Current style display
+        ttk.Label(main_frame, text='Current Lyrics Style:', font=('TkDefaultFont', 9, 'bold')).pack(anchor=tk.W)
+        current_display = scrolledtext.ScrolledText(main_frame, height=6, wrap=tk.WORD)
+        current_display.pack(fill=tk.X, pady=(5, 10))
+        current_display.insert('1.0', current_style)
+        current_display.config(state='disabled')
+        
+        # Improvement options
+        ttk.Label(main_frame, text='Improvement Direction:', font=('TkDefaultFont', 9, 'bold')).pack(anchor=tk.W, pady=(10, 5))
+        
+        direction_var = tk.StringVar(value='enhance')
+        directions_frame = ttk.Frame(main_frame)
+        directions_frame.pack(fill=tk.X, pady=5)
+        
+        ttk.Radiobutton(directions_frame, text='Enhance & Expand', variable=direction_var, value='enhance').pack(anchor=tk.W)
+        ttk.Radiobutton(directions_frame, text='Make More Unique/Distinctive', variable=direction_var, value='unique').pack(anchor=tk.W)
+        ttk.Radiobutton(directions_frame, text='Add Anti-Cliche Guidance', variable=direction_var, value='anticliche').pack(anchor=tk.W)
+        ttk.Radiobutton(directions_frame, text='Simplify & Focus', variable=direction_var, value='simplify').pack(anchor=tk.W)
+        ttk.Radiobutton(directions_frame, text='Custom Instructions', variable=direction_var, value='custom').pack(anchor=tk.W)
+        
+        # Custom instructions
+        ttk.Label(main_frame, text='Custom Instructions (optional):', font=('TkDefaultFont', 9, 'bold')).pack(anchor=tk.W, pady=(10, 5))
+        custom_text = scrolledtext.ScrolledText(main_frame, height=4, wrap=tk.WORD)
+        custom_text.pack(fill=tk.X, pady=5)
+        custom_text.insert('1.0', 'Add specific guidance here...')
+        
+        result_holder = {'result': None}
+        
+        def apply_improvement():
+            direction = direction_var.get()
+            custom_instructions = custom_text.get('1.0', tk.END).strip()
+            if custom_instructions == 'Add specific guidance here...':
+                custom_instructions = ''
+            
+            persona_name = self.current_persona.get('name', '')
+            vibe = self.current_persona.get('vibe', '')
+            
+            direction_prompts = {
+                'enhance': "Expand and enrich this lyrics style with more specific, actionable guidance. Add depth to each aspect while maintaining the core identity.",
+                'unique': "Make this lyrics style MORE DISTINCTIVE and UNIQUE. Add specific voice markers, unusual imagery preferences, and signature elements that would make lyrics instantly recognizable as this artist.",
+                'anticliche': "Add strong anti-cliche guidance to this lyrics style. Include specific words, phrases, and imagery types to AVOID, and suggest fresh alternatives. Focus on preventing generic or overused lyrical tropes.",
+                'simplify': "Distill this lyrics style to its essential, most impactful elements. Remove redundancy and focus on the core characteristics that define this artist's unique voice.",
+                'custom': f"Modify this lyrics style according to these instructions: {custom_instructions}"
+            }
+            
+            prompt = f"""Improve this lyrics_style definition for the persona "{persona_name}".
+
+=== CURRENT LYRICS STYLE ===
+{current_style}
+
+=== PERSONA CONTEXT ===
+Vibe: {vibe}
+
+=== IMPROVEMENT DIRECTION ===
+{direction_prompts.get(direction, direction_prompts['enhance'])}
+
+{f'Additional instructions: {custom_instructions}' if custom_instructions and direction != 'custom' else ''}
+
+=== OUTPUT REQUIREMENTS ===
+- Output ONLY the improved lyrics_style text
+- Keep it as flowing prose (150-250 words)
+- No bullet points, labels, or explanations
+- Make it immediately usable as a creative brief for lyric generation"""
+
+            system_message = (
+                "You are a music industry lyricist and style guide specialist. "
+                "Improve the given lyrics_style definition to be more effective for guiding AI lyric generation. "
+                "Output ONLY the improved style text - no labels, explanations, or formatting."
+            )
+            
+            dialog.config(cursor='wait')
+            dialog.update()
+            
+            try:
+                result = self.azure_ai(prompt, system_message=system_message, profile='text', max_tokens=1000)
+                
+                if result['success']:
+                    improved_style = result['content'].strip()
+                    improved_style = improved_style.replace('**', '').replace('*', '').strip()
+                    for prefix in ['Lyrics Style:', 'lyrics_style:', 'Style:', 'Here is', 'Here\'s', 'Improved:']:
+                        if improved_style.lower().startswith(prefix.lower()):
+                            improved_style = improved_style[len(prefix):].strip()
+                    
+                    result_holder['result'] = improved_style
+                    dialog.destroy()
+                else:
+                    messagebox.showerror('Error', f'Failed to improve lyrics_style: {result["error"]}', parent=dialog)
+            except Exception as e:
+                messagebox.showerror('Error', f'Error improving lyrics_style: {e}', parent=dialog)
+            finally:
+                dialog.config(cursor='')
+        
+        def cancel():
+            dialog.destroy()
+        
+        # Buttons
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(fill=tk.X, pady=(15, 0))
+        ttk.Button(btn_frame, text='Apply Improvement', command=apply_improvement).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text='Cancel', command=cancel).pack(side=tk.LEFT, padx=5)
+        
+        # Center dialog
+        dialog.update_idletasks()
+        x = self.winfo_x() + (self.winfo_width() - dialog.winfo_width()) // 2
+        y = self.winfo_y() + (self.winfo_height() - dialog.winfo_height()) // 2
+        dialog.geometry(f'+{x}+{y}')
+        
+        self.wait_window(dialog)
+        
+        if result_holder['result']:
+            # Update the lyrics_style widget
+            if 'lyrics_style' in self.persona_widgets:
+                widget = self.persona_widgets['lyrics_style']
+                if isinstance(widget, scrolledtext.ScrolledText):
+                    widget.delete('1.0', tk.END)
+                    widget.insert('1.0', result_holder['result'])
+            
+            self.log_debug('INFO', 'lyrics_style improved successfully')
+            messagebox.showinfo('Success', 'Lyrics style improved.')
     
     def generate_profile_images(self):
         """Generate profile images using persona references and a custom prompt."""
@@ -5659,6 +5905,16 @@ TECHNICAL REQUIREMENTS:
                      values=['9:16 (720x1280)', '16:9 (1280x720)', '1:1 (1024x1024)',
                              '21:9 (1920x1080)', '4:3 (1024x768)', '3:4 (768x1024)'],
                      state='readonly', width=18).pack(side=tk.LEFT)
+        
+        ttk.Label(video_size_bar, text='Duration:').pack(side=tk.LEFT, padx=(10, 4))
+        self.album_video_duration_var = tk.StringVar(value='6')
+        ttk.Spinbox(video_size_bar, from_=2, to=30, textvariable=self.album_video_duration_var, width=4).pack(side=tk.LEFT)
+        ttk.Label(video_size_bar, text='sec').pack(side=tk.LEFT, padx=(2, 0))
+        
+        self.album_video_multiscene_var = tk.BooleanVar(value=False)
+        album_multiscene_cb = ttk.Checkbutton(video_size_bar, text='Multi-Scene (2s)', variable=self.album_video_multiscene_var)
+        album_multiscene_cb.pack(side=tk.LEFT, padx=(10, 0))
+        create_tooltip(album_multiscene_cb, 'Generate scene-switching prompt with direct camera cuts every 2 seconds')
 
         self.album_video_text = scrolledtext.ScrolledText(album_prompt_frame, height=4, wrap=tk.WORD, width=60)
         self.album_video_text.pack(fill=tk.BOTH, expand=True, pady=(0, 4))
@@ -8099,6 +8355,10 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
         self.album_lang_var.set('EN')
         self.album_cover_album_text.delete('1.0', tk.END)
         self.album_video_text.delete('1.0', tk.END)
+        if hasattr(self, 'album_video_duration_var'):
+            self.album_video_duration_var.set('6')
+        if hasattr(self, 'album_video_multiscene_var'):
+            self.album_video_multiscene_var.set(False)
         self.album_suggestions_list.delete(0, tk.END)
         self.album_songs_list.delete(0, tk.END)
         self.current_album_songs = []
@@ -8130,6 +8390,10 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
         self.album_cover_size_album_var.set(self.current_album.get('cover_size', '1:1 (1024x1024)'))
         self.album_cover_format_album_var.set(self.current_album.get('cover_format', 'PNG'))
         self.album_video_size_var.set(self.current_album.get('video_size', '9:16 (720x1280)'))
+        if hasattr(self, 'album_video_duration_var'):
+            self.album_video_duration_var.set(str(self.current_album.get('video_duration', 6)))
+        if hasattr(self, 'album_video_multiscene_var'):
+            self.album_video_multiscene_var.set(self.current_album.get('video_multiscene', False))
         self.album_cover_album_text.delete('1.0', tk.END)
         self.album_cover_album_text.insert('1.0', self.current_album.get('cover_prompt', ''))
         self.album_video_text.delete('1.0', tk.END)
@@ -8233,6 +8497,8 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
         config['cover_size'] = self.album_cover_size_album_var.get()
         config['cover_format'] = self.album_cover_format_album_var.get()
         config['video_size'] = self.album_video_size_var.get()
+        config['video_duration'] = int(self.album_video_duration_var.get() or 6) if hasattr(self, 'album_video_duration_var') else 6
+        config['video_multiscene'] = bool(self.album_video_multiscene_var.get()) if hasattr(self, 'album_video_multiscene_var') else False
         config['songs'] = selected
         config['cover_prompt'] = self.album_cover_album_text.get('1.0', tk.END).strip()
         config['video_prompt'] = self.album_video_text.get('1.0', tk.END).strip()
@@ -8320,6 +8586,8 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
             'cover_size': self.album_cover_size_album_var.get(),
             'cover_format': self.album_cover_format_album_var.get(),
             'video_size': self.album_video_size_var.get(),
+            'video_duration': int(self.album_video_duration_var.get() or 6) if hasattr(self, 'album_video_duration_var') else 6,
+            'video_multiscene': bool(self.album_video_multiscene_var.get()) if hasattr(self, 'album_video_multiscene_var') else False,
             'cover_prompt': self.album_cover_album_text.get('1.0', tk.END).strip(),
             'video_prompt': self.album_video_text.get('1.0', tk.END).strip(),
             'songs': songs,
@@ -9058,7 +9326,7 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
             messagebox.showerror('Error', f'Failed to generate cover: {result.get("error", "Unknown error")}')
 
     def generate_album_video_prompt(self):
-        """Generate album-level video loop prompt."""
+        """Generate album-level video loop prompt. Supports multi-scene mode with direct camera cuts every 2 seconds."""
         if not self.current_persona:
             messagebox.showwarning('Warning', 'Please select a persona first.')
             return
@@ -9067,26 +9335,65 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
         if not base_prompt:
             messagebox.showwarning('Warning', 'Generate album cover prompt first.')
             return
+        
+        # Get multi-scene settings
+        is_multiscene = self.album_video_multiscene_var.get() if hasattr(self, 'album_video_multiscene_var') else False
+        video_duration = int(self.album_video_duration_var.get() or 6) if hasattr(self, 'album_video_duration_var') else 6
+        scene_duration = 2  # Scene switch every 2 seconds
+        num_scenes = video_duration // scene_duration if is_multiscene else 1
+        
         merged_style = self._get_sanitized_style_text()
         visual_aesthetic = self.current_persona.get('visual_aesthetic', '')
         base_image_prompt = self.current_persona.get('base_image_prompt', '')
         vibe = self.current_persona.get('vibe', '')
-        prompt = (
-            f"Create a seamless looping video prompt for the album \"{album_name}\" "
-            f"based on this cover description:\n{base_prompt}\n\nMerged Style: {merged_style}"
-        )
-        if visual_aesthetic:
-            prompt += f"\nPersona Visual Aesthetic: {visual_aesthetic}"
-        if base_image_prompt:
-            prompt += f"\nPersona Base Image Prompt: {base_image_prompt}"
-        if vibe:
-            prompt += f"\nPersona Vibe: {vibe}"
-        prompt += "\nReturn only the final video prompt text."
+        
+        if is_multiscene and num_scenes > 1:
+            # Multi-scene prompt
+            prompt = (
+                f"Create a {video_duration}-second multi-scene video loop prompt for the album \"{album_name}\" "
+                f"with {num_scenes} distinct scenes, each lasting {scene_duration} seconds.\n\n"
+                f"Based on this cover description:\n{base_prompt}\n\nMerged Style: {merged_style}"
+            )
+            if visual_aesthetic:
+                prompt += f"\nPersona Visual Aesthetic: {visual_aesthetic}"
+            if base_image_prompt:
+                prompt += f"\nPersona Base Image Prompt: {base_image_prompt}"
+            if vibe:
+                prompt += f"\nPersona Vibe: {vibe}"
+            
+            prompt += "\n\n=== MULTI-SCENE REQUIREMENTS ==="
+            prompt += "\n- Each scene must be visually distinct but thematically connected to the album"
+            prompt += "\n- Use DIRECT CAMERA CUTS between scenes (NO smooth transitions, NO fades, NO morphing)"
+            prompt += "\n- The persona/character must appear consistently across all scenes"
+            prompt += "\n- Each scene should have a different camera angle, setting, or composition"
+            prompt += "\n- Scene changes should feel dynamic and match the album's energy"
+            prompt += "\n\nFormat your output as:"
+            for i in range(num_scenes):
+                start_time = i * scene_duration
+                end_time = start_time + scene_duration
+                prompt += f"\n\n[{start_time}s-{end_time}s] Scene {i+1}: [describe the scene]"
+            
+            system_message = f'You are a video loop prompt generator. Create a {video_duration}-second multi-scene video with {num_scenes} distinct scenes ({scene_duration}s each) using direct camera cuts. Output only the final prompt text with scene timestamps.'
+        else:
+            # Single scene prompt (original behavior)
+            prompt = (
+                f"Create a seamless looping video prompt for the album \"{album_name}\" "
+                f"based on this cover description:\n{base_prompt}\n\nMerged Style: {merged_style}"
+            )
+            if visual_aesthetic:
+                prompt += f"\nPersona Visual Aesthetic: {visual_aesthetic}"
+            if base_image_prompt:
+                prompt += f"\nPersona Base Image Prompt: {base_image_prompt}"
+            if vibe:
+                prompt += f"\nPersona Vibe: {vibe}"
+            prompt += "\nReturn only the final video prompt text."
+            
+            system_message = 'You are a video loop prompt generator. Output only the final prompt text.'
 
         try:
             self.config(cursor='wait')
             self.update()
-            system_message = 'You are a video loop prompt generator. Output only the final prompt text.'
+            self.log_debug('INFO', f'Generating {"multi-scene " if is_multiscene else ""}album video prompt...')
             result = self.azure_ai(prompt, system_message=system_message, profile='text')
         except Exception as exc:
             self.config(cursor='')
@@ -9102,6 +9409,8 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
             self.album_video_text.insert('1.0', text)
             if self.current_album is not None:
                 self.current_album['video_prompt'] = text
+            mode_str = f'multi-scene ({num_scenes} scenes)' if is_multiscene else 'single scene'
+            self.log_debug('INFO', f'Album video prompt generated successfully ({mode_str})')
         else:
             messagebox.showerror('Error', f'Failed to generate video prompt: {result.get("error", "Unknown error")}')
     
@@ -9338,7 +9647,7 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
         self.update_play_button()
     
     def generate_lyrics(self):
-        """Generate lyrics for the song using AI."""
+        """Generate lyrics for the song using AI with enhanced uniqueness and quality."""
         if not self.current_persona:
             messagebox.showwarning('Warning', 'Please select a persona first.')
             return
@@ -9355,6 +9664,7 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
         persona_name = (self.current_persona.get('name') or '').strip()
         persona_vibe = (self.current_persona.get('vibe') or '').strip()
         tagline = (self.current_persona.get('tagline') or '').strip()
+        bio = (self.current_persona.get('bio') or '').strip()
         genre_tags = self.current_persona.get('genre_tags', [])
         if isinstance(genre_tags, list):
             genre_tags_text = ', '.join([t for t in genre_tags if t])
@@ -9362,7 +9672,7 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
             genre_tags_text = str(genre_tags or '')
         style_text = self._get_sanitized_style_text()
         theme_or_topic = lyric_ideas if lyric_ideas else song_name
-        mood_text = persona_vibe if persona_vibe else 'dark, cinematic'
+        mood_text = persona_vibe if persona_vibe else 'introspective, authentic'
         
         if not song_name:
             messagebox.showwarning('Warning', 'Please enter a song name.')
@@ -9370,43 +9680,69 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
         
         language_instruction = "Generate all lyrics in English." if language == 'en' else "Generate all lyrics in German."
         
+        # Enhanced system message for unique, high-quality lyrics
         system_message = (
-            "You are the selected ARTIST_PERSONA. Fully embody the persona voice, "
-            "era influence, delivery style, and genre fusion. Use strong internal rhymes, "
-            "anthemic hooks, and AI/cyberpunk/dark futurism imagery when relevant. "
+            f"You are {persona_name}, a distinctive artist with a unique voice. "
+            "Your task is to write ORIGINAL, MEMORABLE lyrics that could only come from this specific persona. "
+            "CRITICAL RULES FOR UNIQUENESS:\n"
+            "1. AVOID generic poetic words: velvet, static, lullaby, whisper, echo, neon, shadow, void, pulse, haze, silk, chrome, fracture, hollow, drift, fade, shatter, crimson, amber, indigo\n"
+            "2. USE concrete, specific imagery: real objects, places, actions, sensations that are UNIQUE to this song's theme\n"
+            "3. PREFER active verbs over passive descriptions\n"
+            "4. EACH LINE must advance the story or emotion - no filler lines\n"
+            "5. The chorus must be SINGABLE and MEMORABLE - test it by imagining a crowd chanting it\n"
+            "6. Use UNEXPECTED word combinations and fresh metaphors\n"
             f"{language_instruction} "
-            "Return lyrics only with the requested section headings—no explanations."
+            "Return lyrics only with section headings - no explanations or commentary."
         )
         
+        # Build rich persona context for better character embodiment
+        persona_context = f"PERSONA IDENTITY: {persona_name}"
+        if tagline:
+            persona_context += f"\nESSENCE: {tagline}"
+        if bio:
+            # Extract key character traits from bio (first 300 chars for context)
+            bio_excerpt = bio[:300] + "..." if len(bio) > 300 else bio
+            persona_context += f"\nBACKSTORY: {bio_excerpt}"
+        
         prompt_lines = [
-            "AGENT TASK — LYRICS GENERATION (CONFIGURABLE ARTIST)",
-            f"ARTIST_PERSONA: {persona_name}",
-            f"GENRE_STYLE: {style_text or 'Original / unspecified'}",
-            f"THEME / TOPIC: {theme_or_topic}",
-            f"MOOD: {mood_text}",
+            "=== LYRICS GENERATION TASK ===",
+            "",
+            persona_context,
+            "",
+            f"SONG TITLE: \"{song_name}\"",
+            f"MUSICAL STYLE: {style_text or 'Original style matching persona'}",
+            f"THEME/CONCEPT: {theme_or_topic}",
+            f"EMOTIONAL TONE: {mood_text}",
             f"LANGUAGE: {'English' if language == 'en' else 'German'}",
-            "REFERENCE_VIBE: (stylistic only, do not copy melodies)",
-            "SONG_STRUCTURE: [Intro] [Verse 1] [Pre-Chorus] [Chorus / Hook] [Verse 2] [Bridge] [Final Hook] [Outro]",
             "",
-            "Persona voice & style cues:",
-            f"- Voice tone: {voice_style or 'unspecified'}",
-            f"- Lyrics style: {lyrics_style or 'unspecified'}",
-            f"- Tagline: {tagline or 'n/a'}",
-            f"- Vibe: {persona_vibe or 'n/a'}",
-            f"- Genre tags: {genre_tags_text or 'n/a'}",
+            "=== PERSONA VOICE CHARACTERISTICS ===",
+            f"Vocal delivery: {voice_style or 'Authentic to persona character'}",
+            f"Lyrical approach: {lyrics_style or 'Narrative, emotionally honest, character-driven'}",
+            f"Genre influences: {genre_tags_text or 'Derived from persona style'}",
             "",
-            "User hints / lyric ideas:",
-            lyric_ideas or "(none provided; infer from theme and persona)",
+            "=== CREATIVE DIRECTION ===",
+            lyric_ideas if lyric_ideas else f"Explore the theme \"{song_name}\" through the lens of {persona_name}'s unique perspective and life experience.",
             "",
-            "Output requirements:",
-            f"- {language_instruction}",
-            "- Produce full original lyrics; no melodic copying.",
-            "- Follow the structure with clear section headers exactly as written.",
-            "- Hooks must be chant-worthy; Final Hook should feel bigger/darker.",
-            "- Keep Pre-Chorus and Bridge short but impactful (may be brief).",
-            "- Use keywords metaphors when they fit.",
-            "- Strong internal rhymes; occasional multisyllabic phrasing.",
-            "- Return lyrics only, no commentary."
+            "=== SONG STRUCTURE ===",
+            "[Intro] - 2-4 lines, set the scene or mood",
+            "[Verse 1] - Establish the situation, introduce the conflict or feeling",
+            "[Pre-Chorus] - Build tension, 2-4 lines that lift toward the hook",
+            "[Chorus / Hook] - The emotional core, MUST be memorable and singable",
+            "[Verse 2] - Deepen the story, add new perspective or complication",
+            "[Bridge] - Shift in perspective, revelation, or emotional peak",
+            "[Final Hook] - Chorus variation with heightened intensity or resolution",
+            "[Outro] - 2-4 lines, leave a lasting impression",
+            "",
+            "=== QUALITY REQUIREMENTS ===",
+            "- Every line must EARN its place - cut anything generic",
+            "- Rhymes should feel natural, not forced - near-rhymes and internal rhymes welcome",
+            "- Vary line lengths for rhythmic interest",
+            "- The hook must work standalone - imagine it on a billboard",
+            "- Include at least ONE unexpected image or turn of phrase per verse",
+            "- Ground abstract emotions in PHYSICAL, SENSORY details",
+            "- Write for the VOICE - consider how words feel when sung",
+            "",
+            "OUTPUT: Complete lyrics with section headers. No explanations."
         ]
         
         prompt = "\n".join(prompt_lines)
