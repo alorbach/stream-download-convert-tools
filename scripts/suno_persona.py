@@ -3944,10 +3944,13 @@ Return only the single most important keyword, nothing else. Just one word."""
             match = re.search(r'Profile-(\d+)\.png', os.path.basename(path))
             if match:
                 try:
-                    return int(match.group(1))
+                    # Return tuple (0, int) so integers sort before strings
+                    return (0, int(match.group(1)))
                 except ValueError:
-                    return path.lower()
-            return path.lower()
+                    # Return tuple (1, str) for non-numeric matches
+                    return (1, path.lower())
+            # Return tuple (1, str) for files without numeric pattern
+            return (1, path.lower())
 
         image_files.sort(key=sort_key)
 
@@ -5302,8 +5305,8 @@ TECHNICAL REQUIREMENTS:
         songs_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.songs_tree.bind('<<TreeviewSelect>>', self.on_song_select)
         
-        # Configure songs list height (show about 5-6 items)
-        self.songs_tree.config(height=6)
+        # Configure songs list height (show about 10-11 items)
+        self.songs_tree.config(height=11)
         
         # Enable mouse wheel scrolling for songs tree (Windows and Linux)
         def on_mousewheel_songs(event):
@@ -5431,7 +5434,8 @@ TECHNICAL REQUIREMENTS:
         theme_btn_frame = ttk.Frame(scrollable_frame)
         theme_btn_frame.grid(row=7, column=3, padx=5, pady=5, sticky=tk.N)
         ttk.Button(theme_btn_frame, text='Use Merged Style', command=self.set_storyboard_theme_from_merged_style).pack(fill=tk.X, pady=(0, 4))
-        ttk.Button(theme_btn_frame, text='Improve', command=self.improve_storyboard_theme).pack(fill=tk.X)
+        ttk.Button(theme_btn_frame, text='Improve', command=self.improve_storyboard_theme).pack(fill=tk.X, pady=(0, 4))
+        ttk.Button(theme_btn_frame, text='Translate', command=lambda: self.translate_prompt(self.storyboard_theme_text, 'Storyboard Theme')).pack(fill=tk.X)
 
         ai_results_notebook = ttk.Notebook(scrollable_frame)
         ai_results_notebook.grid(row=8, column=0, columnspan=4, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
@@ -5443,6 +5447,7 @@ TECHNICAL REQUIREMENTS:
         album_cover_toolbar.pack(fill=tk.X, padx=2, pady=2)
         ttk.Button(album_cover_toolbar, text='Generate Prompt', command=self.generate_album_cover).pack(side=tk.LEFT, padx=2)
         ttk.Button(album_cover_toolbar, text='Improve', command=self.improve_album_cover_prompt).pack(side=tk.LEFT, padx=2)
+        ttk.Button(album_cover_toolbar, text='Translate', command=lambda: self.translate_prompt(self.album_cover_text, 'Song Cover Prompt')).pack(side=tk.LEFT, padx=2)
         ttk.Button(album_cover_toolbar, text='Run', command=self.run_image_model).pack(side=tk.LEFT, padx=2)
         ttk.Button(album_cover_toolbar, text='Preview', command=self.preview_last_song_cover).pack(side=tk.LEFT, padx=2)
         ttk.Button(album_cover_toolbar, text='Bulk Generate Covers', command=self.bulk_generate_covers).pack(side=tk.LEFT, padx=2)
@@ -5559,8 +5564,9 @@ TECHNICAL REQUIREMENTS:
         self.album_select_combo.bind('<<ComboboxSelected>>', self.on_album_select_combo)
         ttk.Button(album_top, text='Clear', command=self.clear_album_form).grid(row=0, column=2, padx=4, sticky=tk.W)
         ttk.Button(album_top, text='Rename Album', command=self.rename_album).grid(row=0, column=3, padx=4, sticky=tk.W)
-        ttk.Button(album_top, text='Delete Album', command=self.delete_album).grid(row=0, column=4, padx=4, sticky=tk.W)
-        ttk.Button(album_top, text='Save Album', command=self.save_album).grid(row=0, column=5, padx=4, sticky=tk.W)
+        ttk.Button(album_top, text='Clone Album', command=self.clone_album).grid(row=0, column=4, padx=4, sticky=tk.W)
+        ttk.Button(album_top, text='Delete Album', command=self.delete_album).grid(row=0, column=5, padx=4, sticky=tk.W)
+        ttk.Button(album_top, text='Save Album', command=self.save_album).grid(row=0, column=6, padx=4, sticky=tk.W)
 
         ttk.Label(album_top, text='Name:', font=('TkDefaultFont', 9, 'bold')).grid(row=1, column=0, sticky=tk.W, pady=(6, 2))
         self.album_name_var = tk.StringVar()
@@ -5604,6 +5610,7 @@ TECHNICAL REQUIREMENTS:
         ttk.Label(cover_bar, text='Album Cover:', font=('TkDefaultFont', 9, 'bold')).pack(side=tk.LEFT)
         ttk.Button(cover_bar, text='Generate Prompt', command=self.generate_album_cover_prompt_album).pack(side=tk.LEFT, padx=4)
         ttk.Button(cover_bar, text='Improve', command=self.improve_album_cover_prompt_album).pack(side=tk.LEFT, padx=4)
+        ttk.Button(cover_bar, text='Translate', command=lambda: self.translate_prompt(self.album_cover_album_text, 'Album Cover Prompt')).pack(side=tk.LEFT, padx=4)
         ttk.Button(cover_bar, text='Run Cover Image', command=self.run_album_cover_image).pack(side=tk.LEFT, padx=4)
         ttk.Button(cover_bar, text='Preview', command=self.preview_last_album_cover).pack(side=tk.LEFT, padx=4)
         ttk.Button(cover_bar, text='Bulk Generate Covers', command=self.bulk_generate_covers).pack(side=tk.LEFT, padx=4)
@@ -5628,6 +5635,7 @@ TECHNICAL REQUIREMENTS:
         video_bar.pack(fill=tk.X, pady=(0, 2))
         ttk.Label(video_bar, text='Album Video Prompt:', font=('TkDefaultFont', 9, 'bold')).pack(side=tk.LEFT)
         ttk.Button(video_bar, text='Generate', command=self.generate_album_video_prompt).pack(side=tk.LEFT, padx=4)
+        ttk.Button(video_bar, text='Translate', command=lambda: self.translate_prompt(self.album_video_text, 'Album Video Prompt')).pack(side=tk.LEFT, padx=4)
         ttk.Button(video_bar, text='Save', command=self.save_album_video_prompt).pack(side=tk.LEFT, padx=4)
 
         video_size_bar = ttk.Frame(album_prompt_frame)
@@ -8444,6 +8452,428 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
             messagebox.showerror('Error', f'Failed to rename album: {exc}')
             self.log_debug('ERROR', f'Rename album failed: {exc}')
 
+    def clone_album(self):
+        """Clone an album with translation from English to German or German to English."""
+        if not self.current_album_id:
+            messagebox.showwarning('Warning', 'Select an album first.')
+            return
+        if not self.current_persona_path:
+            messagebox.showwarning('Warning', 'Please select a persona first.')
+            return
+        
+        album_cfg = self.albums.get(self.current_album_id, {})
+        album_name = album_cfg.get('album_name', self.current_album_id)
+        album_songs = album_cfg.get('songs', [])
+        
+        if not album_songs:
+            messagebox.showwarning('Warning', 'Selected album has no songs.')
+            return
+        
+        # Step 1: Select translation direction
+        lang_dialog = tk.Toplevel(self)
+        lang_dialog.title('Clone Album - Translation Direction')
+        lang_dialog.geometry('400x200')
+        lang_dialog.transient(self)
+        lang_dialog.grab_set()
+        lang_dialog.update_idletasks()
+        
+        # Center dialog
+        try:
+            parent_x = self.winfo_rootx()
+            parent_y = self.winfo_rooty()
+            parent_w = self.winfo_width() or lang_dialog.winfo_screenwidth()
+            parent_h = self.winfo_height() or lang_dialog.winfo_screenheight()
+        except Exception:
+            parent_x = parent_y = 0
+            parent_w = lang_dialog.winfo_screenwidth()
+            parent_h = lang_dialog.winfo_screenheight()
+        dlg_w = lang_dialog.winfo_width()
+        dlg_h = lang_dialog.winfo_height()
+        pos_x = parent_x + (parent_w - dlg_w) // 2
+        pos_y = parent_y + (parent_h - dlg_h) // 2
+        lang_dialog.geometry(f'+{max(0, pos_x)}+{max(0, pos_y)}')
+        
+        main_frame = ttk.Frame(lang_dialog, padding=20)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        ttk.Label(main_frame, text='Select Translation Direction:', font=('TkDefaultFont', 10, 'bold')).pack(pady=(0, 15))
+        
+        lang_var = tk.StringVar(value='en_to_de')
+        ttk.Radiobutton(main_frame, text='English → German', variable=lang_var, value='en_to_de').pack(anchor=tk.W, pady=5)
+        ttk.Radiobutton(main_frame, text='German → English', variable=lang_var, value='de_to_en').pack(anchor=tk.W, pady=5)
+        
+        result = [None]
+        
+        def ok_clicked():
+            result[0] = lang_var.get()
+            lang_dialog.destroy()
+        
+        def cancel_clicked():
+            lang_dialog.destroy()
+        
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(pady=(20, 0))
+        ttk.Button(btn_frame, text='OK', command=ok_clicked).pack(side=tk.LEFT, padx=4)
+        ttk.Button(btn_frame, text='Cancel', command=cancel_clicked).pack(side=tk.LEFT, padx=4)
+        
+        lang_dialog.bind('<Return>', lambda e: ok_clicked())
+        lang_dialog.bind('<Escape>', lambda e: cancel_clicked())
+        
+        self.wait_window(lang_dialog)
+        
+        if not result[0]:
+            return
+        
+        translation_dir = result[0]
+        source_lang = 'English' if translation_dir == 'en_to_de' else 'German'
+        target_lang = 'German' if translation_dir == 'en_to_de' else 'English'
+        
+        # Step 2: Load all song configs
+        song_configs = {}
+        song_titles = []
+        for song_id in album_songs:
+            song_path = os.path.join(self.current_persona_path, 'AI-Songs', song_id)
+            if os.path.isdir(song_path):
+                song_cfg = load_song_config(song_path)
+                song_configs[song_id] = song_cfg
+                song_titles.append(song_cfg.get('song_name', song_id))
+        
+        # Step 3: Generate translation recommendations
+        try:
+            self.config(cursor='wait')
+            self.update()
+            
+            # Generate album name recommendations
+            album_prompt = (
+                f"Translate the album title \"{album_name}\" from {source_lang} to {target_lang}.\n\n"
+                f"Generate at least 10 translation options for this album title.\n"
+                f"Consider:\n"
+                f"- Musical/artistic context\n"
+                f"- Natural, idiomatic translations\n"
+                f"- Variations that maintain the original meaning and tone\n"
+                f"- Creative alternatives that work well as album titles\n\n"
+                f"Return one translation option per line, no numbering, no quotes, no bullet points.\n"
+                f"Each line should be a complete album title translation."
+            )
+            
+            album_result = self.azure_ai(album_prompt, system_message=f'You are a professional translator specializing in {source_lang} to {target_lang} translations for music and art.', profile='text', max_tokens=800, temperature=0.8)
+            
+            if not album_result.get('success'):
+                self.config(cursor='')
+                messagebox.showerror('Error', f'Failed to generate album name translations: {album_result.get("error", "Unknown error")}')
+                return
+            
+            album_suggestions = [line.strip(' -"\'') for line in album_result.get('content', '').strip().splitlines() if line.strip()][:15]
+            if not album_suggestions:
+                self.config(cursor='')
+                messagebox.showerror('Error', 'No album name translations generated.')
+                return
+            
+            # Generate song title recommendations for each song
+            song_suggestions_dict = {}
+            for song_id, song_cfg in song_configs.items():
+                song_name = song_cfg.get('song_name', song_id)
+                song_prompt = (
+                    f"Translate the song title \"{song_name}\" from {source_lang} to {target_lang}.\n\n"
+                    f"Generate at least 10 translation options for this song title.\n"
+                    f"Consider:\n"
+                    f"- Musical/artistic context\n"
+                    f"- Natural, idiomatic translations\n"
+                    f"- Variations that maintain the original meaning and tone\n"
+                    f"- Creative alternatives that work well as song titles\n\n"
+                    f"Return one translation option per line, no numbering, no quotes, no bullet points.\n"
+                    f"Each line should be a complete song title translation."
+                )
+                
+                song_result = self.azure_ai(song_prompt, system_message=f'You are a professional translator specializing in {source_lang} to {target_lang} translations for music and art.', profile='text', max_tokens=800, temperature=0.8)
+                
+                if song_result.get('success'):
+                    suggestions = [line.strip(' -"\'') for line in song_result.get('content', '').strip().splitlines() if line.strip()][:15]
+                    song_suggestions_dict[song_id] = suggestions if suggestions else [song_name]
+                else:
+                    song_suggestions_dict[song_id] = [song_name]
+            
+            self.config(cursor='')
+            
+        except Exception as exc:
+            self.config(cursor='')
+            messagebox.showerror('Error', f'Failed to generate translations: {exc}')
+            self.log_debug('ERROR', f'Clone album translation generation failed: {exc}')
+            return
+        
+        # Step 4: Show selection dialog
+        selection_dialog = tk.Toplevel(self)
+        selection_dialog.title(f'Clone Album - Select Translations ({source_lang} → {target_lang})')
+        selection_dialog.geometry('900x700')
+        selection_dialog.transient(self)
+        selection_dialog.grab_set()
+        selection_dialog.update_idletasks()
+        
+        # Center dialog
+        try:
+            parent_x = self.winfo_rootx()
+            parent_y = self.winfo_rooty()
+            parent_w = self.winfo_width() or selection_dialog.winfo_screenwidth()
+            parent_h = self.winfo_height() or selection_dialog.winfo_screenheight()
+        except Exception:
+            parent_x = parent_y = 0
+            parent_w = selection_dialog.winfo_screenwidth()
+            parent_h = selection_dialog.winfo_screenheight()
+        dlg_w = selection_dialog.winfo_width()
+        dlg_h = selection_dialog.winfo_height()
+        pos_x = parent_x + (parent_w - dlg_w) // 2
+        pos_y = parent_y + (parent_h - dlg_h) // 2
+        selection_dialog.geometry(f'+{max(0, pos_x)}+{max(0, pos_y)}')
+        
+        main_frame = ttk.Frame(selection_dialog, padding=15)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Album name selection
+        ttk.Label(main_frame, text='Album Name:', font=('TkDefaultFont', 10, 'bold')).pack(anchor=tk.W, pady=(0, 5))
+        album_frame = ttk.Frame(main_frame)
+        album_frame.pack(fill=tk.X, pady=(0, 15))
+        
+        album_var = tk.StringVar(value=album_suggestions[0] if album_suggestions else album_name)
+        album_combo = ttk.Combobox(album_frame, textvariable=album_var, values=album_suggestions, width=70, state='readonly')
+        album_combo.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        
+        # Songs selection frame with scrollbar
+        songs_frame = ttk.LabelFrame(main_frame, text='Song Titles:', padding=10)
+        songs_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 15))
+        
+        canvas = tk.Canvas(songs_frame)
+        scrollbar = ttk.Scrollbar(songs_frame, orient=tk.VERTICAL, command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+        
+        scrollable_frame.bind('<Configure>', lambda e: canvas.configure(scrollregion=canvas.bbox('all')))
+        canvas.create_window((0, 0), window=scrollable_frame, anchor=tk.NW)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        song_vars = {}
+        for idx, (song_id, song_cfg) in enumerate(song_configs.items()):
+            song_name = song_cfg.get('song_name', song_id)
+            suggestions = song_suggestions_dict.get(song_id, [song_name])
+            
+            row_frame = ttk.Frame(scrollable_frame)
+            row_frame.pack(fill=tk.X, pady=5)
+            
+            ttk.Label(row_frame, text=f'{song_name}:', font=('TkDefaultFont', 9), width=30, anchor=tk.W).pack(side=tk.LEFT, padx=(0, 10))
+            
+            song_var = tk.StringVar(value=suggestions[0] if suggestions else song_name)
+            song_combo = ttk.Combobox(row_frame, textvariable=song_var, values=suggestions, width=50, state='readonly')
+            song_combo.pack(side=tk.LEFT, fill=tk.X, expand=True)
+            
+            song_vars[song_id] = song_var
+        
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        result = [None, None]
+        
+        def clone_ok_clicked():
+            selected_album_name = album_var.get().strip()
+            if not selected_album_name:
+                messagebox.showwarning('Warning', 'Please select an album name.')
+                return
+            
+            selected_songs = {}
+            for song_id, song_var in song_vars.items():
+                selected_name = song_var.get().strip()
+                if not selected_name:
+                    messagebox.showwarning('Warning', f'Please select a translation for song: {song_configs[song_id].get("song_name", song_id)}')
+                    return
+                selected_songs[song_id] = selected_name
+            
+            result[0] = selected_album_name
+            result[1] = selected_songs
+            selection_dialog.destroy()
+        
+        def clone_cancel_clicked():
+            selection_dialog.destroy()
+        
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(fill=tk.X, pady=(10, 0))
+        ttk.Button(btn_frame, text='Clone Album', command=clone_ok_clicked).pack(side=tk.LEFT, padx=4)
+        ttk.Button(btn_frame, text='Cancel', command=clone_cancel_clicked).pack(side=tk.LEFT, padx=4)
+        
+        selection_dialog.bind('<Return>', lambda e: clone_ok_clicked())
+        selection_dialog.bind('<Escape>', lambda e: clone_cancel_clicked())
+        
+        self.wait_window(selection_dialog)
+        
+        if not result[0] or not result[1]:
+            return
+        
+        selected_album_name = result[0]
+        selected_songs = result[1]
+        
+        # Step 5: Create cloned album and songs
+        try:
+            new_album_id = self._album_slug(selected_album_name)
+            albums_dir = self._albums_dir()
+            if not albums_dir:
+                messagebox.showerror('Error', 'Persona path not available.')
+                return
+            
+            # Check if album already exists
+            new_album_path = os.path.join(albums_dir, new_album_id)
+            if os.path.exists(new_album_path) and os.path.exists(os.path.join(new_album_path, 'config.json')):
+                existing_cfg = load_album_config(new_album_path)
+                if existing_cfg.get('album_name'):
+                    messagebox.showerror('Error', f'An album with name "{selected_album_name}" already exists.')
+                    return
+            
+            os.makedirs(new_album_path, exist_ok=True)
+            
+            # Clone songs
+            new_song_ids = []
+            songs_dir = os.path.join(self.current_persona_path, 'AI-Songs')
+            
+            for song_id, translated_name in selected_songs.items():
+                # Create safe folder name
+                safe_name = translated_name.replace(':', '_').replace('/', '_').replace('\\', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace("'", '_').replace('<', '_').replace('>', '_').replace('|', '_')
+                
+                new_song_path = os.path.join(songs_dir, safe_name)
+                
+                # Check if song already exists
+                if os.path.exists(new_song_path):
+                    # Try with a number suffix
+                    counter = 1
+                    while os.path.exists(new_song_path):
+                        safe_name_with_suffix = f'{safe_name} ({counter})'
+                        new_song_path = os.path.join(songs_dir, safe_name_with_suffix)
+                        counter += 1
+                    safe_name = safe_name_with_suffix
+                    new_song_path = os.path.join(songs_dir, safe_name)
+                
+                # Create new song directory
+                os.makedirs(new_song_path, exist_ok=True)
+                
+                # Load original song config
+                original_song_path = os.path.join(songs_dir, song_id)
+                original_cfg = song_configs[song_id].copy()
+                
+                # Update song config with translated name
+                original_cfg['song_name'] = translated_name
+                original_cfg['album_id'] = new_album_id
+                original_cfg['album_name'] = selected_album_name
+                # Clear lyrics (user will translate separately)
+                original_cfg['lyrics'] = ''
+                original_cfg['extracted_lyrics'] = ''
+                original_cfg['lyric_ideas'] = ''
+                
+                # Translate cover prompts if they exist
+                if original_cfg.get('storyboard_theme'):
+                    try:
+                        self.config(cursor='wait')
+                        self.update()
+                        theme_prompt = (
+                            f"Translate the following text from {source_lang} to {target_lang}, "
+                            f"maintaining the artistic and visual context:\n\n{original_cfg['storyboard_theme']}\n\n"
+                            f"Return only the translated text, no explanations."
+                        )
+                        theme_result = self.azure_ai(theme_prompt, system_message=f'You are a professional translator for music and visual art.', profile='text', max_tokens=500, temperature=0.7)
+                        if theme_result.get('success'):
+                            original_cfg['storyboard_theme'] = theme_result.get('content', '').strip()
+                    except Exception as e:
+                        self.log_debug('WARNING', f'Failed to translate storyboard theme: {e}')
+                    finally:
+                        self.config(cursor='')
+                
+                # Save new song config
+                save_song_config(new_song_path, original_cfg)
+                new_song_ids.append(safe_name)
+            
+            # Create album config
+            new_album_cfg = album_cfg.copy()
+            new_album_cfg['album_id'] = new_album_id
+            new_album_cfg['album_name'] = selected_album_name
+            new_album_cfg['songs'] = new_song_ids
+            new_album_cfg['language'] = 'DE' if translation_dir == 'en_to_de' else 'EN'
+            
+            # Translate album cover prompt
+            if album_cfg.get('cover_prompt'):
+                try:
+                    self.config(cursor='wait')
+                    self.update()
+                    cover_prompt_text = album_cfg['cover_prompt']
+                    # Replace original album name and song titles with translated ones in the prompt
+                    cover_prompt_text = cover_prompt_text.replace(album_name, selected_album_name)
+                    for orig_id, orig_cfg in song_configs.items():
+                        orig_title = orig_cfg.get('song_name', orig_id)
+                        trans_title = selected_songs.get(orig_id, orig_title)
+                        cover_prompt_text = cover_prompt_text.replace(orig_title, trans_title)
+                    
+                    # Translate the rest of the prompt
+                    cover_prompt = (
+                        f"Translate the following album cover image prompt from {source_lang} to {target_lang}, "
+                        f"maintaining all artistic and visual descriptions. The album name and song titles have already been replaced with their translations.\n\n"
+                        f"{cover_prompt_text}\n\n"
+                        f"Return only the translated prompt text, no explanations."
+                    )
+                    cover_result = self.azure_ai(cover_prompt, system_message=f'You are a professional translator for visual art and music cover descriptions.', profile='text', max_tokens=2000, temperature=0.7)
+                    if cover_result.get('success'):
+                        new_album_cfg['cover_prompt'] = cover_result.get('content', '').strip()
+                    else:
+                        new_album_cfg['cover_prompt'] = cover_prompt_text
+                except Exception as e:
+                    self.log_debug('WARNING', f'Failed to translate album cover prompt: {e}')
+                    new_album_cfg['cover_prompt'] = album_cfg.get('cover_prompt', '')
+                finally:
+                    self.config(cursor='')
+            else:
+                new_album_cfg['cover_prompt'] = ''
+            
+            # Translate album video prompt
+            if album_cfg.get('video_prompt'):
+                try:
+                    self.config(cursor='wait')
+                    self.update()
+                    video_prompt_text = album_cfg['video_prompt']
+                    # Replace original album name and song titles with translated ones
+                    video_prompt_text = video_prompt_text.replace(album_name, selected_album_name)
+                    for orig_id, orig_cfg in song_configs.items():
+                        orig_title = orig_cfg.get('song_name', orig_id)
+                        trans_title = selected_songs.get(orig_id, orig_title)
+                        video_prompt_text = video_prompt_text.replace(orig_title, trans_title)
+                    
+                    # Translate the rest of the prompt
+                    video_prompt = (
+                        f"Translate the following album video loop prompt from {source_lang} to {target_lang}, "
+                        f"maintaining all artistic and visual descriptions. The album name and song titles have already been replaced with their translations.\n\n"
+                        f"{video_prompt_text}\n\n"
+                        f"Return only the translated prompt text, no explanations."
+                    )
+                    video_result = self.azure_ai(video_prompt, system_message=f'You are a professional translator for visual art and music video descriptions.', profile='text', max_tokens=2000, temperature=0.7)
+                    if video_result.get('success'):
+                        new_album_cfg['video_prompt'] = video_result.get('content', '').strip()
+                    else:
+                        new_album_cfg['video_prompt'] = video_prompt_text
+                except Exception as e:
+                    self.log_debug('WARNING', f'Failed to translate album video prompt: {e}')
+                    new_album_cfg['video_prompt'] = album_cfg.get('video_prompt', '')
+                finally:
+                    self.config(cursor='')
+            else:
+                new_album_cfg['video_prompt'] = ''
+            
+            # Clear cover image file reference (new album needs new cover)
+            new_album_cfg['cover_image_file'] = ''
+            new_album_cfg['video_prompt_file'] = ''
+            
+            # Save album config
+            if save_album_config(new_album_path, new_album_cfg):
+                self.load_albums()
+                self.refresh_album_selector()
+                self.refresh_songs_list()
+                messagebox.showinfo('Success', f'Album cloned successfully as "{selected_album_name}" with {len(new_song_ids)} songs.\n\nNote: Song lyrics were not translated. You can translate them separately.')
+            else:
+                messagebox.showerror('Error', 'Failed to save cloned album config.')
+        
+        except Exception as exc:
+            messagebox.showerror('Error', f'Failed to clone album: {exc}')
+            self.log_debug('ERROR', f'Clone album failed: {exc}')
+
     def _album_cover_size_value(self) -> str:
         """Get album cover size value, mapped to supported sizes for gpt-image-1.5."""
         match = re.search(r'\((\d+x\d+)\)', self.album_cover_size_album_var.get() or '')
@@ -10338,6 +10768,141 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
         except Exception as e:
             messagebox.showerror('Error', f'Error improving album cover prompt: {e}')
             self.log_debug('ERROR', f'Error improving album cover prompt: {e}')
+        finally:
+            self.config(cursor='')
+    
+    def translate_prompt(self, text_widget, prompt_type: str):
+        """Translate a prompt (cover prompt or storyboard theme) between English and German."""
+        current_prompt = text_widget.get('1.0', tk.END).strip()
+        if not current_prompt:
+            messagebox.showwarning('Warning', f'Please enter a {prompt_type.lower()} first.')
+            return
+        
+        # Detect language (simple heuristic: check for common German words/characters)
+        # This is a basic detection - user can override
+        has_umlauts = any(c in current_prompt for c in 'äöüÄÖÜß')
+        has_common_german_words = any(word in current_prompt.lower() for word in ['der', 'die', 'das', 'und', 'ist', 'sind', 'mit', 'für', 'auf', 'in', 'zu'])
+        likely_german = has_umlauts or (has_common_german_words and len([w for w in ['der', 'die', 'das', 'und', 'ist'] if w in current_prompt.lower()]) >= 2)
+        
+        # Show dialog to select translation direction
+        lang_dialog = tk.Toplevel(self)
+        lang_dialog.title(f'Translate {prompt_type}')
+        lang_dialog.geometry('400x200')
+        lang_dialog.transient(self)
+        lang_dialog.grab_set()
+        lang_dialog.update_idletasks()
+        
+        # Center dialog
+        try:
+            parent_x = self.winfo_rootx()
+            parent_y = self.winfo_rooty()
+            parent_w = self.winfo_width() or lang_dialog.winfo_screenwidth()
+            parent_h = self.winfo_height() or lang_dialog.winfo_screenheight()
+        except Exception:
+            parent_x = parent_y = 0
+            parent_w = lang_dialog.winfo_screenwidth()
+            parent_h = lang_dialog.winfo_screenheight()
+        dlg_w = lang_dialog.winfo_width()
+        dlg_h = lang_dialog.winfo_height()
+        pos_x = parent_x + (parent_w - dlg_w) // 2
+        pos_y = parent_y + (parent_h - dlg_h) // 2
+        lang_dialog.geometry(f'+{max(0, pos_x)}+{max(0, pos_y)}')
+        
+        main_frame = ttk.Frame(lang_dialog, padding=20)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        ttk.Label(main_frame, text='Select Translation Direction:', font=('TkDefaultFont', 10, 'bold')).pack(pady=(0, 15))
+        
+        # Default to detected language
+        default_direction = 'de_to_en' if likely_german else 'en_to_de'
+        lang_var = tk.StringVar(value=default_direction)
+        ttk.Radiobutton(main_frame, text='English → German', variable=lang_var, value='en_to_de').pack(anchor=tk.W, pady=5)
+        ttk.Radiobutton(main_frame, text='German → English', variable=lang_var, value='de_to_en').pack(anchor=tk.W, pady=5)
+        
+        result = [None]
+        
+        def ok_clicked():
+            result[0] = lang_var.get()
+            lang_dialog.destroy()
+        
+        def cancel_clicked():
+            lang_dialog.destroy()
+        
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(pady=(20, 0))
+        ttk.Button(btn_frame, text='Translate', command=ok_clicked).pack(side=tk.LEFT, padx=4)
+        ttk.Button(btn_frame, text='Cancel', command=cancel_clicked).pack(side=tk.LEFT, padx=4)
+        
+        lang_dialog.bind('<Return>', lambda e: ok_clicked())
+        lang_dialog.bind('<Escape>', lambda e: cancel_clicked())
+        
+        self.wait_window(lang_dialog)
+        
+        if not result[0]:
+            return
+        
+        translation_dir = result[0]
+        source_lang = 'English' if translation_dir == 'en_to_de' else 'German'
+        target_lang = 'German' if translation_dir == 'en_to_de' else 'English'
+        
+        # Translate the prompt
+        try:
+            self.config(cursor='wait')
+            self.update()
+            
+            translate_prompt = (
+                f"Translate the following {prompt_type.lower()} from {source_lang} to {target_lang}, "
+                f"maintaining all artistic, visual, and technical descriptions exactly as they are.\n\n"
+                f"IMPORTANT:\n"
+                f"- Preserve all technical terms, artistic concepts, and visual descriptions\n"
+                f"- Maintain the same level of detail and specificity\n"
+                f"- Keep all formatting, structure, and style intact\n"
+                f"- Do not add or remove any information\n"
+                f"- Return only the translated text, no explanations\n\n"
+                f"{prompt_type}:\n{current_prompt}"
+            )
+            
+            system_message = f'You are a professional translator specializing in {source_lang} to {target_lang} translations for visual art, music, and creative prompts. Translate accurately while preserving all technical and artistic details.'
+            
+            translate_result = self.azure_ai(translate_prompt, system_message=system_message, profile='text', max_tokens=2000, temperature=0.7)
+            
+            if translate_result.get('success'):
+                translated_text = translate_result.get('content', '').strip()
+                
+                # Update the text widget
+                text_widget.delete('1.0', tk.END)
+                text_widget.insert('1.0', translated_text)
+                
+                # If this is an album cover prompt in album tab, update the album config
+                if text_widget == self.album_cover_album_text and self.current_album is not None:
+                    self.current_album['cover_prompt'] = translated_text
+                
+                # If this is an album video prompt in album tab, update the album config
+                if text_widget == self.album_video_text and self.current_album is not None:
+                    self.current_album['video_prompt'] = translated_text
+                
+                # If this is a song cover prompt, update the song config
+                if text_widget == self.album_cover_text and self.current_song_path:
+                    song_cfg = load_song_config(self.current_song_path)
+                    song_cfg['album_cover'] = translated_text
+                    save_song_config(self.current_song_path, song_cfg)
+                    self.current_song = song_cfg
+                
+                # If this is a storyboard theme, update the song config
+                if text_widget == self.storyboard_theme_text and self.current_song_path:
+                    song_cfg = load_song_config(self.current_song_path)
+                    song_cfg['storyboard_theme'] = translated_text
+                    save_song_config(self.current_song_path, song_cfg)
+                    self.current_song = song_cfg
+                
+                self.log_debug('INFO', f'{prompt_type} translated from {source_lang} to {target_lang}')
+                messagebox.showinfo('Success', f'{prompt_type} translated successfully.')
+            else:
+                messagebox.showerror('Error', f'Failed to translate {prompt_type.lower()}: {translate_result.get("error", "Unknown error")}')
+                self.log_debug('ERROR', f'Failed to translate {prompt_type}: {translate_result.get("error", "Unknown error")}')
+        except Exception as e:
+            messagebox.showerror('Error', f'Error translating {prompt_type.lower()}: {e}')
+            self.log_debug('ERROR', f'Error translating {prompt_type}: {e}')
         finally:
             self.config(cursor='')
     
