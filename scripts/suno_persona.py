@@ -1808,32 +1808,36 @@ def call_azure_audio_transcription(config: dict, audio_file_path: str, profile: 
             'file': (os.path.basename(audio_file_path), open(audio_file_path, 'rb'), 'audio/mpeg')
         }
         
-        # Check if model supports verbose_json (gpt-4o-transcribe doesn't support it)
-        # Try verbose_json first, fall back to json if not supported
-        use_verbose_json = response_format == 'verbose_json'
-        if use_verbose_json:
-            # Check deployment name - gpt-4o-transcribe doesn't support verbose_json
-            if 'gpt-4o' in deployment.lower() or 'transcribe' in deployment.lower():
-                use_verbose_json = False
-                print(f'[DEBUG] Deployment "{deployment}" likely doesn\'t support verbose_json, using json instead')
+        # Check if model is gpt-4o-transcribe (uses different API format)
+        is_gpt4o_transcribe = 'gpt-4o' in deployment.lower() and 'transcribe' in deployment.lower()
         
-        actual_response_format = 'verbose_json' if use_verbose_json else 'json'
-        
-        data = {
-            'response_format': actual_response_format
-        }
-        
-        # Request timestamps: prefer both word- and segment-level when possible
-        if use_verbose_json:
-            # Some Whisper variants accept multiple values; send both to maximize detail
-            data['timestamp_granularities[]'] = ['word', 'segment']
+        if is_gpt4o_transcribe:
+            # gpt-4o-transcribe uses 'json' format but still supports timestamp_granularities
+            actual_response_format = 'json'
+            print(f'[DEBUG] Using gpt-4o-transcribe model - requesting word-level timestamps')
         else:
-            data['timestamp_granularities[]'] = 'segment'
+            # Standard Whisper models use verbose_json for timestamps
+            actual_response_format = 'verbose_json' if response_format == 'verbose_json' else 'json'
+        
+        # Build form data as list of tuples to support multiple values for same key
+        data = [
+            ('response_format', actual_response_format)
+        ]
+        
+        # Request word-level timestamps for all models that support it
+        # gpt-4o-transcribe supports timestamp_granularities with 'word' and 'segment'
+        if is_gpt4o_transcribe or actual_response_format == 'verbose_json':
+            # Request both word and segment level timestamps
+            # Send as separate form fields for proper multipart encoding
+            data.append(('timestamp_granularities[]', 'word'))
+            data.append(('timestamp_granularities[]', 'segment'))
+        else:
+            data.append(('timestamp_granularities[]', 'segment'))
         
         if language:
-            data['language'] = language
+            data.append(('language', language))
         if prompt:
-            data['prompt'] = prompt
+            data.append(('prompt', prompt))
         
         print(f'[DEBUG] Request data: {data}')
         print(f'[DEBUG] Actual response format: {actual_response_format}')
@@ -1849,84 +1853,50 @@ def call_azure_audio_transcription(config: dict, audio_file_path: str, profile: 
             result = response.json()
             print(f'[DEBUG] Response JSON keys: {list(result.keys()) if isinstance(result, dict) else "Not a dict"}')
             
-            # Parse verbose_json format
-            if actual_response_format == 'verbose_json':
-                text = result.get('text', '')
-                segments = result.get('segments', [])
-                words = result.get('words', [])
-                
-                # Format lyrics with timestamps
-                lyrics_lines = []
-                if words:
-                    # Use word-level timestamps for precise timing
-                    for word_info in words:
-                        word = word_info.get('word', '')
-                        start = word_info.get('start', 0)
-                        end = word_info.get('end', 0)
-                        
-                        # Format as [MM:SS.mmm] word
+            # Extract common fields - both verbose_json and gpt-4o-transcribe json can have these
+            text = result.get('text', '') if isinstance(result, dict) else str(result)
+            segments = result.get('segments', []) if isinstance(result, dict) else []
+            words = result.get('words', []) if isinstance(result, dict) else []
+            
+            print(f'[DEBUG] Found {len(words)} words, {len(segments)} segments')
+            
+            # Format lyrics with timestamps
+            lyrics_lines = []
+            if words:
+                # Use word-level timestamps for precise timing
+                for word_info in words:
+                    word = word_info.get('word', '')
+                    start = word_info.get('start', 0)
+                    
+                    # Format as [MM:SS.mmm] word
+                    minutes = int(start // 60)
+                    seconds = int(start % 60)
+                    milliseconds = int((start % 1) * 1000)
+                    timestamp = f"[{minutes:02d}:{seconds:02d}.{milliseconds:03d}]"
+                    lyrics_lines.append(f"{timestamp} {word}")
+            elif segments:
+                # Fallback to segment-level timestamps
+                for segment in segments:
+                    text_seg = segment.get('text', '').strip()
+                    start = segment.get('start', 0)
+                    if text_seg:
                         minutes = int(start // 60)
                         seconds = int(start % 60)
                         milliseconds = int((start % 1) * 1000)
                         timestamp = f"[{minutes:02d}:{seconds:02d}.{milliseconds:03d}]"
-                        lyrics_lines.append(f"{timestamp} {word}")
-                elif segments:
-                    # Fallback to segment-level timestamps
-                    for segment in segments:
-                        text_seg = segment.get('text', '').strip()
-                        start = segment.get('start', 0)
-                        if text_seg:
-                            minutes = int(start // 60)
-                            seconds = int(start % 60)
-                            milliseconds = int((start % 1) * 1000)
-                            timestamp = f"[{minutes:02d}:{seconds:02d}.{milliseconds:03d}]"
-                            lyrics_lines.append(f"{timestamp} {text_seg}")
-                
-                formatted_lyrics = '\n'.join(lyrics_lines) if lyrics_lines else text
-                
-                return {
-                    'success': True,
-                    'content': formatted_lyrics,
-                    'text': text,
-                    'segments': segments,
-                    'words': words,
-                    'raw_json': result,
-                    'error': ''
-                }
-            else:
-                # JSON format (for models like gpt-4o-transcribe)
-                # JSON format may have 'text' and potentially 'segments' but not 'words'
-                text = result.get('text', '') if isinstance(result, dict) else str(result)
-                segments = result.get('segments', []) if isinstance(result, dict) else []
-                
-                # Format lyrics with timestamps from segments if available
-                lyrics_lines = []
-                if segments:
-                    # Use segment-level timestamps
-                    for segment in segments:
-                        text_seg = segment.get('text', '').strip()
-                        start = segment.get('start', 0)
-                        if text_seg:
-                            minutes = int(start // 60)
-                            seconds = int(start % 60)
-                            milliseconds = int((start % 1) * 1000)
-                            timestamp = f"[{minutes:02d}:{seconds:02d}.{milliseconds:03d}]"
-                            lyrics_lines.append(f"{timestamp} {text_seg}")
-                    
-                    formatted_lyrics = '\n'.join(lyrics_lines) if lyrics_lines else text
-                else:
-                    # No segments, just use plain text
-                    formatted_lyrics = text
-                
-                return {
-                    'success': True,
-                    'content': formatted_lyrics,
-                    'text': text,
-                    'segments': segments,
-                    'words': [],
-                    'raw_json': result if isinstance(result, dict) else {},
-                    'error': ''
-                }
+                        lyrics_lines.append(f"{timestamp} {text_seg}")
+            
+            formatted_lyrics = '\n'.join(lyrics_lines) if lyrics_lines else text
+            
+            return {
+                'success': True,
+                'content': formatted_lyrics,
+                'text': text,
+                'segments': segments,
+                'words': words,
+                'raw_json': result if isinstance(result, dict) else {},
+                'error': ''
+            }
         else:
             error_msg = f'API error {response.status_code}'
             try:
@@ -11604,211 +11574,71 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
         return ''
     
     def extract_lyrics_from_mp3(self, mp3_path: str) -> str:
-        """Extract lyrics from MP3 file using mutagen (SYLT and USLT frames).
+        """Extract lyrics from MP3 or MP4 file using AI transcription.
+        
+        If both MP3 and MP4 files exist with the same basename, asks user which to use.
         
         Returns:
-            Lyrics string with timestamps if SYLT frames found, plain lyrics if USLT found, empty string otherwise
+            Lyrics string with timestamps from AI transcription, empty string on failure
         """
         if not os.path.exists(mp3_path):
             return ''
         
-        if not MUTAGEN_AVAILABLE:
-            self.log_debug('WARNING', 'mutagen not available - cannot extract lyrics from MP3')
-            return ''
+        # Check if MP4 file with same basename exists
+        audio_path = mp3_path
+        base_path = os.path.splitext(mp3_path)[0]
+        mp4_path = base_path + '.mp4'
         
-        try:
-            audio = MP3(mp3_path)
-            
-            # First, try to get SYLT (Synchronized Lyrics) frames with timing
-            timed_lyrics = []
-            for key in audio.keys():
-                if key.startswith('SYLT::'):
-                    try:
-                        sylt_frame = audio[key]
-                        if isinstance(sylt_frame, SYLT):
-                            # SYLT frames are iterable: [(text, timestamp), ...]
-                            # Timestamp format depends on sylt_frame.format:
-                            # 1 = absolute time in milliseconds
-                            # 2 = absolute time in frames
-                            try:
-                                for text, timestamp in sylt_frame:
-                                    # Handle encoding: ensure text is a string with proper UTF-8 handling
-                                    if isinstance(text, bytes):
-                                        try:
-                                            text = text.decode('utf-8')
-                                        except UnicodeDecodeError:
-                                            try:
-                                                text = text.decode('latin-1')
-                                            except UnicodeDecodeError:
-                                                text = text.decode('utf-8', errors='replace')
-                                    elif not isinstance(text, str):
-                                        text = str(text)
-                                    
-                                    # Convert timestamp based on format
-                                    if sylt_frame.format == 1:  # milliseconds
-                                        timestamp_seconds = timestamp / 1000.0
-                                    elif sylt_frame.format == 2:  # frames (approximate: 1 frame = 1/75 second)
-                                        timestamp_seconds = timestamp / 75.0
-                                    else:
-                                        # Default: assume milliseconds
-                                        timestamp_seconds = timestamp / 1000.0
-                                    
-                                    minutes = int(timestamp_seconds // 60)
-                                    seconds = int(timestamp_seconds % 60)
-                                    milliseconds = int((timestamp_seconds % 1) * 1000)
-                                    timed_lyrics.append((timestamp_seconds, f"[{minutes:02d}:{seconds:02d}.{milliseconds:03d}] {text}"))
-                                
-                                if timed_lyrics:
-                                    # Sort by timestamp
-                                    timed_lyrics.sort(key=lambda x: x[0])
-                                    # Format as lyrics with timestamps
-                                    lyrics_with_timestamps = '\n'.join([lyric_line for _, lyric_line in timed_lyrics])
-                                    self.log_debug('INFO', f'Extracted {len(timed_lyrics)} timed lyrics from MP3 SYLT frames')
-                                    return lyrics_with_timestamps
-                            except (TypeError, ValueError, AttributeError) as e:
-                                self.log_debug('DEBUG', f'Error parsing SYLT frame {key}: {e}')
-                                continue
-                    except Exception as e:
-                        self.log_debug('DEBUG', f'Error reading SYLT frame {key}: {e}')
-                        continue
-            
-            # Also try common SYLT tag names
-            common_sylt_tags = ['SYLT', 'SYLT::eng', 'SYLT::eng::eng']
-            for tag in common_sylt_tags:
-                if tag in audio:
-                    try:
-                        frame = audio[tag]
-                        if isinstance(frame, SYLT):
-                            timed_lyrics = []
-                            try:
-                                for text, timestamp in frame:
-                                    # Handle encoding: ensure text is a string with proper UTF-8 handling
-                                    if isinstance(text, bytes):
-                                        try:
-                                            text = text.decode('utf-8')
-                                        except UnicodeDecodeError:
-                                            try:
-                                                text = text.decode('latin-1')
-                                            except UnicodeDecodeError:
-                                                text = text.decode('utf-8', errors='replace')
-                                    elif not isinstance(text, str):
-                                        text = str(text)
-                                    
-                                    # Convert timestamp based on format
-                                    if frame.format == 1:  # milliseconds
-                                        timestamp_seconds = timestamp / 1000.0
-                                    elif frame.format == 2:  # frames
-                                        timestamp_seconds = timestamp / 75.0
-                                    else:
-                                        timestamp_seconds = timestamp / 1000.0
-                                    
-                                    minutes = int(timestamp_seconds // 60)
-                                    seconds = int(timestamp_seconds % 60)
-                                    milliseconds = int((timestamp_seconds % 1) * 1000)
-                                    timed_lyrics.append((timestamp_seconds, f"[{minutes:02d}:{seconds:02d}.{milliseconds:03d}] {text}"))
-                                
-                                if timed_lyrics:
-                                    timed_lyrics.sort(key=lambda x: x[0])
-                                    lyrics_with_timestamps = '\n'.join([lyric_line for _, lyric_line in timed_lyrics])
-                                    self.log_debug('INFO', f'Extracted {len(timed_lyrics)} timed lyrics from MP3 SYLT tag')
-                                    return lyrics_with_timestamps
-                            except (TypeError, ValueError, AttributeError) as e:
-                                self.log_debug('DEBUG', f'Error parsing SYLT tag {tag}: {e}')
-                                continue
-                    except Exception as e:
-                        self.log_debug('DEBUG', f'Error reading SYLT tag {tag}: {e}')
-                        continue
-            
-            # Fallback: Try to get USLT (Unsynchronized Lyrics) frames
-            lyrics_frames = []
-            for key in audio.keys():
-                if key.startswith('USLT::'):
-                    try:
-                        uslt_frame = audio[key]
-                        if isinstance(uslt_frame, USLT):
-                            lyrics_text = uslt_frame.text
-                            # Handle encoding: ensure text is a string with proper UTF-8 handling
-                            if isinstance(lyrics_text, bytes):
-                                try:
-                                    lyrics_text = lyrics_text.decode('utf-8')
-                                except UnicodeDecodeError:
-                                    try:
-                                        lyrics_text = lyrics_text.decode('latin-1')
-                                    except UnicodeDecodeError:
-                                        lyrics_text = lyrics_text.decode('utf-8', errors='replace')
-                            elif not isinstance(lyrics_text, str):
-                                lyrics_text = str(lyrics_text)
-                            if lyrics_text:
-                                lyrics_frames.append(lyrics_text)
-                    except Exception as e:
-                        self.log_debug('DEBUG', f'Error reading USLT frame {key}: {e}')
-                        continue
-            
-            # Also try common tag names
-            common_lyrics_tags = ['USLT', 'LYRICS', 'LYRICS:', 'LYRICS::eng', 'USLT::eng']
-            for tag in common_lyrics_tags:
-                if tag in audio:
-                    try:
-                        frame = audio[tag]
-                        lyrics_text = None
-                        if isinstance(frame, USLT):
-                            lyrics_text = frame.text
-                        elif hasattr(frame, 'text'):
-                            lyrics_text = frame.text
-                        
-                        if lyrics_text:
-                            # Handle encoding: ensure text is a string with proper UTF-8 handling
-                            if isinstance(lyrics_text, bytes):
-                                try:
-                                    lyrics_text = lyrics_text.decode('utf-8')
-                                except UnicodeDecodeError:
-                                    try:
-                                        lyrics_text = lyrics_text.decode('latin-1')
-                                    except UnicodeDecodeError:
-                                        lyrics_text = lyrics_text.decode('utf-8', errors='replace')
-                            elif not isinstance(lyrics_text, str):
-                                lyrics_text = str(lyrics_text)
-                            if lyrics_text:
-                                lyrics_frames.append(lyrics_text)
-                    except Exception as e:
-                        self.log_debug('DEBUG', f'Error reading lyrics tag {tag}: {e}')
-                        continue
-            
-            # Return the first non-empty lyrics found
-            for lyrics_text in lyrics_frames:
-                if lyrics_text and lyrics_text.strip():
-                    self.log_debug('INFO', f'Extracted lyrics from MP3 (no timing): {len(lyrics_text)} characters')
-                    return lyrics_text.strip()
-            
-            # No lyrics found in metadata - try AI transcription
-            self.log_debug('INFO', 'No lyrics found in MP3 file metadata - attempting AI transcription...')
-            return self.extract_lyrics_with_ai(mp3_path)
-            
-        except ID3NoHeaderError:
-            self.log_debug('INFO', 'MP3 file has no ID3 tags - attempting AI transcription...')
-            return self.extract_lyrics_with_ai(mp3_path)
-        except Exception as e:
-            self.log_debug('WARNING', f'Failed to extract lyrics from MP3 metadata: {e} - attempting AI transcription...')
-            return self.extract_lyrics_with_ai(mp3_path)
+        mp3_exists = os.path.exists(mp3_path)
+        mp4_exists = os.path.exists(mp4_path)
+        
+        if mp3_exists and mp4_exists:
+            # Both files exist - ask user which one to use
+            result = messagebox.askquestion(
+                'Select Audio Source',
+                f'Both MP3 and MP4 files found:\n\n'
+                f'MP3: {os.path.basename(mp3_path)}\n'
+                f'MP4: {os.path.basename(mp4_path)}\n\n'
+                f'Use MP4 file for transcription?\n\n'
+                f'(Yes = MP4, No = MP3)',
+                icon='question'
+            )
+            if result == 'yes':
+                audio_path = mp4_path
+                self.log_debug('INFO', f'User selected MP4 file for transcription: {mp4_path}')
+            else:
+                self.log_debug('INFO', f'User selected MP3 file for transcription: {mp3_path}')
+        elif mp4_exists and not mp3_exists:
+            # Only MP4 exists
+            audio_path = mp4_path
+            self.log_debug('INFO', f'Using MP4 file for transcription (no MP3 found): {mp4_path}')
+        else:
+            # Only MP3 exists (or neither, but we checked mp3_path exists above)
+            self.log_debug('INFO', 'Extracting lyrics from MP3 using AI transcription...')
+        
+        return self.extract_lyrics_with_ai(audio_path)
     
-    def extract_lyrics_with_ai(self, mp3_path: str) -> str:
-        """Extract lyrics from MP3 using AI transcription (Azure Whisper API).
+    def extract_lyrics_with_ai(self, audio_path: str) -> str:
+        """Extract lyrics from audio/video file using AI transcription (Azure Whisper API).
+        
+        Args:
+            audio_path: Path to audio file (MP3, MP4, or other supported format)
         
         Returns:
             Lyrics string with timestamps in format [MM:SS.mmm] word
         """
-        if not os.path.exists(mp3_path):
-            self.log_debug('ERROR', f'MP3 file not found: {mp3_path}')
+        if not os.path.exists(audio_path):
+            self.log_debug('ERROR', f'Audio file not found: {audio_path}')
             return ''
         
-        self.log_debug('INFO', f'Starting AI transcription of MP3: {mp3_path}')
+        self.log_debug('INFO', f'Starting AI transcription of: {audio_path}')
         
         # Log configuration for debugging
         transcribe_profile = self.ai_config.get('profiles', {}).get('transcribe', {})
         self.log_debug('DEBUG', f'Transcribe profile endpoint: {transcribe_profile.get("endpoint", "NOT SET")}')
         self.log_debug('DEBUG', f'Transcribe profile deployment: {transcribe_profile.get("deployment", "NOT SET")}')
         self.log_debug('DEBUG', f'Transcribe profile API version: {transcribe_profile.get("api_version", "NOT SET")}')
-        self.log_debug('DEBUG', f'Transcription request: file="{mp3_path}", response_format="verbose_json" (preferred), profile="transcribe"')
+        self.log_debug('DEBUG', f'Transcription request: file="{audio_path}", response_format="verbose_json" (preferred), profile="transcribe"')
         
         # Guidance prompt for transcription (helps retain lyrical structure and punctuation)
         #transcription_prompt = (
@@ -11839,7 +11669,7 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
         try:
             # Call Azure Whisper API for transcription
             result = self.azure_transcription(
-                mp3_path, 
+                audio_path, 
                 profile='transcribe', 
                 response_format='verbose_json',
                 prompt=transcription_prompt
@@ -11902,7 +11732,7 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
                                     timestamped_lines.append((start_sec, text_part))
                         
                         if timestamped_lines:
-                            song_duration = self.get_mp3_duration(mp3_path)
+                            song_duration = self.get_mp3_duration(audio_path)
                             for i, (start_sec, text_part) in enumerate(timestamped_lines):
                                 # Use next start as end boundary when available; otherwise fall back to song duration if known.
                                 if i + 1 < len(timestamped_lines):
@@ -11927,7 +11757,7 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
                             self.log_debug('WARNING', 'No segments/words in transcription; estimating timestamps based on song duration')
                             
                             # Get song duration
-                            song_duration = self.get_mp3_duration(mp3_path)
+                            song_duration = self.get_mp3_duration(audio_path)
                             if song_duration > 0:
                                 # Split text into sentences (by periods, commas, or line breaks)
                                 # Split by sentence endings, commas, or natural breaks
