@@ -121,7 +121,8 @@ def call_azure_ai(
     system_message: str = None,
     profile: str = 'text',
     max_tokens: int = 4000,
-    temperature: float = 0.7
+    temperature: float = 0.7,
+    debug_logger=None
 ) -> dict:
     """Call Azure OpenAI API for text generation/analysis.
     
@@ -132,18 +133,38 @@ def call_azure_ai(
         profile: Profile name to use (default 'text')
         max_tokens: Maximum tokens to generate
         temperature: Temperature for generation
+        debug_logger: Optional logger function for debug output (receives message string)
     
     Returns:
         Dictionary with 'success', 'content', 'error'
     """
+    def debug_log(msg):
+        if debug_logger:
+            debug_logger(msg)
+    
+    # Log the full prompt and system message
+    debug_log("=" * 80)
+    debug_log("=== AZURE AI REQUEST ===")
+    debug_log(f"Profile: {profile}")
+    debug_log(f"Max Tokens: {max_tokens}")
+    debug_log(f"Temperature: {temperature}")
+    if system_message:
+        debug_log(f"--- SYSTEM MESSAGE ({len(system_message)} chars) ---")
+        debug_log(system_message)
+    debug_log(f"--- USER PROMPT ({len(prompt)} chars) ---")
+    debug_log(prompt)
+    debug_log("=" * 80)
+    
     try:
         profiles = config.get('profiles', {})
         if profile not in profiles:
-            return {
+            error_result = {
                 'success': False,
                 'content': '',
                 'error': f'Profile "{profile}" not found in configuration.'
             }
+            debug_log(f"=== ERROR: {error_result['error']} ===")
+            return error_result
         
         profile_config = profiles[profile]
         endpoint = profile_config.get('endpoint', '').rstrip('/')
@@ -152,13 +173,16 @@ def call_azure_ai(
         subscription_key = profile_config.get('subscription_key', '')
         
         if not all([endpoint, deployment, subscription_key]):
-            return {
+            error_result = {
                 'success': False,
                 'content': '',
                 'error': f'Missing Azure AI configuration for profile "{profile}". Please configure settings.'
             }
+            debug_log(f"=== ERROR: {error_result['error']} ===")
+            return error_result
         
         url = f"{endpoint}/openai/deployments/{deployment}/chat/completions?api-version={api_version}"
+        debug_log(f"API URL: {url}")
         
         headers = {
             'Content-Type': 'application/json',
@@ -193,6 +217,7 @@ def call_azure_ai(
                 error_message = str(error_detail.get('message', '')).lower() if isinstance(error_detail, dict) else str(error_detail).lower()
                 if 'temperature' in error_message:
                     # Retry without temperature
+                    debug_log("Retrying without temperature parameter...")
                     payload.pop('temperature', None)
                     response = requests.post(url, headers=headers, json=payload, timeout=120)
             except:
@@ -201,6 +226,14 @@ def call_azure_ai(
         if response.status_code == 200:
             result = response.json()
             content = result.get('choices', [{}])[0].get('message', {}).get('content', '')
+            
+            # Log the full response
+            debug_log("=" * 80)
+            debug_log("=== AZURE AI RESPONSE (SUCCESS) ===")
+            debug_log(f"--- RESPONSE CONTENT ({len(content)} chars) ---")
+            debug_log(content)
+            debug_log("=" * 80)
+            
             return {
                 'success': True,
                 'content': content,
@@ -219,6 +252,11 @@ def call_azure_ai(
                 error_text = response.text[:500]
                 error_msg = f'{error_msg}: {error_text}'
             
+            debug_log("=" * 80)
+            debug_log(f"=== AZURE AI RESPONSE (ERROR) ===")
+            debug_log(f"Error: {error_msg}")
+            debug_log("=" * 80)
+            
             return {
                 'success': False,
                 'content': '',
@@ -226,16 +264,20 @@ def call_azure_ai(
             }
     
     except requests.exceptions.RequestException as e:
+        error_msg = f'Request error: {str(e)}'
+        debug_log(f"=== REQUEST EXCEPTION: {error_msg} ===")
         return {
             'success': False,
             'content': '',
-            'error': f'Request error: {str(e)}'
+            'error': error_msg
         }
     except Exception as e:
+        error_msg = f'Unexpected error: {str(e)}'
+        debug_log(f"=== UNEXPECTED EXCEPTION: {error_msg} ===")
         return {
             'success': False,
             'content': '',
-            'error': f'Unexpected error: {str(e)}'
+            'error': error_msg
         }
 
 
@@ -892,7 +934,8 @@ If information cannot be determined, use empty strings or empty arrays. Be speci
             system_message=system_message,
             profile='text',
             max_tokens=3000,  # Increased to allow for longer style prompts (up to 1000 chars)
-            temperature=None  # Use None to let the function handle it (will retry without if needed)
+            temperature=None,  # Use None to let the function handle it (will retry without if needed)
+            debug_logger=self.log  # Output full prompt and response to debug log
         )
         
         if result.get('success'):
