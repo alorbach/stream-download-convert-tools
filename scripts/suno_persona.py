@@ -5676,17 +5676,24 @@ TECHNICAL REQUIREMENTS:
         ttk.Button(merged_btn_frame, text='Merge', command=self.merge_song_style).pack(fill=tk.X, pady=(0, 4))
         ttk.Button(merged_btn_frame, text='Improve', command=self.improve_merged_style).pack(fill=tk.X)
 
-        ttk.Label(scrollable_frame, text='Storyboard Theme / Global Image Style:', font=('TkDefaultFont', 9, 'bold')).grid(row=7, column=0, sticky=tk.NW, pady=5)
+        ttk.Label(scrollable_frame, text='Exclude Style (Negative):', font=('TkDefaultFont', 9, 'bold')).grid(row=7, column=0, sticky=tk.NW, pady=5)
+        self.exclude_style_text = scrolledtext.ScrolledText(scrollable_frame, height=2, wrap=tk.WORD, width=60)
+        self.exclude_style_text.grid(row=7, column=1, columnspan=2, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
+        exclude_btn_frame = ttk.Frame(scrollable_frame)
+        exclude_btn_frame.grid(row=7, column=3, padx=5, pady=5, sticky=tk.N)
+        ttk.Button(exclude_btn_frame, text='Clear', command=lambda: self.exclude_style_text.delete('1.0', tk.END)).pack(fill=tk.X)
+
+        ttk.Label(scrollable_frame, text='Storyboard Theme / Global Image Style:', font=('TkDefaultFont', 9, 'bold')).grid(row=8, column=0, sticky=tk.NW, pady=5)
         self.storyboard_theme_text = scrolledtext.ScrolledText(scrollable_frame, height=3, wrap=tk.WORD, width=60)
-        self.storyboard_theme_text.grid(row=7, column=1, columnspan=2, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
+        self.storyboard_theme_text.grid(row=8, column=1, columnspan=2, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
         theme_btn_frame = ttk.Frame(scrollable_frame)
-        theme_btn_frame.grid(row=7, column=3, padx=5, pady=5, sticky=tk.N)
+        theme_btn_frame.grid(row=8, column=3, padx=5, pady=5, sticky=tk.N)
         ttk.Button(theme_btn_frame, text='Use Merged Style', command=self.set_storyboard_theme_from_merged_style).pack(fill=tk.X, pady=(0, 4))
         ttk.Button(theme_btn_frame, text='Improve', command=self.improve_storyboard_theme).pack(fill=tk.X, pady=(0, 4))
         ttk.Button(theme_btn_frame, text='Translate', command=lambda: self.translate_prompt(self.storyboard_theme_text, 'Storyboard Theme')).pack(fill=tk.X)
 
         ai_results_notebook = ttk.Notebook(scrollable_frame)
-        ai_results_notebook.grid(row=8, column=0, columnspan=4, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
+        ai_results_notebook.grid(row=9, column=0, columnspan=4, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
         
         album_cover_frame = ttk.Frame(ai_results_notebook)
         ai_results_notebook.add(album_cover_frame, text='Album Cover')
@@ -5761,7 +5768,7 @@ TECHNICAL REQUIREMENTS:
         
         scrollable_frame.columnconfigure(1, weight=1)
         scrollable_frame.rowconfigure(4, weight=1)
-        scrollable_frame.rowconfigure(8, weight=1)
+        scrollable_frame.rowconfigure(9, weight=1)
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
@@ -6004,6 +6011,19 @@ TECHNICAL REQUIREMENTS:
         ttk.Label(controls_frame, text='Distinct setups:', font=('TkDefaultFont', 9, 'bold')).pack(side=tk.LEFT, padx=(10, 5))
         self.storyboard_setup_count_var = tk.StringVar(value='6')
         ttk.Spinbox(controls_frame, from_=1, to=12, textvariable=self.storyboard_setup_count_var, width=4).pack(side=tk.LEFT, padx=2)
+
+        # Multi-scene options (2-second segments with direct camera cuts)
+        self.storyboard_multiscene_var = tk.BooleanVar(value=False)
+        storyboard_multiscene_cb = ttk.Checkbutton(controls_frame, text='Multi-Scene (2s)', variable=self.storyboard_multiscene_var)
+        storyboard_multiscene_cb.pack(side=tk.LEFT, padx=(10, 2))
+        create_tooltip(storyboard_multiscene_cb, 'Generate scene prompts with direct camera cuts every 2 seconds within each video segment')
+
+        ttk.Label(controls_frame, text='Scene dur:', font=('TkDefaultFont', 9, 'bold')).pack(side=tk.LEFT, padx=(10, 5))
+        self.storyboard_scene_duration_var = tk.StringVar(value='2')
+        storyboard_scene_dur_spin = ttk.Spinbox(controls_frame, from_=1, to=6, textvariable=self.storyboard_scene_duration_var, width=3)
+        storyboard_scene_dur_spin.pack(side=tk.LEFT, padx=2)
+        ttk.Label(controls_frame, text='sec', font=('TkDefaultFont', 8)).pack(side=tk.LEFT)
+        create_tooltip(storyboard_scene_dur_spin, 'Duration of each sub-scene within a video segment (default: 2 seconds)')
 
         # Button row for Generate Storyboard and Export Generated Prompts
         button_frame = ttk.Frame(main_frame)
@@ -7738,6 +7758,9 @@ TECHNICAL REQUIREMENTS:
         self.song_style_text.insert('1.0', self.current_song.get('song_style', ''))
         self.merged_style_text.delete('1.0', tk.END)
         self.merged_style_text.insert('1.0', self.current_song.get('merged_style', ''))
+        if hasattr(self, 'exclude_style_text'):
+            self.exclude_style_text.delete('1.0', tk.END)
+            self.exclude_style_text.insert('1.0', self.current_song.get('exclude_style', ''))
         if hasattr(self, 'storyboard_theme_text'):
             self.storyboard_theme_text.delete('1.0', tk.END)
             self.storyboard_theme_text.insert('1.0', self.current_song.get('storyboard_theme', ''))
@@ -7786,6 +7809,10 @@ TECHNICAL REQUIREMENTS:
             if hasattr(self, 'storyboard_image_size_var'):
                 self.storyboard_image_size_var.set(self.current_song.get('storyboard_image_size', '3:2 (1536x1024)'))
             self.load_storyboard()
+        if hasattr(self, 'storyboard_multiscene_var'):
+            self.storyboard_multiscene_var.set(self.current_song.get('storyboard_multiscene', False))
+        if hasattr(self, 'storyboard_scene_duration_var'):
+            self.storyboard_scene_duration_var.set(str(self.current_song.get('storyboard_scene_duration', 2)))
         
         # Load Spotify Category
         if hasattr(self, 'spotify_category_var'):
@@ -7816,6 +7843,8 @@ TECHNICAL REQUIREMENTS:
             self.extracted_lyrics_text.delete('1.0', tk.END)
         self.song_style_text.delete('1.0', tk.END)
         self.merged_style_text.delete('1.0', tk.END)
+        if hasattr(self, 'exclude_style_text'):
+            self.exclude_style_text.delete('1.0', tk.END)
         if hasattr(self, 'storyboard_theme_text'):
             self.storyboard_theme_text.delete('1.0', tk.END)
         if hasattr(self, 'persona_scene_percent_var'):
@@ -7830,6 +7859,10 @@ TECHNICAL REQUIREMENTS:
             self.video_loop_duration_var.set('6')
         if hasattr(self, 'video_loop_multiscene_var'):
             self.video_loop_multiscene_var.set(False)
+        if hasattr(self, 'storyboard_multiscene_var'):
+            self.storyboard_multiscene_var.set(False)
+        if hasattr(self, 'storyboard_scene_duration_var'):
+            self.storyboard_scene_duration_var.set('2')
         if hasattr(self, 'overlay_lyrics_var'):
             self.overlay_lyrics_var.set(False)
         if hasattr(self, 'embed_lyrics_var'):
@@ -8302,6 +8335,7 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
             'extracted_lyrics': self.extracted_lyrics_text.get('1.0', tk.END).strip() if hasattr(self, 'extracted_lyrics_text') else self.current_song.get('extracted_lyrics', '') if self.current_song else '',
             'song_style': self.song_style_text.get('1.0', tk.END).strip(),
             'merged_style': self.merged_style_text.get('1.0', tk.END).strip(),
+            'exclude_style': self.exclude_style_text.get('1.0', tk.END).strip() if hasattr(self, 'exclude_style_text') else '',
             'storyboard_theme': self.storyboard_theme_text.get('1.0', tk.END).strip() if hasattr(self, 'storyboard_theme_text') else '',
             'persona_scene_percent': int(self.persona_scene_percent_var.get() or 40) if hasattr(self, 'persona_scene_percent_var') else 40,
             'song_description': self.song_description_text.get('1.0', tk.END).strip() if hasattr(self, 'song_description_text') else self.current_song.get('song_description', '') if self.current_song else '',
@@ -8319,6 +8353,8 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
             'video_loop_size': self.video_loop_size_var.get() if hasattr(self, 'video_loop_size_var') else '9:16 (720x1280)',
             'video_loop_duration': int(self.video_loop_duration_var.get() or 6) if hasattr(self, 'video_loop_duration_var') else 6,
             'video_loop_multiscene': bool(self.video_loop_multiscene_var.get()) if hasattr(self, 'video_loop_multiscene_var') else False,
+            'storyboard_multiscene': bool(self.storyboard_multiscene_var.get()) if hasattr(self, 'storyboard_multiscene_var') else False,
+            'storyboard_scene_duration': int(self.storyboard_scene_duration_var.get() or 2) if hasattr(self, 'storyboard_scene_duration_var') else 2,
             'overlay_lyrics_on_image': bool(self.overlay_lyrics_var.get()) if hasattr(self, 'overlay_lyrics_var') else False,
             'embed_lyrics_in_prompt': bool(self.embed_lyrics_var.get()) if hasattr(self, 'embed_lyrics_var') else True,
             'embed_keywords_in_prompt': bool(self.embed_keywords_var.get()) if hasattr(self, 'embed_keywords_var') else False,
@@ -10372,6 +10408,16 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
             style_text = self._sanitize_style_keywords(style_text)
             self.song_style_text.delete('1.0', tk.END)
             self.song_style_text.insert('1.0', style_text)
+            
+            # Import negative_prompt into exclude_style field if available
+            if hasattr(self, 'exclude_style_text'):
+                usage = entry.get('agent_usage_suggestions', {}) or {}
+                negative_prompt = str(usage.get('negative_prompt', '') or '').strip()
+                if negative_prompt:
+                    self.exclude_style_text.delete('1.0', tk.END)
+                    self.exclude_style_text.insert('1.0', negative_prompt)
+                    self.log_debug('INFO', f'Imported negative prompt as exclude style: {negative_prompt[:50]}...')
+            
             self.log_debug('INFO', f'Imported analysis song style: {name}')
             dialog.destroy()
 
@@ -12369,6 +12415,16 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
         except Exception:
             storyboard_setup_count = 6
         storyboard_setup_count = max(1, min(12, storyboard_setup_count))
+        
+        # Get multi-scene settings
+        is_multiscene = self.storyboard_multiscene_var.get() if hasattr(self, 'storyboard_multiscene_var') else False
+        try:
+            scene_duration = int(self.storyboard_scene_duration_var.get() or 2) if hasattr(self, 'storyboard_scene_duration_var') else 2
+        except Exception:
+            scene_duration = 2
+        scene_duration = max(1, min(6, scene_duration))
+        subscenes_per_video = seconds_per_video // scene_duration if is_multiscene and scene_duration > 0 else 1
+        
         persona_name = self.current_persona.get('name', '')
         visual_aesthetic = self.current_persona.get('visual_aesthetic', '')
         base_image_prompt = self.current_persona.get('base_image_prompt', '')
@@ -12402,7 +12458,8 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
         # Reset cached prompts for fresh generation
         self.scene_final_prompts = {}
 
-        self.log_debug('INFO', f'Generating storyboard for MP3: {mp3_path}')
+        multiscene_info = f' (multi-scene: {subscenes_per_video}x{scene_duration}s per video)' if is_multiscene and subscenes_per_video > 1 else ''
+        self.log_debug('INFO', f'Generating storyboard for MP3: {mp3_path}{multiscene_info}')
         self.config(cursor='wait')
         self.update()
         
@@ -12578,7 +12635,36 @@ Vibe: {vibe if vibe else 'N/A'}
 <OUTPUT_FORMAT>
 IMPORTANT: SAMPLE FORMAT ONLY. DO NOT COPY ANY SAMPLE TEXT INTO THE ACTUAL OUTPUT.
 Start immediately with SCENE 1. No preamble or questions.
+"""
+            # Add multi-scene format instructions if enabled
+            if is_multiscene and subscenes_per_video > 1:
+                prompt += f"""
+=== MULTI-SCENE MODE ({scene_duration}s sub-scenes) ===
+Each video segment ({seconds_per_video}s) contains {subscenes_per_video} sub-scenes of {scene_duration} seconds each.
+Use DIRECT CAMERA CUTS between sub-scenes (NO smooth transitions, NO fades, NO morphing).
+Each sub-scene must be visually distinct but thematically connected.
+The persona/character must appear consistently across sub-scenes when present.
 
+SCENE 1: {seconds_per_video} seconds total"""
+                for sub in range(subscenes_per_video):
+                    sub_start = sub * scene_duration
+                    sub_end = sub_start + scene_duration
+                    prompt += f"""
+  [{sub_start}s-{sub_end}s] Sub-scene {sub + 1}: [describe this {scene_duration}s segment with distinct camera angle/composition]"""
+                prompt += f"""
+
+SCENE 2: {seconds_per_video} seconds total"""
+                for sub in range(subscenes_per_video):
+                    sub_start = sub * scene_duration
+                    sub_end = sub_start + scene_duration
+                    prompt += f"""
+  [{sub_start}s-{sub_end}s] Sub-scene {sub + 1}: [different shot type and palette from Scene 1]"""
+                prompt += f"""
+
+...continue through SCENE {num_scenes}...
+"""
+            else:
+                prompt += f"""
 SCENE 1: {seconds_per_video} seconds
 [NO CHARACTERS] [If LYRICS_TIMING shows [NO LYRICS] for this scene, leave it text-free and do NOT invent or embed any lyrics.]
 
@@ -12586,7 +12672,8 @@ SCENE 2: {seconds_per_video} seconds
 [NO CHARACTERS] [Detailed abstract/environmental scene - atmospheric visuals, symbolic imagery, no human figures. Different shot type and palette from Scene 1.]
 
 ...continue through SCENE {num_scenes}...
-</OUTPUT_FORMAT>
+"""
+            prompt += """</OUTPUT_FORMAT>
 
 <EXECUTION>
 - Generate ALL {num_scenes} scenes without stopping
@@ -12594,7 +12681,7 @@ SCENE 2: {seconds_per_video} seconds
 - No questions, no options, no explanations - just scenes
 </EXECUTION>
 
-Begin with SCENE 1:"""
+Begin with SCENE 1:""".format(num_scenes=num_scenes)
             
             # Enhanced system message with clear role and constraints
             system_message = f"""You are a professional music video storyboard director creating {num_scenes} scene prompts that tell ONE CONTINUOUS, FLOWING STORY.
@@ -12617,6 +12704,17 @@ ABSOLUTE RULES:
             system_message += f"{next_rule_num}. Target persona presence: about {persona_scene_percent}% of scenes (non-consecutive). Maintain variety.\n"
             next_rule_num += 1
             system_message += f"{next_rule_num}. When persona appears, avoid default centering. Embed them in the environment and pick the best composition (rule of thirds, foreground/background, over-shoulder, partial silhouette, small-in-frame, or cropped). Center only if it clearly strengthens the shot.\n"
+            next_rule_num += 1
+            
+            # Add multi-scene rules to system message if enabled
+            if is_multiscene and subscenes_per_video > 1:
+                system_message += f"""{next_rule_num}. MULTI-SCENE MODE: Each {seconds_per_video}s scene must contain {subscenes_per_video} sub-scenes of {scene_duration}s each.
+   - Format each scene with sub-scene timestamps: [0s-{scene_duration}s], [{scene_duration}s-{scene_duration*2}s], etc.
+   - Use DIRECT CAMERA CUTS between sub-scenes (NO smooth transitions, NO fades, NO morphing)
+   - Each sub-scene must have a different camera angle, composition, or framing
+   - The persona/character must appear consistently across sub-scenes when present
+   - Sub-scenes should feel dynamic and match the music energy
+"""
             system_message += """
 
 Start immediately with "SCENE 1:" - no introduction or commentary."""
@@ -12638,7 +12736,10 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
                 {
                     'mode': 'single',
                     'num_scenes': num_scenes,
-                    'seconds_per_video': seconds_per_video
+                    'seconds_per_video': seconds_per_video,
+                    'multiscene': is_multiscene,
+                    'scene_duration': scene_duration if is_multiscene else None,
+                    'subscenes_per_video': subscenes_per_video if is_multiscene else None
                 }
             )
             
