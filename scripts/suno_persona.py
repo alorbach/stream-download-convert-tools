@@ -1461,7 +1461,7 @@ class SettingsDialog(tk.Toplevel):
         profiles = self.config.get('profiles', {})
         
         # Ensure default profiles exist
-        default_profiles = ['text', 'image_gen', 'video_gen', 'transcribe']
+        default_profiles = ['text', 'image_gen', 'video_gen', 'transcribe', 'speech']
         for profile_name in default_profiles:
             if profile_name not in profiles:
                 profiles[profile_name] = {}
@@ -1501,7 +1501,7 @@ class SettingsDialog(tk.Toplevel):
         ttk.Button(btn_frame_manage, text='Remove Profile', command=self.remove_profile).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_frame_manage, text='Rename Profile', command=self.rename_profile).pack(side=tk.LEFT, padx=5)
         
-        ttk.Label(profiles_management_frame, text='Note: Core profiles (text, image_gen, video_gen, transcribe) cannot be removed.', 
+        ttk.Label(profiles_management_frame, text='Note: Core profiles (text, image_gen, video_gen, transcribe, speech) cannot be removed.', 
                  font=('TkDefaultFont', 8), foreground='gray').grid(row=3, column=0, columnspan=3, pady=5)
         
         # Create tabs for each profile
@@ -1653,7 +1653,7 @@ class SettingsDialog(tk.Toplevel):
             return
         
         profile_name = self.profile_listbox.get(selection[0])
-        core_profiles = ['text', 'image_gen', 'video_gen', 'transcribe']
+        core_profiles = ['text', 'image_gen', 'video_gen', 'transcribe', 'speech']
         
         if profile_name in core_profiles:
             messagebox.showwarning('Warning', f'Cannot remove core profile "{profile_name}".')
@@ -1684,7 +1684,7 @@ class SettingsDialog(tk.Toplevel):
             return
         
         old_name = self.profile_listbox.get(selection[0])
-        core_profiles = ['text', 'image_gen', 'video_gen', 'transcribe']
+        core_profiles = ['text', 'image_gen', 'video_gen', 'transcribe', 'speech']
         
         if old_name in core_profiles:
             messagebox.showwarning('Warning', f'Cannot rename core profile "{old_name}".')
@@ -1930,6 +1930,229 @@ def call_azure_audio_transcription(config: dict, audio_file_path: str, profile: 
         return {
             'success': False,
             'content': '',
+            'segments': [],
+            'error': f'Unexpected error: {str(e)}'
+        }
+
+
+def call_azure_speech_transcription(config: dict, audio_file_path: str, profile: str = 'speech', language: str = 'en-US') -> dict:
+    """Call Azure Cognitive Services Speech-to-Text API to transcribe audio with word-level timestamps.
+    
+    This uses the Azure Speech Services API (not OpenAI Whisper) which provides better
+    accuracy for music/vocals and word-level timestamps.
+    
+    Args:
+        config: Configuration dictionary
+        audio_file_path: Path to audio file (WAV, MP3, etc.)
+        profile: Profile name to use (default 'speech')
+        language: Language code (e.g., 'en-US', 'de-DE')
+    
+    Returns:
+        Dictionary with 'success', 'content' (transcription text), 'words' (with timestamps), 'error'
+    """
+    try:
+        if not os.path.exists(audio_file_path):
+            return {
+                'success': False,
+                'content': '',
+                'words': [],
+                'segments': [],
+                'error': f'Audio file not found: {audio_file_path}'
+            }
+        
+        profiles = config.get('profiles', {})
+        if profile not in profiles:
+            return {
+                'success': False,
+                'content': '',
+                'words': [],
+                'segments': [],
+                'error': f'Profile "{profile}" not found in configuration.'
+            }
+        
+        profile_config = profiles[profile]
+        endpoint = profile_config.get('endpoint', '').rstrip('/')
+        subscription_key = profile_config.get('subscription_key', '')
+        api_version = profile_config.get('api_version', '2024-11-15')
+        
+        if not all([endpoint, subscription_key]):
+            return {
+                'success': False,
+                'content': '',
+                'words': [],
+                'segments': [],
+                'error': f'Missing Azure Speech configuration for profile "{profile}". Please configure endpoint and subscription_key.'
+            }
+        
+        # Azure Speech Services transcription endpoint
+        url = f"{endpoint}/speechtotext/transcriptions:transcribe?api-version={api_version}"
+        
+        print(f'[DEBUG] Azure Speech Transcription URL: {url}')
+        print(f'[DEBUG] Endpoint: {endpoint}')
+        print(f'[DEBUG] API Version: {api_version}')
+        print(f'[DEBUG] Audio file: {audio_file_path}')
+        print(f'[DEBUG] Language: {language}')
+        
+        headers = {
+            'Ocp-Apim-Subscription-Key': subscription_key
+        }
+        
+        # Prepare multipart form data
+        # Determine content type based on file extension
+        ext = os.path.splitext(audio_file_path)[1].lower()
+        content_type_map = {
+            '.wav': 'audio/wav',
+            '.mp3': 'audio/mpeg',
+            '.mp4': 'audio/mp4',
+            '.m4a': 'audio/mp4',
+            '.ogg': 'audio/ogg',
+            '.flac': 'audio/flac'
+        }
+        content_type = content_type_map.get(ext, 'audio/mpeg')
+        
+        # Definition for enhanced mode with word-level timestamps
+        definition = {
+            "locales": [language],
+            "profanityFilterMode": "None",
+            "wordLevelTimestampsEnabled": True
+        }
+        
+        print(f'[DEBUG] Definition: {json.dumps(definition)}')
+        
+        with open(audio_file_path, 'rb') as audio_file:
+            files = {
+                'audio': (os.path.basename(audio_file_path), audio_file, content_type),
+                'definition': (None, json.dumps(definition), 'application/json')
+            }
+            
+            response = requests.post(url, headers=headers, files=files, timeout=600)
+        
+        print(f'[DEBUG] Response status: {response.status_code}')
+        print(f'[DEBUG] Response headers: {dict(response.headers)}')
+        
+        if response.status_code == 200:
+            result = response.json()
+            print(f'[DEBUG] Response JSON keys: {list(result.keys()) if isinstance(result, dict) else "Not a dict"}')
+            
+            # Parse Azure Speech response format
+            # The response contains 'combinedPhrases' and 'phrases' with word-level timing
+            combined_text = ''
+            words = []
+            segments = []
+            
+            # Get combined text
+            combined_phrases = result.get('combinedPhrases', [])
+            if combined_phrases:
+                combined_text = ' '.join([p.get('text', '') for p in combined_phrases])
+            
+            # Get phrases with word-level timestamps
+            phrases = result.get('phrases', [])
+            for phrase in phrases:
+                phrase_text = phrase.get('text', '')
+                # Azure Speech API returns offsetMilliseconds, not offsetInTicks
+                offset_ms = phrase.get('offsetMilliseconds', 0)
+                duration_ms = phrase.get('durationMilliseconds', 0)
+                
+                # Convert milliseconds to seconds
+                start_seconds = offset_ms / 1000.0
+                end_seconds = start_seconds + (duration_ms / 1000.0)
+                
+                # Add segment
+                segments.append({
+                    'text': phrase_text,
+                    'start': start_seconds,
+                    'end': end_seconds
+                })
+                
+                # Get word-level timestamps if available
+                phrase_words = phrase.get('words', [])
+                for word_info in phrase_words:
+                    word_text = word_info.get('text', '')
+                    # Azure Speech API returns offsetMilliseconds for words too
+                    word_offset_ms = word_info.get('offsetMilliseconds', 0)
+                    word_duration_ms = word_info.get('durationMilliseconds', 0)
+                    
+                    word_start = word_offset_ms / 1000.0
+                    word_end = word_start + (word_duration_ms / 1000.0)
+                    
+                    words.append({
+                        'word': word_text,
+                        'start': word_start,
+                        'end': word_end
+                    })
+            
+            print(f'[DEBUG] Found {len(words)} words, {len(segments)} segments')
+            
+            # Format lyrics with timestamps
+            lyrics_lines = []
+            if words:
+                for word_info in words:
+                    word = word_info.get('word', '')
+                    start = word_info.get('start', 0)
+                    
+                    minutes = int(start // 60)
+                    seconds = int(start % 60)
+                    milliseconds = int((start % 1) * 1000)
+                    timestamp = f"[{minutes:02d}:{seconds:02d}.{milliseconds:03d}]"
+                    lyrics_lines.append(f"{timestamp} {word}")
+            elif segments:
+                for segment in segments:
+                    text_seg = segment.get('text', '').strip()
+                    start = segment.get('start', 0)
+                    if text_seg:
+                        minutes = int(start // 60)
+                        seconds = int(start % 60)
+                        milliseconds = int((start % 1) * 1000)
+                        timestamp = f"[{minutes:02d}:{seconds:02d}.{milliseconds:03d}]"
+                        lyrics_lines.append(f"{timestamp} {text_seg}")
+            
+            formatted_lyrics = '\n'.join(lyrics_lines) if lyrics_lines else combined_text
+            
+            return {
+                'success': True,
+                'content': formatted_lyrics,
+                'text': combined_text,
+                'segments': segments,
+                'words': words,
+                'raw_json': result,
+                'error': ''
+            }
+        else:
+            error_msg = f'API error {response.status_code}'
+            try:
+                error_json = response.json()
+                print(f'[DEBUG] Error response JSON: {error_json}')
+                error_detail = error_json.get('error', {})
+                if isinstance(error_detail, dict):
+                    error_msg = f'{error_msg}: {error_detail.get("message", error_detail.get("code", str(error_detail)))}'
+                else:
+                    error_msg = f'{error_msg}: {str(error_detail)}'
+            except:
+                error_text = response.text[:500]
+                print(f'[DEBUG] Error response text: {error_text}')
+                error_msg = f'{error_msg}: {error_text}'
+            
+            return {
+                'success': False,
+                'content': '',
+                'words': [],
+                'segments': [],
+                'error': error_msg
+            }
+    
+    except requests.exceptions.RequestException as e:
+        return {
+            'success': False,
+            'content': '',
+            'words': [],
+            'segments': [],
+            'error': f'Request error: {str(e)}'
+        }
+    except Exception as e:
+        return {
+            'success': False,
+            'content': '',
+            'words': [],
             'segments': [],
             'error': f'Unexpected error: {str(e)}'
         }
@@ -5933,6 +6156,24 @@ TECHNICAL REQUIREMENTS:
         ttk.Button(controls_frame, text='Copy to Lyrics Field', command=self.copy_extracted_to_lyrics).pack(side=tk.LEFT, padx=5)
         ttk.Button(controls_frame, text='Sync with original Lyrics', command=self.sync_extracted_with_original_lyrics).pack(side=tk.LEFT, padx=5)
         
+        # Transcription service selector
+        ttk.Label(controls_frame, text='Service:', font=('TkDefaultFont', 9)).pack(side=tk.LEFT, padx=(20, 5))
+        self.transcription_service_var = tk.StringVar(value=self.ai_config.get('transcription_service', 'ask'))
+        transcription_service_combo = ttk.Combobox(
+            controls_frame, 
+            textvariable=self.transcription_service_var,
+            values=['ask', 'speech', 'transcribe'],
+            state='readonly',
+            width=12
+        )
+        transcription_service_combo.pack(side=tk.LEFT, padx=5)
+        transcription_service_combo.bind('<<ComboboxSelected>>', self._on_transcription_service_changed)
+        
+        # Tooltip-style label
+        service_info = ttk.Label(controls_frame, text='(ask=prompt, speech=Azure Speech, transcribe=OpenAI)', 
+                                font=('TkDefaultFont', 7), foreground='gray')
+        service_info.pack(side=tk.LEFT, padx=5)
+        
         # Extracted lyrics display
         lyrics_frame = ttk.LabelFrame(main_frame, text='Extracted Lyrics (with timestamps)', padding=5)
         lyrics_frame.pack(fill=tk.BOTH, expand=True)
@@ -5944,6 +6185,13 @@ TECHNICAL REQUIREMENTS:
         info_label = ttk.Label(main_frame, text='Lyrics are automatically extracted from MP3 when generating storyboard. Click "Extract Lyrics from MP3" to extract manually.', 
                               font=('TkDefaultFont', 8), foreground='gray')
         info_label.pack(pady=(5, 0))
+    
+    def _on_transcription_service_changed(self, event=None):
+        """Save the transcription service preference when changed."""
+        service = self.transcription_service_var.get()
+        self.ai_config['transcription_service'] = service
+        save_config(self.ai_config)
+        self.log_debug('INFO', f'Transcription service preference set to: {service}')
     
     def create_storyboard_tab(self, parent):
         """Create the Storyboard tab for generating music video scene prompts."""
@@ -11619,7 +11867,11 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
         return self.extract_lyrics_with_ai(audio_path)
     
     def extract_lyrics_with_ai(self, audio_path: str) -> str:
-        """Extract lyrics from audio/video file using AI transcription (Azure Whisper API).
+        """Extract lyrics from audio/video file using AI transcription.
+        
+        Supports multiple transcription backends:
+        - Azure Speech Services (profile: 'speech') - Best for music/vocals with word-level timestamps
+        - Azure OpenAI Whisper/gpt-4o-transcribe (profile: 'transcribe') - General purpose
         
         Args:
             audio_path: Path to audio file (MP3, MP4, or other supported format)
@@ -11633,6 +11885,173 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
         
         self.log_debug('INFO', f'Starting AI transcription of: {audio_path}')
         
+        # Check available transcription services
+        speech_profile = self.ai_config.get('profiles', {}).get('speech', {})
+        transcribe_profile = self.ai_config.get('profiles', {}).get('transcribe', {})
+        
+        speech_available = bool(speech_profile.get('endpoint') and speech_profile.get('subscription_key'))
+        transcribe_available = bool(transcribe_profile.get('endpoint') and transcribe_profile.get('subscription_key'))
+        
+        # Get user preference from settings
+        preferred_service = self.ai_config.get('transcription_service', 'ask')
+        self.log_debug('DEBUG', f'Transcription service preference: {preferred_service}')
+        
+        # Determine which transcription service to use
+        use_speech_services = False
+        
+        if preferred_service == 'speech':
+            # User prefers Azure Speech Services
+            if speech_available:
+                use_speech_services = True
+            elif transcribe_available:
+                self.log_debug('WARNING', 'Azure Speech Services not configured, falling back to OpenAI transcribe')
+                use_speech_services = False
+            else:
+                messagebox.showerror('Error', 'No transcription service configured. Please configure either "speech" or "transcribe" profile in AI Settings.')
+                return ''
+        elif preferred_service == 'transcribe':
+            # User prefers OpenAI transcribe
+            if transcribe_available:
+                use_speech_services = False
+            elif speech_available:
+                self.log_debug('WARNING', 'OpenAI transcribe not configured, falling back to Azure Speech Services')
+                use_speech_services = True
+            else:
+                messagebox.showerror('Error', 'No transcription service configured. Please configure either "speech" or "transcribe" profile in AI Settings.')
+                return ''
+        else:
+            # 'ask' mode - prompt user if both are available
+            if speech_available and transcribe_available:
+                result = messagebox.askquestion(
+                    'Select Transcription Service',
+                    'Multiple transcription services are available:\n\n'
+                    '1. Azure Speech Services (recommended for music)\n'
+                    '   - Better accuracy for vocals with music\n'
+                    '   - Word-level timestamps\n\n'
+                    '2. Azure OpenAI (Whisper/gpt-4o-transcribe)\n'
+                    '   - General purpose transcription\n\n'
+                    'Use Azure Speech Services?\n\n'
+                    '(Tip: Set "Service" dropdown to avoid this prompt)',
+                    icon='question'
+                )
+                use_speech_services = (result == 'yes')
+            elif speech_available:
+                use_speech_services = True
+            elif transcribe_available:
+                use_speech_services = False
+            else:
+                messagebox.showerror('Error', 'No transcription service configured. Please configure either "speech" or "transcribe" profile in AI Settings.')
+                return ''
+        
+        if use_speech_services:
+            return self._extract_lyrics_with_speech_services(audio_path)
+        else:
+            return self._extract_lyrics_with_openai(audio_path)
+    
+    def _extract_lyrics_with_speech_services(self, audio_path: str) -> str:
+        """Extract lyrics using Azure Speech Services API."""
+        self.log_debug('INFO', 'Using Azure Speech Services for transcription...')
+        
+        speech_profile = self.ai_config.get('profiles', {}).get('speech', {})
+        self.log_debug('DEBUG', f'Speech profile endpoint: {speech_profile.get("endpoint", "NOT SET")}')
+        self.log_debug('DEBUG', f'Speech profile API version: {speech_profile.get("api_version", "NOT SET")}')
+        
+        self.config(cursor='wait')
+        self.update()
+        
+        try:
+            result = call_azure_speech_transcription(
+                self.ai_config,
+                audio_path,
+                profile='speech',
+                language='en-US'
+            )
+            
+            if result['success']:
+                words = result.get('words', [])
+                segments = result.get('segments', [])
+                text_only = result.get('text', '')
+                raw_json = result.get('raw_json', {})
+                
+                self.log_debug('INFO', f'Azure Speech transcription successful: {len(words)} words, {len(segments)} segments')
+                
+                # Create JSON formatted output with timestamps
+                lyrics_json = []
+                
+                if words:
+                    for word_info in words:
+                        word = word_info.get('word', '').strip()
+                        start = word_info.get('start', 0)
+                        end = word_info.get('end', 0)
+                        if word:
+                            minutes = int(start // 60)
+                            seconds = int(start % 60)
+                            timestamp_str = f"{minutes}:{seconds:02d}"
+                            lyrics_json.append({
+                                'timestamp': start,
+                                'timestamp_formatted': timestamp_str,
+                                'text': word,
+                                'end_timestamp': end,
+                                'end_timestamp_formatted': f"{int(end // 60)}:{int(end % 60):02d}"
+                            })
+                elif segments:
+                    for segment in segments:
+                        text_seg = segment.get('text', '').strip()
+                        start = segment.get('start', 0)
+                        end = segment.get('end', 0)
+                        if text_seg:
+                            minutes = int(start // 60)
+                            seconds = int(start % 60)
+                            timestamp_str = f"{minutes}:{seconds:02d}"
+                            lyrics_json.append({
+                                'timestamp': start,
+                                'timestamp_formatted': timestamp_str,
+                                'text': text_seg,
+                                'end_timestamp': end,
+                                'end_timestamp_formatted': f"{int(end // 60)}:{int(end % 60):02d}"
+                            })
+                
+                # Save formatted JSON with timestamps
+                if lyrics_json and self.current_song_path:
+                    json_filename = os.path.join(self.current_song_path, 'lyrics_transcription.json')
+                    try:
+                        with open(json_filename, 'w', encoding='utf-8') as f:
+                            json.dump(lyrics_json, f, indent=2, ensure_ascii=False)
+                        self.log_debug('INFO', f'Saved formatted lyrics JSON to: {json_filename}')
+                    except Exception as e:
+                        self.log_debug('WARNING', f'Failed to save lyrics JSON: {e}')
+                
+                # Save raw JSON data for reference
+                if raw_json and self.current_song_path:
+                    raw_json_filename = os.path.join(self.current_song_path, 'lyrics_transcription_raw.json')
+                    try:
+                        with open(raw_json_filename, 'w', encoding='utf-8') as f:
+                            json.dump(raw_json, f, indent=2, ensure_ascii=False)
+                        self.log_debug('INFO', f'Saved raw transcription JSON to: {raw_json_filename}')
+                    except Exception as e:
+                        self.log_debug('WARNING', f'Failed to save raw transcription JSON: {e}')
+                
+                # Format as text with timestamps for display
+                formatted_lines = []
+                for entry in lyrics_json:
+                    formatted_lines.append(f"{entry['timestamp_formatted']}={entry['text']}")
+                
+                return '\n'.join(formatted_lines) if formatted_lines else text_only
+            else:
+                error_msg = result.get('error', 'Unknown error')
+                self.log_debug('ERROR', f'Azure Speech transcription failed: {error_msg}')
+                messagebox.showerror('Transcription Error', f'Failed to transcribe audio:\n{error_msg}')
+                return ''
+        
+        except Exception as e:
+            self.log_debug('ERROR', f'Error during Azure Speech transcription: {e}')
+            messagebox.showerror('Transcription Error', f'Error transcribing audio:\n{e}')
+            return ''
+        finally:
+            self.config(cursor='')
+    
+    def _extract_lyrics_with_openai(self, audio_path: str) -> str:
+        """Extract lyrics using Azure OpenAI (Whisper/gpt-4o-transcribe)."""
         # Log configuration for debugging
         transcribe_profile = self.ai_config.get('profiles', {}).get('transcribe', {})
         self.log_debug('DEBUG', f'Transcribe profile endpoint: {transcribe_profile.get("endpoint", "NOT SET")}')
@@ -11641,11 +12060,6 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
         self.log_debug('DEBUG', f'Transcription request: file="{audio_path}", response_format="verbose_json" (preferred), profile="transcribe"')
         
         # Guidance prompt for transcription (helps retain lyrical structure and punctuation)
-        #transcription_prompt = (
-        #    "Transcribe the song lyrics with clear line breaks. Preserve repetitions, fillers, and non-verbal cues if present. "
-        #    "Include chorus/verse lines as heard. Do not summarize; produce the full text."
-        #)
-        
         transcription_prompt = (
             "Transcribe the attached audio file with word-level timestamps."
             "Preserve repetitions, fillers, and non-verbal cues if present"
