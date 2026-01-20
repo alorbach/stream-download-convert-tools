@@ -6,6 +6,18 @@ set ROOT_DIR=%SCRIPT_DIR%
 set VENV_DIR=%ROOT_DIR%\venv
 set PYTHON_EXE=%VENV_DIR%\Scripts\python.exe
 
+REM Add Deno to PATH for yt-dlp JavaScript runtime support
+set "DENO_PATH=%LOCALAPPDATA%\Microsoft\WinGet\Packages\DenoLand.Deno_Microsoft.Winget.Source_8wekyb3d8bbwe"
+if exist "%DENO_PATH%\deno.exe" call :AddDenoToPath
+
+goto :ContinueStartup
+
+:AddDenoToPath
+set "PATH=%DENO_PATH%;%PATH%"
+goto :eof
+
+:ContinueStartup
+
 echo ============================================
 echo Audio Tools - Main Launcher
 echo ============================================

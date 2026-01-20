@@ -919,8 +919,11 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
             
             output_path = os.path.join(self.get_download_path(), filename)
             
+            # Use format_id+bestaudio to ensure audio is included for video-only streams
+            download_format = f"{format_id}+bestaudio/best"
+            
             cmd = self.build_ytdlp_command([
-                '-f', format_id,
+                '-f', download_format,
                 '-o', output_path + '.%(ext)s',
                 url
             ])
@@ -1087,8 +1090,11 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
                     self.user_agent = self.generate_user_agent()
                     self.root.after(0, lambda: self.log(f"[DEBUG] Rotated user agent for stealth"))
                 
+                # Use format_id+bestaudio to ensure audio is included for video-only streams
+                download_format = f"{format_id}+bestaudio/best"
+                
                 cmd = self.build_ytdlp_command([
-                    '-f', format_id,
+                    '-f', download_format,
                     '-o', output_path + '.%(ext)s',
                     url
                 ])
@@ -1168,7 +1174,7 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
                             if hasattr(self, 'client_type_var'):
                                 self.client_type_var.set(fallback_client)
                             cmd_fallback = self.build_ytdlp_command([
-                                '-f', format_id,
+                                '-f', download_format,
                                 '-o', output_path + '.%(ext)s',
                                 url
                             ])
@@ -1566,14 +1572,27 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
                     height = stream_info.get('height', 0) if stream_info else 0
                     quality_category = self._categorize_quality(height)
                     
-                    if attempt_idx == 0:
-                        self.root.after(0, lambda res=resolution, fid=format_id, q=quality_category: self.log(f"[INFO] Trying {q} quality first: {res} (format {fid})"))
+                    # Check if stream is video-only (needs audio merge)
+                    is_video_only = False
+                    if stream_info:
+                        is_video_only = stream_info.get('acodec', 'none') == 'none' and stream_info.get('vcodec', 'none') != 'none'
+                    
+                    # Use format_id+bestaudio for video-only streams to merge audio
+                    if is_video_only:
+                        download_format = f"{format_id}+bestaudio/best"
+                        format_note = f"{format_id}+bestaudio"
                     else:
-                        self.root.after(0, lambda res=resolution, fid=format_id, att=attempt_idx+1, q=quality_category: self.log(f"[INFO] Previous failed, trying next quality ({att}/{len(format_ids)}): {q} - {res} (format {fid})"))
+                        download_format = format_id
+                        format_note = format_id
+                    
+                    if attempt_idx == 0:
+                        self.root.after(0, lambda res=resolution, fid=format_note, q=quality_category: self.log(f"[INFO] Trying {q} quality first: {res} (format {fid})"))
+                    else:
+                        self.root.after(0, lambda res=resolution, fid=format_note, att=attempt_idx+1, q=quality_category: self.log(f"[INFO] Previous failed, trying next quality ({att}/{len(format_ids)}): {q} - {res} (format {fid})"))
                     
                     # Try download with current format
                     cmd = self.build_ytdlp_command([
-                        '-f', format_id,
+                        '-f', download_format,
                         '-o', output_path + '.%(ext)s',
                         url
                     ])
@@ -1656,7 +1675,7 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
                                     self.client_type_var.set(fallback_client)
                                 
                                 cmd_fallback = self.build_ytdlp_command([
-                                    '-f', format_id,
+                                    '-f', download_format,
                                     '-o', output_path + '.%(ext)s',
                                     url
                                 ])
@@ -1939,8 +1958,11 @@ Note: Links in CSV can be in markdown format [URL](URL) or plain URLs.
             
             output_path = os.path.join(self.file_manager.get_folder_path('downloads'), filename)
             
+            # Use format_id+bestaudio to ensure audio is included for video-only streams
+            download_format = f"{format_id}+bestaudio/best"
+            
             cmd = self.build_ytdlp_command([
-                '-f', format_id,
+                '-f', download_format,
                 '-o', output_path + '.%(ext)s',
                 url
             ])
