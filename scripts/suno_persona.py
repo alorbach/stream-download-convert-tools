@@ -2656,7 +2656,7 @@ class SunoPersona(tk.Tk):
                 pass
         
         self.title('Suno Persona Manager')
-        self.geometry('1400x1100')
+        self.geometry('1450x1100')
         # Set maximum height (width can be flexible, height limited)
         self.maxsize(width=9999, height=1400)
         
@@ -6249,6 +6249,7 @@ TECHNICAL REQUIREMENTS:
         ttk.Button(button_frame, text='Generate Storyboard', command=self.generate_storyboard).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text='Generate All Prompts', command=self.generate_all_prompts).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text='Export Generated Prompts', command=self.export_generated_prompts).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text='Reset Storyboard', command=self.reset_storyboard).pack(side=tk.LEFT, padx=5)
         self.include_lyrics_in_export_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(button_frame, text='Include Lyrics in Export', variable=self.include_lyrics_in_export_var).pack(side=tk.LEFT, padx=5)
 
@@ -6324,6 +6325,9 @@ TECHNICAL REQUIREMENTS:
         self.storyboard_context_menu.add_command(label='Copy Prompt', command=self.copy_selected_scene_prompt)
         self.storyboard_context_menu.add_command(label='Copy Lyrics', command=self.copy_selected_scene_lyrics)
         self.storyboard_context_menu.add_command(label='Copy Scene Info', command=self.copy_selected_scene_info)
+        self.storyboard_context_menu.add_separator()
+        self.storyboard_context_menu.add_command(label='Export Prompt to JSON', command=self.export_selected_scene_prompt)
+        self.storyboard_context_menu.add_separator()
         self.storyboard_context_menu.add_command(label='Regenerate Selected Scenes', command=self.regenerate_selected_scenes)
         
         def show_storyboard_context_menu(event):
@@ -6435,6 +6439,79 @@ TECHNICAL REQUIREMENTS:
             self.clipboard_clear()
             self.clipboard_append(text_to_copy)
             self.update()
+
+    def export_selected_scene_prompt(self):
+        """Export the full prompt from the selected scene to a JSON file."""
+        if not hasattr(self, 'storyboard_tree'):
+            return
+        
+        if not self.current_song_path:
+            messagebox.showwarning('Warning', 'No song selected. Please select a song first.')
+            return
+        
+        selection = self.storyboard_tree.selection()
+        if not selection:
+            messagebox.showwarning('Warning', 'Please select a scene to export its prompt.')
+            return
+        
+        # Get the first selected scene
+        item = selection[0]
+        values = self.storyboard_tree.item(item, 'values')
+        
+        if len(values) < 5:
+            messagebox.showwarning('Warning', 'Invalid scene data.')
+            return
+        
+        scene_num = values[0]
+        lyrics = values[3]
+        base_prompt = values[4]
+        
+        if not base_prompt:
+            messagebox.showwarning('Warning', 'No prompt found for the selected scene.')
+            return
+        
+        try:
+            # Get the FULL prompt for saving (not stripped)
+            full_prompt = self.get_full_scene_prompt_for_saving(str(scene_num), base_prompt, lyrics)
+            
+            if not full_prompt:
+                messagebox.showwarning('Warning', 'Could not generate full prompt for the selected scene.')
+                return
+            
+            # Create safe filename
+            safe_scene = str(scene_num).replace(':', '_').replace('/', '_').replace('\\', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace("'", '_').replace('<', '_').replace('>', '_').replace('|', '_')
+            json_filename = os.path.join(self.current_song_path, f'storyboard_scene_{safe_scene}.json')
+            
+            # Get seconds per video for calculating scene duration
+            seconds_per_video = int(self.storyboard_seconds_var.get() or '6') if hasattr(self, 'storyboard_seconds_var') else 6
+            is_multiscene = self.storyboard_multiscene_var.get() if hasattr(self, 'storyboard_multiscene_var') else False
+            
+            # Build the export data
+            export_data = {
+                'scene_num': scene_num,
+                'generated_prompt': full_prompt,
+                'prompt_type': 'video',  # Full prompt is always 'video' type
+                'is_multiscene': is_multiscene,
+                'seconds_per_video': seconds_per_video
+            }
+            
+            if lyrics:
+                export_data['lyrics'] = lyrics
+            
+            # Add usage note
+            if is_multiscene:
+                export_data['usage_note'] = 'VIDEO PROMPT: Full prompt with all sub-scene information for video generation'
+            
+            # Write JSON file
+            with open(json_filename, 'w', encoding='utf-8') as f:
+                json.dump(export_data, f, indent=2, ensure_ascii=False)
+            
+            self.log_debug('INFO', f'Exported prompt for scene {scene_num} to {json_filename}')
+            messagebox.showinfo('Success', f'Prompt exported to:\n{json_filename}')
+            
+        except Exception as e:
+            self.log_debug('ERROR', f'Error exporting prompt for scene {scene_num}: {e}')
+            messagebox.showerror('Error', f'Failed to export prompt: {e}')
 
     def _parse_scenes_from_text(self, content: str, default_duration: int, lyric_segments: list, song_duration: float) -> list[dict]:
         """Parse AI storyboard text into scene dicts without touching the UI."""
@@ -11682,6 +11759,48 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
                         timestamp = '0:00'
                 self.storyboard_tree.insert('', tk.END, values=(scene_num, timestamp, duration, lyrics, prompt))
     
+    def reset_storyboard(self):
+        """Reset the storyboard to empty state, clearing all scenes."""
+        if not self.current_song_path or not self.current_song:
+            messagebox.showwarning('Warning', 'No song selected. Please select a song first.')
+            return
+        
+        # Confirm with user
+        response = messagebox.askyesno(
+            'Reset Storyboard',
+            'Are you sure you want to reset the storyboard?\n\n'
+            'This will delete all storyboard scenes and their generated prompts.\n'
+            'This action cannot be undone.'
+        )
+        
+        if not response:
+            return
+        
+        # Clear the storyboard in the current song config
+        self.current_song['storyboard'] = []
+        
+        # Clear the treeview
+        if hasattr(self, 'storyboard_tree'):
+            for item in self.storyboard_tree.get_children():
+                self.storyboard_tree.delete(item)
+        
+        # Clear the preview text
+        if hasattr(self, 'storyboard_preview_text'):
+            self.storyboard_preview_text.config(state='normal')
+            self.storyboard_preview_text.delete('1.0', tk.END)
+            self.storyboard_preview_text.config(state='disabled')
+        
+        # Clear the cached prompts
+        self.scene_final_prompts = {}
+        
+        # Save the updated config
+        if save_song_config(self.current_song_path, self.current_song):
+            self.log_debug('INFO', 'Storyboard reset successfully')
+            messagebox.showinfo('Success', 'Storyboard has been reset.')
+        else:
+            self.log_debug('ERROR', 'Failed to save config after storyboard reset')
+            messagebox.showerror('Error', 'Failed to save configuration.')
+    
     def get_storyboard_data(self):
         """Get storyboard data from treeview, preserving all existing properties from config.json."""
         if not hasattr(self, 'storyboard_tree'):
@@ -12889,6 +13008,11 @@ Use DIRECT CAMERA CUTS between sub-scenes (NO smooth transitions, NO fades, NO m
 Each sub-scene must be visually distinct but thematically connected.
 The persona/character must appear consistently across sub-scenes when present.
 
+IMPORTANT FOR IMAGE GENERATION:
+- When generating an IMAGE (not video) from these prompts, use ONLY the FIRST sub-scene [0s-{scene_duration}s]
+- Generate exactly ONE single image - NOT a collage, triptych, or multi-panel layout
+- The sub-scene timestamps are for VIDEO sequencing; for IMAGE, focus on one unified composition
+
 SCENE 1: {seconds_per_video} seconds total"""
                 for sub in range(subscenes_per_video):
                     sub_start = sub * scene_duration
@@ -13128,6 +13252,15 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
                                         visual_aesthetic, base_image_prompt, vibe, lyric_segments,
                                         song_duration, seconds_per_video, batch_start, batch_end, total_scenes):
         """Create a prompt for generating a specific batch of scenes."""
+        # Check multi-scene settings
+        is_multiscene = self.storyboard_multiscene_var.get() if hasattr(self, 'storyboard_multiscene_var') else False
+        try:
+            scene_duration = int(self.storyboard_scene_duration_var.get() or 2) if hasattr(self, 'storyboard_scene_duration_var') else 2
+        except Exception:
+            scene_duration = 2
+        scene_duration = max(1, min(6, scene_duration))
+        subscenes_per_video = seconds_per_video // scene_duration if is_multiscene and scene_duration > 0 else 1
+        
         prompt = f"Generate ONLY scenes {batch_start} through {batch_end} (out of {total_scenes} total scenes) for this music video storyboard.\n\n"
         prompt += f"Song: {full_song_name if full_song_name else song_name}\n"
         prompt += f"Artist/Persona: {persona_name}\n"
@@ -13249,6 +13382,23 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
             if batch_start < batch_end:
                 prompt += f"SCENE {batch_start + 1}: [duration] seconds\nCOLOR PALETTE: [distinct palette for this scene]\n[detailed image prompt]\n\n"
         prompt += f"(Continue through SCENE {batch_end})\n"
+        
+        # Add multi-scene format instructions if enabled
+        if is_multiscene and subscenes_per_video > 1:
+            prompt += f"""
+=== MULTI-SCENE MODE ({scene_duration}s sub-scenes) ===
+Each video segment ({seconds_per_video}s) contains {subscenes_per_video} sub-scenes of {scene_duration} seconds each.
+Use DIRECT CAMERA CUTS between sub-scenes (NO smooth transitions, NO fades, NO morphing).
+Each sub-scene must be visually distinct but thematically connected.
+The persona/character must appear consistently across sub-scenes when present.
+
+CRITICAL: Format each scene with sub-scene timestamps like this:
+[0s-{scene_duration}s] Sub-scene 1: [describe this {scene_duration}s segment with distinct camera angle/composition]
+[{scene_duration}s-{scene_duration*2}s] Sub-scene 2: [different shot type and angle]
+"""
+            if subscenes_per_video > 2:
+                prompt += f"[{scene_duration*2}s-{scene_duration*3}s] Sub-scene 3: [another distinct composition]\n"
+            prompt += "\nEach sub-scene MUST have a different camera angle, composition, or framing.\n"
         
         return prompt
     
@@ -13851,7 +14001,7 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
             self.log_debug('WARNING', f'Failed to overlay lyrics on image: {e}')
             return False
 
-    def get_scene_final_prompt(self, scene_num: str, base_prompt: str = None, lyrics: str = None) -> str:
+    def get_scene_final_prompt(self, scene_num: str, base_prompt: str = None, lyrics: str = None, prompt_type: str = 'image') -> str:
         """Get the final prompt for a scene, checking saved generated_prompt first.
         
         This checks in order:
@@ -13863,11 +14013,18 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
             scene_num: Scene number
             base_prompt: Base prompt text (optional, will be retrieved from scene if not provided)
             lyrics: Lyrics text (optional, will be retrieved from scene if not provided)
+            prompt_type: Type of prompt - 'image' or 'video'. When multi-scene is enabled:
+                - 'image': For the first scene, only include reference image description (no scene info)
+                - 'video': Include both reference image description AND scene information
         
         Returns:
-            Final prompt string ready for image generation
+            Final prompt string ready for image/video generation
         """
+        # Check if multi-scene mode is enabled
+        is_multiscene = self.storyboard_multiscene_var.get() if hasattr(self, 'storyboard_multiscene_var') else False
+        
         # First, check if there's a saved generated_prompt in config.json
+        # Note: For multi-scene mode, we may need to regenerate based on prompt_type
         if self.current_song:
             storyboard = self.current_song.get('storyboard', [])
             scene_num_int = int(scene_num) if str(scene_num).isdigit() else None
@@ -13877,10 +14034,21 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
                 scene_value = scene.get('scene')
                 # Handle both int and string scene numbers
                 if (scene_num_int is not None and scene_value == scene_num_int) or str(scene_value) == str(scene_num):
+                    # For multi-scene mode with different prompt types, check if stored prompt matches the type
                     stored_prompt = scene.get('generated_prompt', '')
+                    stored_prompt_type = scene.get('generated_prompt_type', 'image')
+                    
                     if stored_prompt:
-                        self.log_debug('INFO', f'Using saved generated_prompt for scene {scene_num}')
-                        return stored_prompt
+                        # In multi-scene mode, we can use stored 'video' prompts for 'image' requests
+                        # by stripping the multi-scene formatting
+                        if is_multiscene and prompt_type == 'image':
+                            # Strip multi-scene formatting for single image generation
+                            self.log_debug('INFO', f'Using saved generated_prompt for scene {scene_num}, stripping for image generation')
+                            return self._strip_multiscene_formatting_for_image(stored_prompt)
+                        elif not is_multiscene or stored_prompt_type == prompt_type:
+                            self.log_debug('INFO', f'Using saved generated_prompt for scene {scene_num} (type: {stored_prompt_type})')
+                            return stored_prompt
+                    
                     # If no stored prompt but we found the scene, use its base prompt and lyrics
                     if base_prompt is None:
                         base_prompt = scene.get('prompt', '')
@@ -13888,27 +14056,234 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
                         lyrics = scene.get('lyrics', '')
                     break
         
-        # Second, check in-memory cache
-        cache_key = f"{scene_num}|{self._get_song_persona_preset_key()}"
+        # Second, check in-memory cache (with prompt_type suffix for multi-scene mode)
+        cache_suffix = f"|{prompt_type}" if is_multiscene else ""
+        cache_key = f"{scene_num}|{self._get_song_persona_preset_key()}{cache_suffix}"
         if cache_key in self.scene_final_prompts:
-            return self.scene_final_prompts[cache_key]
+            cached_prompt = self.scene_final_prompts[cache_key]
+            # For IMAGE generation in multi-scene mode, strip formatting before returning
+            if is_multiscene and prompt_type == 'image':
+                return self._strip_multiscene_formatting_for_image(cached_prompt)
+            return cached_prompt
         
         # Third, build a new prompt if base_prompt is available
         if base_prompt:
-            return self.build_scene_image_prompt(scene_num, base_prompt, lyrics)
+            return self.build_scene_image_prompt(scene_num, base_prompt, lyrics, prompt_type)
         
         # Fallback: return empty string if nothing is available
         return ''
     
-    def build_scene_image_prompt(self, scene_num: str, base_prompt: str, lyrics: str = None) -> str:
-        """Build the final prompt that gets sent to the image model.
+    def _build_multiscene_reference_image_prompt(self, cache_key: str) -> str:
+        """Build a clean single-image prompt for multi-scene mode scene 1.
+        
+        This generates ONLY a single reference image of the character.
+        NO scene information, NO sub-scenes, NO storyboard elements.
+        The image will be used as reference for subsequent video generation.
+        
+        Args:
+            cache_key: Cache key for storing the result
+        
+        Returns:
+            Clean prompt for generating a single reference character image
+        """
+        prompt_parts = [
+            "CRITICAL: Generate exactly ONE SINGLE IMAGE. Do NOT create:",
+            "- Multiple panels or frames",
+            "- Triptych or split-screen layouts", 
+            "- Collages or montages",
+            "- Comic strips or storyboards",
+            "- Before/after comparisons",
+            "- Any kind of multi-image composition",
+            "",
+            "Create ONE clean, focused image of the character.",
+            ""
+        ]
+        
+        # Get persona visual characteristics
+        if self.current_persona:
+            visual_aesthetic = self.current_persona.get('visual_aesthetic', '').strip()
+            base_image_prompt = self.current_persona.get('base_image_prompt', '').strip()
+            persona_name = self.current_persona.get('name', '').strip()
+            vibe = self.current_persona.get('vibe', '').strip()
+            
+            if persona_name:
+                prompt_parts.append(f"CHARACTER: {persona_name}")
+            if base_image_prompt:
+                prompt_parts.append(f"APPEARANCE: {base_image_prompt}")
+            if visual_aesthetic:
+                prompt_parts.append(f"STYLE: {visual_aesthetic}")
+            if vibe:
+                prompt_parts.append(f"MOOD: {vibe}")
+        
+        # Try to get character description from reference image
+        if self.current_persona_path:
+            preset_key = self._get_song_persona_preset_key()
+            base_path = self.get_persona_image_base_path(preset_key)
+            safe_name = self._safe_persona_basename()
+            front_image_path = os.path.join(base_path, f'{safe_name}-Front.png')
+            
+            if os.path.exists(front_image_path):
+                try:
+                    from PIL import Image
+                    original_img = Image.open(front_image_path)
+                    new_width = original_img.width // 2
+                    new_height = original_img.height // 2
+                    downscaled_img = original_img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                    
+                    temp_dir = os.path.join(self.current_song_path if self.current_song_path else os.path.dirname(front_image_path), 'temp')
+                    os.makedirs(temp_dir, exist_ok=True)
+                    reference_image_path = os.path.join(temp_dir, f'{safe_name}-Front-downscaled.png')
+                    downscaled_img.save(reference_image_path, 'PNG')
+                    
+                    vision_prompt = (
+                        "Describe this character's appearance in detail for image generation. "
+                        "Include: physical features, clothing, styling, colors, accessories. "
+                        "Be specific and detailed."
+                    )
+                    vision_result = self.azure_vision([reference_image_path], vision_prompt, profile='text')
+                    
+                    if vision_result.get('success'):
+                        character_description = vision_result['content'].strip()
+                        prompt_parts.append("")
+                        prompt_parts.append(f"DETAILED CHARACTER DESCRIPTION:\n{character_description}")
+                except Exception as e:
+                    self.log_debug('WARNING', f'Failed to analyze reference image: {e}')
+        
+        prompt_parts.extend([
+            "",
+            "REQUIREMENTS:",
+            "- Single unified image composition",
+            "- Character should be the clear focal point",
+            "- Clean background or simple environment",
+            "- No text, titles, or labels in the image",
+            "- No panel borders or dividing lines",
+            "- Professional quality, suitable as video reference"
+        ])
+        
+        prompt = "\n".join(prompt_parts)
+        self.scene_final_prompts[cache_key] = prompt
+        self.log_debug('INFO', 'Built multi-scene reference image prompt (single image only)')
+        return prompt
+    
+    def _strip_multiscene_formatting_for_image(self, prompt: str) -> str:
+        """Strip multi-scene formatting from a prompt for single image generation.
+        
+        When multi-scene mode generates prompts with sub-scenes like:
+        [0s-2s] Sub-scene 1: description
+        [2s-4s] Sub-scene 2: description
+        
+        This extracts only the FIRST sub-scene content and adds instructions
+        to generate a single image (not a collage/triptych).
+        
+        Args:
+            prompt: The original prompt with potential multi-scene formatting
+        
+        Returns:
+            Cleaned prompt suitable for single image generation
+        """
+        import re
+        
+        # Check if prompt contains multi-scene formatting patterns
+        # Match both regular hyphen (-) and en-dash (–) since AI may generate either
+        subscene_pattern = r'\[(\d+)s[-–](\d+)s\]\s*(?:Sub-scene\s*\d+:?)?\s*'
+        
+        if not re.search(subscene_pattern, prompt):
+            # No multi-scene formatting detected, return as-is but add single image instruction
+            single_image_prefix = (
+                "IMPORTANT: Generate exactly ONE single image. "
+                "Do NOT create multiple panels, triptych, collage, or split-screen layouts.\n\n"
+            )
+            return single_image_prefix + prompt
+        
+        # Extract the first sub-scene content
+        # Split by sub-scene markers and get the first meaningful content
+        parts = re.split(subscene_pattern, prompt)
+        
+        # parts will be: [prefix, start1, end1, content1, start2, end2, content2, ...]
+        # We want the prefix + first content
+        first_subscene_content = ""
+        prefix_content = parts[0].strip() if parts else ""
+        
+        # Find the first sub-scene content (after the timing markers)
+        # Pattern groups: (start_time, end_time) then content follows
+        matches = list(re.finditer(subscene_pattern, prompt))
+        if matches:
+            first_match = matches[0]
+            # Get content after first match until next match or end
+            start_idx = first_match.end()
+            if len(matches) > 1:
+                end_idx = matches[1].start()
+            else:
+                end_idx = len(prompt)
+            first_subscene_content = prompt[start_idx:end_idx].strip()
+        
+        # Also remove any remaining sub-scene markers from prefix
+        prefix_content = re.sub(subscene_pattern, '', prefix_content).strip()
+        
+        # Remove duration indicators like "6 seconds total"
+        prefix_content = re.sub(r'\d+\s*seconds?\s*total', '', prefix_content, flags=re.IGNORECASE).strip()
+        
+        # Build the cleaned prompt
+        cleaned_parts = [
+            "CRITICAL: Generate exactly ONE SINGLE IMAGE.",
+            "Do NOT create:",
+            "- Multiple panels or frames",
+            "- Triptych or split-screen layouts",
+            "- Collages or montages",
+            "- Comic strips or storyboards",
+            "- Scene sequences or before/after comparisons",
+            "",
+            "Create ONE focused, unified image composition.",
+            ""
+        ]
+        
+        if prefix_content:
+            cleaned_parts.append(prefix_content)
+        
+        if first_subscene_content:
+            cleaned_parts.append("")
+            cleaned_parts.append("SCENE CONTENT:")
+            cleaned_parts.append(first_subscene_content)
+        
+        cleaned_prompt = "\n".join(cleaned_parts)
+        self.log_debug('INFO', f'Stripped multi-scene formatting for image generation')
+        return cleaned_prompt
+    
+    def build_scene_image_prompt(self, scene_num: str, base_prompt: str, lyrics: str = None, prompt_type: str = 'image') -> str:
+        """Build the final prompt that gets sent to the image or video model.
         
         This applies persona detection and reference image analysis to ensure the
         copied prompt matches exactly what is sent to the model.
+        
+        Args:
+            scene_num: Scene number
+            base_prompt: Base prompt text
+            lyrics: Lyrics text (optional)
+            prompt_type: Type of prompt - 'image' or 'video'. When multi-scene is enabled:
+                - 'image': For the first scene, only include reference image description (no scene info)
+                - 'video': Include both reference image description AND scene information
+        
+        Returns:
+            Final prompt string ready for image/video generation
         """
-        cache_key = f"{scene_num}|{self._get_song_persona_preset_key()}"
+        # Check if multi-scene mode is enabled
+        is_multiscene = self.storyboard_multiscene_var.get() if hasattr(self, 'storyboard_multiscene_var') else False
+        
+        # For multi-scene mode with image prompts on scene 1, use a different cache key
+        cache_suffix = f"|{prompt_type}" if is_multiscene else ""
+        cache_key = f"{scene_num}|{self._get_song_persona_preset_key()}{cache_suffix}"
         if cache_key in self.scene_final_prompts:
-            return self.scene_final_prompts[cache_key]
+            cached_prompt = self.scene_final_prompts[cache_key]
+            # For IMAGE generation in multi-scene mode, strip formatting before returning
+            if is_multiscene and prompt_type == 'image':
+                return self._strip_multiscene_formatting_for_image(cached_prompt)
+            return cached_prompt
+
+        # EARLY EXIT for multi-scene IMAGE prompt on scene 1
+        # This generates ONLY a single reference image - completely ignore base_prompt/scene info
+        scene_num_int = int(scene_num) if str(scene_num).isdigit() else 0
+        if is_multiscene and scene_num_int == 1 and prompt_type == 'image':
+            return self._build_multiscene_reference_image_prompt(cache_key)
 
         prompt = self.sanitize_lyrics_for_prompt(base_prompt)
         prompt = self.apply_storyboard_theme_prefix(prompt)
@@ -14022,6 +14397,7 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
                         vision_result = self.azure_vision([reference_image_path], vision_prompt, system_message=vision_system, profile='text')
                         if vision_result['success']:
                             character_description = vision_result['content'].strip()
+                            # Include both reference character description and scene information
                             prompt = (
                                 f"REFERENCE CHARACTER DESCRIPTION (from Front Persona Image - MUST MATCH EXACTLY):\n{character_description}\n\n"
                                 f"{prompt}\n\n"
@@ -14077,15 +14453,49 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
         elif not lyrics_text:
             prompt += "\n\nNo lyrics for this scene; keep visuals text-free."
 
+        # Cache the FULL prompt (with all multi-scene info intact) for saving/export
         self.scene_final_prompts[cache_key] = prompt
+        
+        # For IMAGE generation in multi-scene mode, strip multi-scene formatting
+        # AFTER caching so saved prompts retain full info, but generated images are single
+        if is_multiscene and prompt_type == 'image':
+            prompt = self._strip_multiscene_formatting_for_image(prompt)
+        
         return prompt
     
-    def _save_storyboard_generated_prompt(self, scene_num: str, generated_prompt: str):
+    def get_full_scene_prompt_for_saving(self, scene_num: str, base_prompt: str = None, lyrics: str = None) -> str:
+        """Get the FULL scene prompt for saving/exporting, without any stripping.
+        
+        This is used when saving prompts to config.json or exporting - we want the
+        complete multi-scene information preserved, not the stripped version used
+        for single image generation.
+        
+        Args:
+            scene_num: Scene number
+            base_prompt: Base prompt text (optional)
+            lyrics: Lyrics text (optional)
+        
+        Returns:
+            Full prompt string with all multi-scene information intact
+        """
+        is_multiscene = self.storyboard_multiscene_var.get() if hasattr(self, 'storyboard_multiscene_var') else False
+        cache_suffix = f"|video" if is_multiscene else ""  # Use 'video' type to get full prompt
+        cache_key = f"{scene_num}|{self._get_song_persona_preset_key()}{cache_suffix}"
+        
+        # Check if we have a cached full prompt
+        if cache_key in self.scene_final_prompts:
+            return self.scene_final_prompts[cache_key]
+        
+        # Build the full prompt using 'video' type (which doesn't strip)
+        return self.build_scene_image_prompt(scene_num, base_prompt, lyrics, 'video')
+    
+    def _save_storyboard_generated_prompt(self, scene_num: str, generated_prompt: str, prompt_type: str = 'image'):
         """Save the generated prompt to the storyboard scene in config.json.
         
         Args:
             scene_num: Scene number
             generated_prompt: The final prompt that was used for image generation
+            prompt_type: Type of prompt - 'image' or 'video' (for multi-scene mode tracking)
         """
         if not self.current_song_path or not self.current_song:
             return
@@ -14099,9 +14509,10 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
                 scene_value = scene.get('scene')
                 # Handle both int and string scene numbers
                 if (scene_num_int is not None and scene_value == scene_num_int) or str(scene_value) == str(scene_num):
-                    # Update or add the generated_prompt field
+                    # Update or add the generated_prompt field and its type
                     scene['generated_prompt'] = generated_prompt
-                    self.log_debug('INFO', f'Saved generated prompt for scene {scene_num} to config.json')
+                    scene['generated_prompt_type'] = prompt_type
+                    self.log_debug('INFO', f'Saved generated prompt for scene {scene_num} (type: {prompt_type}) to config.json')
                     
                     # Save the updated config
                     if save_song_config(self.current_song_path, self.current_song):
@@ -14114,6 +14525,42 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
             self.log_debug('WARNING', f'Scene {scene_num} not found in storyboard, could not save generated prompt')
         except Exception as e:
             self.log_debug('ERROR', f'Error saving generated prompt for scene {scene_num}: {e}')
+
+    def get_multiscene_prompts_for_scene(self, scene_num: str, base_prompt: str = None, lyrics: str = None) -> dict:
+        """Get both image and video prompts for a scene when multi-scene mode is enabled.
+        
+        This is useful for the first scene where:
+        - IMAGE prompt: Only reference image description (for generating the reference image)
+        - VIDEO prompt: Reference image + scene information (for video generation with context)
+        
+        Args:
+            scene_num: Scene number
+            base_prompt: Base prompt text (optional, will be retrieved from scene if not provided)
+            lyrics: Lyrics text (optional, will be retrieved from scene if not provided)
+        
+        Returns:
+            Dictionary with 'image_prompt' and 'video_prompt' keys
+        """
+        is_multiscene = self.storyboard_multiscene_var.get() if hasattr(self, 'storyboard_multiscene_var') else False
+        
+        if not is_multiscene:
+            # If not in multi-scene mode, both prompts are the same
+            prompt = self.get_scene_final_prompt(scene_num, base_prompt, lyrics, 'image')
+            return {
+                'image_prompt': prompt,
+                'video_prompt': prompt,
+                'is_multiscene': False
+            }
+        
+        # In multi-scene mode, generate both types
+        image_prompt = self.get_scene_final_prompt(scene_num, base_prompt, lyrics, 'image')
+        video_prompt = self.get_scene_final_prompt(scene_num, base_prompt, lyrics, 'video')
+        
+        return {
+            'image_prompt': image_prompt,
+            'video_prompt': video_prompt,
+            'is_multiscene': True
+        }
 
     def export_generated_prompts(self):
         """Export generated prompts to JSON files for each scene that has a generated_prompt."""
@@ -14212,11 +14659,40 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
                     elif not prompt_starts_with_ref:
                         self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - Skipping lyrics processing (prompt does not start with REFERENCE CHARACTER)')
                 
-                # Create JSON structure
+                # Create JSON structure with prompt type information
+                prompt_type = scene.get('generated_prompt_type', 'image')
+                is_multiscene = self.storyboard_multiscene_var.get() if hasattr(self, 'storyboard_multiscene_var') else False
+                
                 export_data = {
-                    'generated_prompt': final_prompt
+                    'generated_prompt': final_prompt,
+                    'prompt_type': prompt_type,
+                    'is_multiscene': is_multiscene
                 }
-                self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - Final prompt length: {len(final_prompt)} chars')
+                
+                # For multi-scene mode, add additional context about how to use the prompt
+                if is_multiscene:
+                    scene_num_int = int(scene_num) if str(scene_num).isdigit() else 0
+                    if scene_num_int == 1 and prompt_type == 'image':
+                        export_data['usage_note'] = 'IMAGE PROMPT: Use this prompt for generating the reference image only (no scene information included)'
+                        
+                        # For scene 1 in multi-scene mode, also export a separate video prompt
+                        # that includes both reference image AND scene information
+                        video_prompt = self.build_scene_image_prompt(str(scene_num), scene.get('prompt', ''), lyrics, 'video')
+                        if video_prompt:
+                            video_json_filename = os.path.join(self.current_song_path, f'storyboard_scene_{safe_scene}_video.json')
+                            video_export_data = {
+                                'generated_prompt': video_prompt,
+                                'prompt_type': 'video',
+                                'is_multiscene': True,
+                                'usage_note': 'VIDEO PROMPT: Use this prompt for video generation (includes reference image + scene information)'
+                            }
+                            with open(video_json_filename, 'w', encoding='utf-8') as vf:
+                                json.dump(video_export_data, vf, indent=2, ensure_ascii=False)
+                            self.log_debug('INFO', f'Also exported video prompt for scene {scene_num} to {video_json_filename}')
+                    else:
+                        export_data['usage_note'] = 'VIDEO PROMPT: Use this prompt for video generation (includes reference image + scene information)'
+                
+                self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - Final prompt length: {len(final_prompt)} chars, type: {prompt_type}')
                 
                 # Write JSON file
                 with open(json_filename, 'w', encoding='utf-8') as f:
@@ -14411,11 +14887,11 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
                 progress_dialog.update_progress(idx, f'Generating prompt for scene {scene_num} ({idx}/{len(storyboard)})...')
                 
                 # Build the final prompt (this includes persona detection, reference images, etc.)
-                # Don't include embed_lyrics note here - it will be applied when using the prompt
-                final_prompt = self.build_scene_image_prompt(str(scene_num), base_prompt, lyrics)
+                # Use 'video' type to get the FULL prompt for saving (not stripped for single image)
+                final_prompt = self.build_scene_image_prompt(str(scene_num), base_prompt, lyrics, 'video')
                 
-                # Save the generated prompt to config.json (without embed_lyrics note)
-                self._save_storyboard_generated_prompt(str(scene_num), final_prompt)
+                # Save the FULL generated prompt to config.json
+                self._save_storyboard_generated_prompt(str(scene_num), final_prompt, 'video')
                 
                 generated_count += 1
                 self.log_debug('INFO', f'Generated and saved prompt for scene {scene_num}')
@@ -14502,8 +14978,9 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
                             overlay_enabled = bool(self.overlay_lyrics_var.get()) if hasattr(self, 'overlay_lyrics_var') else False
                             if lyrics and overlay_enabled:
                                 self.overlay_lyrics_on_image(image_filename, lyrics, scene_num)
-                            # Save the generated prompt to config.json
-                            self._save_storyboard_generated_prompt(scene_num, final_prompt)
+                            # Save the FULL generated prompt to config.json (not the stripped version)
+                            full_prompt_for_save = self.get_full_scene_prompt_for_saving(scene_num, prompt, lyrics)
+                            self._save_storyboard_generated_prompt(scene_num, full_prompt_for_save, 'video')
                             if show_success_message:
                                 messagebox.showinfo('Success', f'Scene {scene_num} image generated and saved!')
                             return True
@@ -14532,8 +15009,9 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
                         if lyrics and overlay_enabled:
                             self.overlay_lyrics_on_image(image_filename, lyrics, scene_num)
 
-                        # Save the generated prompt to config.json
-                        self._save_storyboard_generated_prompt(scene_num, final_prompt)
+                        # Save the FULL generated prompt to config.json (not the stripped version)
+                        full_prompt_for_save = self.get_full_scene_prompt_for_saving(scene_num, prompt, lyrics)
+                        self._save_storyboard_generated_prompt(scene_num, full_prompt_for_save, 'video')
                         if show_success_message:
                             messagebox.showinfo('Success', f'Scene {scene_num} image generated successfully!')
                         return True
