@@ -85,6 +85,9 @@ class CoverSongCheckerGUI(BaseAudioGUI):
         # Initialize UMPG artist list
         self.umpg_artists = self._load_umpg_artists()
         
+        # Universal Music Group labels and affiliates for generic UMG check
+        self.umg_labels = self._load_umg_labels()
+        
         # Get ffmpeg path for yt-dlp - check first to ensure path is set
         ffmpeg_found = self.check_ffmpeg()
         self.ffmpeg_path = self.get_ffmpeg_command()
@@ -171,6 +174,17 @@ class CoverSongCheckerGUI(BaseAudioGUI):
         ttk.Button(btn_frame, text="Select from AI-COVERS", command=self.select_from_ai_covers).pack(side='left', padx=5)
         ttk.Button(btn_frame, text="Scan All AI-COVERS", command=self.scan_ai_covers).pack(side='left', padx=5)
         ttk.Button(btn_frame, text="Clear Results", command=self.clear_results).pack(side='left', padx=5)
+        
+        # Second row of buttons for UMG mode
+        btn_frame2 = ttk.Frame(frame)
+        btn_frame2.pack(pady=5)
+        
+        umg_btn = ttk.Button(btn_frame2, text="UMG Check Mode", command=self.open_umg_check_mode)
+        umg_btn.pack(side='left', padx=5)
+        
+        # Add tooltip-like label
+        ttk.Label(btn_frame2, text="(Find all Universal Music protected artists/songs)", 
+                 font=('TkDefaultFont', 8, 'italic'), foreground='gray').pack(side='left', padx=5)
         
         # Progress
         self.progress_var = tk.StringVar(value="Ready")
@@ -306,6 +320,117 @@ class CoverSongCheckerGUI(BaseAudioGUI):
                 normalized_lookup[normalized_clean] = artist
         
         return normalized_lookup
+    
+    def _load_umg_labels(self):
+        """Load list of Universal Music Group labels and affiliates
+        
+        This is used for generic UMG detection mode to find all content
+        potentially protected by Universal Music Group and its subsidiaries.
+        """
+        umg_labels = {
+            # Major UMG Labels
+            'Universal Music Group', 'UMG', 'Universal Music',
+            'Interscope Records', 'Interscope', 'Interscope Geffen A&M',
+            'Geffen Records', 'Geffen', 'A&M Records', 'A&M',
+            'Republic Records', 'Republic', 
+            'Def Jam Recordings', 'Def Jam', 'GOOD Music',
+            'Island Records', 'Island Def Jam', 'Island',
+            'Capitol Records', 'Capitol Music Group', 'Capitol',
+            'Virgin Records', 'Virgin EMI', 'Virgin Music',
+            'Polydor Records', 'Polydor',
+            'Motown Records', 'Motown',
+            'Mercury Records', 'Mercury',
+            'Verve Records', 'Verve', 'Verve Label Group',
+            'Decca Records', 'Decca', 'Deutsche Grammophon',
+            'ECM Records', 'ECM',
+            'Blue Note Records', 'Blue Note',
+            'Harvest Records', 'Harvest',
+            'Caroline Records', 'Caroline', 'Caroline International',
+            
+            # Regional UMG Labels
+            'Universal Music Deutschland', 'Universal Music Germany',
+            'Universal Music France', 'Universal Music UK',
+            'Universal Music Japan', 'Universal Music Australia',
+            'Universal Music Latin', 'Universal Music Latino',
+            
+            # Publishing
+            'Universal Music Publishing Group', 'UMPG',
+            'Universal Music Publishing',
+            
+            # Historical/Merged Labels now under UMG
+            'PolyGram', 'Polygram Records',
+            'MCA Records', 'MCA',
+            'GRP Records', 'GRP',
+            'Fontana Records', 'Fontana',
+            'Philips Records', 'Philips',
+            'London Records', 'London',
+            'Casablanca Records', 'Casablanca',
+            'RSO Records', 'RSO',
+            'Rocket Records',
+            
+            # Dance/Electronic Labels under UMG
+            'Big Beat Records', 'Big Beat',
+            'Astralwerks', 'Astral Werks',
+            'Spinnin Records', 'Spinnin',
+            
+            # Hip-Hop/R&B Labels under UMG
+            'Cash Money Records', 'Cash Money', 'Young Money',
+            'Bad Boy Records', 'Bad Boy',
+            'Aftermath Entertainment', 'Aftermath',
+            'Shady Records',
+            'Top Dawg Entertainment', 'TDE',
+            'Quality Control Music', 'Quality Control', 'QC',
+            'Roc Nation', 'Roc-A-Fella',
+            
+            # Country Labels under UMG
+            'MCA Nashville', 'Mercury Nashville',
+            'Capitol Nashville', 'EMI Nashville',
+            'Lost Highway Records',
+            
+            # Rock/Metal Labels under UMG
+            'Roadrunner Records', 'Roadrunner',
+            'Spinefarm Records', 'Spinefarm',
+            'Nuclear Blast', # Distribution deal
+            
+            # Classical Labels under UMG
+            'DG', 'Archiv Produktion',
+        }
+        
+        # Create normalized lookup
+        normalized = {}
+        for label in umg_labels:
+            norm = label.lower().strip()
+            normalized[norm] = label
+            # Also add without special characters
+            norm_clean = re.sub(r'[^\w\s]', '', norm)
+            if norm_clean != norm:
+                normalized[norm_clean] = label
+        
+        return normalized
+    
+    def check_umg_label(self, text):
+        """Check if text contains any UMG label reference
+        
+        Args:
+            text: Text to check (could be description, channel name, etc.)
+            
+        Returns:
+            tuple: (is_umg, matched_labels) where is_umg is bool and matched_labels is list
+        """
+        if not text or not text.strip():
+            return False, []
+        
+        text_lower = text.lower().strip()
+        text_clean = re.sub(r'[^\w\s]', '', text_lower)
+        
+        matched = []
+        for label_norm, label_orig in self.umg_labels.items():
+            # Check if label appears in text
+            if label_norm in text_lower or label_norm in text_clean:
+                if label_orig not in matched:
+                    matched.append(label_orig)
+        
+        return len(matched) > 0, matched
     
     def check_umpg_artist(self, artist_name):
         """Check if an artist is represented by UMPG
@@ -1536,6 +1661,1410 @@ Average Views: {result['avg_views']:,}{ump_info}
             save_config(self.config)
             self.log("Settings saved")
             messagebox.showinfo("Settings", "Settings saved successfully")
+    
+    def open_umg_check_mode(self):
+        """Open the Universal Music Group Check Mode dialog
+        
+        This mode searches more generically for content protected by UMG
+        and all its subsidiaries, helping to identify risky songs/artists.
+        """
+        dialog = UMGCheckModeDialog(self.root, self)
+        dialog.wait_window()
+    
+    def search_umg_protected_content(self, search_type, search_term, max_results=50, progress_callback=None):
+        """Search for content that might be protected by Universal Music Group
+        
+        Args:
+            search_type: 'artist', 'song', 'label', or 'generic'
+            search_term: Search term to use
+            max_results: Maximum results to return
+            progress_callback: Optional callback for progress updates
+            
+        Returns:
+            list of dict with video info and UMG detection results
+        """
+        results = []
+        
+        try:
+            import yt_dlp
+            
+            # Build search queries based on type
+            search_queries = []
+            
+            if search_type == 'artist':
+                search_queries = [
+                    f'"{search_term}" official music video',
+                    f'"{search_term}" official audio',
+                    f'"{search_term}" VEVO',
+                    f'"{search_term}" Universal Music',
+                ]
+            elif search_type == 'song':
+                search_queries = [
+                    f'"{search_term}" official',
+                    f'"{search_term}" music video',
+                    f'"{search_term}" audio',
+                ]
+            elif search_type == 'label':
+                search_queries = [
+                    f'{search_term} official music video',
+                    f'{search_term} records artist',
+                ]
+            else:  # generic
+                search_queries = [
+                    f'{search_term} Universal Music',
+                    f'{search_term} UMG',
+                    f'{search_term} Interscope',
+                    f'{search_term} Def Jam',
+                    f'{search_term} Republic Records',
+                    f'{search_term} Capitol Records',
+                ]
+            
+            # Search each query
+            ydl_opts = {
+                'quiet': True,
+                'no_warnings': True,
+                'extract_flat': 'in_playlist',
+                'skip_download': True,
+                'noplaylist': False,
+                'default_search': 'ytsearch',
+                'ignoreerrors': True,
+            }
+            
+            # Add ffmpeg path if available
+            if self.ffmpeg_path and self.ffmpeg_path != 'ffmpeg':
+                ffmpeg_dir = os.path.dirname(self.ffmpeg_path)
+                if os.path.exists(ffmpeg_dir):
+                    ydl_opts['ffmpeg_location'] = ffmpeg_dir
+            
+            seen_ids = set()
+            total_queries = len(search_queries)
+            
+            for i, query in enumerate(search_queries):
+                if progress_callback:
+                    progress_callback(f"Searching: {query[:50]}...", (i + 1) / total_queries * 50)
+                
+                try:
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        search_url = f"ytsearch{max_results // len(search_queries)}:{query}"
+                        info = ydl.extract_info(search_url, download=False)
+                        
+                        if info and 'entries' in info:
+                            for entry in info['entries']:
+                                if not entry:
+                                    continue
+                                
+                                video_id = entry.get('id', '')
+                                if video_id in seen_ids:
+                                    continue
+                                seen_ids.add(video_id)
+                                
+                                title = entry.get('title', 'Unknown')
+                                channel = entry.get('channel', entry.get('uploader', ''))
+                                description = entry.get('description', '')
+                                
+                                # Check for UMG indicators
+                                umg_detected, umg_labels = self._detect_umg_indicators(
+                                    title, channel, description, entry
+                                )
+                                
+                                result = {
+                                    'id': video_id,
+                                    'title': title,
+                                    'url': f"https://www.youtube.com/watch?v={video_id}",
+                                    'channel': channel,
+                                    'view_count': entry.get('view_count', 0) or 0,
+                                    'upload_date': entry.get('upload_date', ''),
+                                    'duration': entry.get('duration', 0),
+                                    'umg_detected': umg_detected,
+                                    'umg_labels': umg_labels,
+                                    'search_query': query
+                                }
+                                
+                                results.append(result)
+                
+                except Exception as e:
+                    if progress_callback:
+                        progress_callback(f"Error in query: {str(e)[:50]}", (i + 1) / total_queries * 50)
+                    continue
+                
+                # Rate limiting
+                time.sleep(0.5)
+            
+            # Now get detailed info for UMG-detected results
+            if progress_callback:
+                progress_callback("Analyzing detected content...", 60)
+            
+            umg_results = [r for r in results if r['umg_detected']]
+            
+            for i, result in enumerate(umg_results[:20]):  # Limit detailed analysis
+                if progress_callback:
+                    progress_callback(f"Analyzing: {result['title'][:40]}...", 60 + (i / 20) * 35)
+                
+                try:
+                    detailed = self._get_detailed_umg_info(result['id'])
+                    if detailed:
+                        result.update(detailed)
+                except Exception:
+                    pass
+                
+                time.sleep(0.3)
+            
+            if progress_callback:
+                progress_callback("Complete", 100)
+        
+        except Exception as e:
+            self.log(f"Error in UMG search: {str(e)}")
+        
+        return results
+    
+    def _detect_umg_indicators(self, title, channel, description, entry):
+        """Detect UMG indicators in video metadata
+        
+        Returns:
+            tuple: (is_umg, list of detected labels/indicators)
+        """
+        indicators = []
+        
+        # Check title
+        is_umg_title, labels_title = self.check_umg_label(title)
+        indicators.extend(labels_title)
+        
+        # Check channel name
+        is_umg_channel, labels_channel = self.check_umg_label(channel)
+        indicators.extend(labels_channel)
+        
+        # Check description
+        is_umg_desc, labels_desc = self.check_umg_label(description or '')
+        indicators.extend(labels_desc)
+        
+        # Check for VEVO channels (often UMG affiliated)
+        if 'vevo' in channel.lower():
+            indicators.append('VEVO Channel')
+        
+        # Check for "official" in title with high view count (likely major label)
+        if 'official' in title.lower():
+            view_count = entry.get('view_count', 0) or 0
+            if view_count > 10000000:  # 10M+ views
+                indicators.append('Official (High Views)')
+        
+        # Check channel patterns
+        channel_lower = channel.lower()
+        umg_channel_patterns = [
+            'universalmusic', 'universal music', 'umg',
+            'interscope', 'geffen', 'defjam', 'def jam',
+            'republic records', 'capitol records', 'island records',
+            'motown', 'polydor', 'virgin', 'mercury records',
+        ]
+        for pattern in umg_channel_patterns:
+            if pattern in channel_lower:
+                indicators.append(f'Channel: {channel[:30]}')
+                break
+        
+        # Remove duplicates
+        indicators = list(set(indicators))
+        
+        return len(indicators) > 0, indicators
+    
+    def _get_detailed_umg_info(self, video_id):
+        """Get detailed information about a video to confirm UMG status"""
+        try:
+            import yt_dlp
+            
+            ydl_opts = {
+                'quiet': True,
+                'no_warnings': True,
+                'skip_download': True,
+            }
+            
+            if self.ffmpeg_path and self.ffmpeg_path != 'ffmpeg':
+                ffmpeg_dir = os.path.dirname(self.ffmpeg_path)
+                if os.path.exists(ffmpeg_dir):
+                    ydl_opts['ffmpeg_location'] = ffmpeg_dir
+            
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                url = f"https://www.youtube.com/watch?v={video_id}"
+                info = ydl.extract_info(url, download=False)
+                
+                if info:
+                    # Check license info if available
+                    license_info = info.get('license', '')
+                    artist = info.get('artist', info.get('creator', ''))
+                    album = info.get('album', '')
+                    
+                    # Check if artist is in UMPG list
+                    is_umpg, umpg_match = self.check_umpg_artist(artist)
+                    
+                    return {
+                        'artist': artist,
+                        'album': album,
+                        'license': license_info,
+                        'is_umpg_artist': is_umpg,
+                        'umpg_match': umpg_match,
+                        'description': info.get('description', '')[:500],
+                    }
+        
+        except Exception:
+            pass
+        
+        return None
+
+
+class UMGCheckModeDialog(tk.Toplevel):
+    """Dialog for Universal Music Group detection mode
+    
+    This mode provides generic search to find all artists and songs
+    that might be protected by UMG and its subsidiaries.
+    """
+    
+    def __init__(self, parent, checker_app):
+        super().__init__(parent)
+        self.title("UMG Check Mode - Find Universal Music Protected Content")
+        self.geometry("1200x800")
+        self.transient(parent)
+        
+        self.checker_app = checker_app
+        self.results = []
+        self.is_searching = False
+        
+        self.create_widgets()
+    
+    def create_widgets(self):
+        # Main frame
+        main_frame = ttk.Frame(self, padding=10)
+        main_frame.pack(fill='both', expand=True)
+        
+        # Info label
+        info_frame = ttk.LabelFrame(main_frame, text="About UMG Check Mode", padding=10)
+        info_frame.pack(fill='x', pady=(0, 10))
+        
+        info_text = """This tool uses the official UMPG (Universal Music Publishing Group) search to check if songs are protected.
+
+How to use:
+1. Enter an artist/song name and click "Search on UMPG" to open the official database
+2. Or load your AI-COVERS and right-click on any song to check it on UMPG
+3. The "Checked" column shows which songs you've already verified
+
+The UMPG database at umusicpub.com is the authoritative source for checking Universal Music protection."""
+        
+        ttk.Label(info_frame, text=info_text, justify='left', wraplength=1150).pack(anchor='w')
+        
+        # Search frame
+        search_frame = ttk.LabelFrame(main_frame, text="UMPG Search", padding=10)
+        search_frame.pack(fill='x', pady=(0, 10))
+        
+        # Search term
+        term_frame = ttk.Frame(search_frame)
+        term_frame.pack(fill='x', pady=5)
+        
+        ttk.Label(term_frame, text="Artist or Song:").pack(side='left', padx=(0, 5))
+        self.search_term_var = tk.StringVar()
+        self.search_type_var = tk.StringVar(value='artist')  # Keep for compatibility
+        search_entry = ttk.Entry(term_frame, textvariable=self.search_term_var, width=50)
+        search_entry.pack(side='left', fill='x', expand=True, padx=(0, 10))
+        
+        # Bind Enter key
+        search_entry.bind('<Return>', lambda e: self.start_search())
+        
+        ttk.Button(term_frame, text="Search on UMPG", command=self.start_search).pack(side='left', padx=5)
+        
+        # Load buttons
+        load_frame = ttk.Frame(search_frame)
+        load_frame.pack(fill='x', pady=5)
+        
+        ttk.Label(load_frame, text="Load songs to check:").pack(side='left', padx=(0, 5))
+        ttk.Button(load_frame, text="Load AI-COVERS", command=self.scan_ai_covers_for_umg).pack(side='left', padx=5)
+        ttk.Button(load_frame, text="Load Known UMPG Artists", command=self.search_all_umpg).pack(side='left', padx=5)
+        
+        # Official UMPG search button
+        umpg_frame = ttk.Frame(search_frame)
+        umpg_frame.pack(fill='x', pady=5)
+        
+        ttk.Label(umpg_frame, text="Direct link:", font=('TkDefaultFont', 9)).pack(side='left', padx=(0, 5))
+        ttk.Button(umpg_frame, text="Open UMPG Official Music Search", 
+                  command=self.open_umpg_official_search).pack(side='left', padx=5)
+        ttk.Label(umpg_frame, text="(Search the official UMPG database for protected songs/artists)", 
+                 font=('TkDefaultFont', 8, 'italic'), foreground='gray').pack(side='left', padx=5)
+        
+        # Progress
+        progress_frame = ttk.Frame(search_frame)
+        progress_frame.pack(fill='x', pady=5)
+        
+        self.progress_var = tk.StringVar(value="Ready")
+        ttk.Label(progress_frame, textvariable=self.progress_var).pack(side='left')
+        
+        self.progress_bar = ttk.Progressbar(progress_frame, mode='determinate', length=400)
+        self.progress_bar.pack(side='left', padx=10, fill='x', expand=True)
+        
+        # Results frame
+        results_frame = ttk.LabelFrame(main_frame, text="Results", padding=5)
+        results_frame.pack(fill='both', expand=True, pady=(0, 10))
+        
+        # Filter frame
+        filter_frame = ttk.Frame(results_frame)
+        filter_frame.pack(fill='x', pady=(0, 5))
+        
+        self.result_count_var = tk.StringVar(value="0 songs")
+        ttk.Label(filter_frame, textvariable=self.result_count_var).pack(side='left')
+        
+        # Filter checkbox for protected only
+        self.show_protected_only_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(filter_frame, text="Show PROTECTED only", 
+                       variable=self.show_protected_only_var, 
+                       command=self._display_results).pack(side='right', padx=10)
+        
+        # Results tree with UMPG protection status
+        tree_container = ttk.Frame(results_frame)
+        tree_container.pack(fill='both', expand=True)
+        
+        scroll_y = ttk.Scrollbar(tree_container, orient='vertical')
+        scroll_x = ttk.Scrollbar(tree_container, orient='horizontal')
+        
+        self.results_tree = ttk.Treeview(tree_container, columns=(
+            'Artist', 'Title', 'Status', 'Decade', 'Source'
+        ), show='headings', yscrollcommand=scroll_y.set, xscrollcommand=scroll_x.set)
+        
+        scroll_y.config(command=self.results_tree.yview)
+        scroll_x.config(command=self.results_tree.xview)
+        
+        # Column headers
+        self.results_tree.heading('Artist', text='Artist')
+        self.results_tree.heading('Title', text='Song Title')
+        self.results_tree.heading('Status', text='UMPG Status')
+        self.results_tree.heading('Decade', text='Decade')
+        self.results_tree.heading('Source', text='Source')
+        
+        # Column widths
+        self.results_tree.column('Artist', width=250)
+        self.results_tree.column('Title', width=250)
+        self.results_tree.column('Status', width=180)
+        self.results_tree.column('Decade', width=80)
+        self.results_tree.column('Source', width=120)
+        
+        self.results_tree.pack(side='left', fill='both', expand=True)
+        scroll_y.pack(side='right', fill='y')
+        scroll_x.pack(side='bottom', fill='x')
+        
+        # Configure tags for visual feedback
+        self.results_tree.tag_configure('protected', background='#ffcccc', foreground='#8b0000')
+        self.results_tree.tag_configure('not_protected', background='#ccffcc', foreground='#006400')
+        self.results_tree.tag_configure('error', background='#ffffcc', foreground='#8b8b00')
+        
+        # Bind double-click
+        self.results_tree.bind('<Double-1>', self.on_result_double_click)
+        
+        # Bind right-click for context menu
+        self.results_tree.bind('<Button-3>', self.on_result_right_click)  # Windows
+        self.results_tree.bind('<Button-2>', self.on_result_right_click)  # Mac
+        
+        # Debug log frame
+        log_frame = ttk.LabelFrame(main_frame, text="Debug Log", padding=5)
+        log_frame.pack(fill='both', expand=False, pady=(5, 0))
+        
+        self.log_text = scrolledtext.ScrolledText(log_frame, height=8, wrap=tk.WORD, font=('Consolas', 8))
+        self.log_text.pack(fill='both', expand=True)
+        
+        # Buttons frame
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(fill='x', pady=(5, 0))
+        
+        ttk.Button(btn_frame, text="Export Results", command=self.export_results).pack(side='left', padx=5)
+        ttk.Button(btn_frame, text="Add Protected to Main", command=self.add_to_main_results).pack(side='left', padx=5)
+        ttk.Button(btn_frame, text="Clear Results", command=self.clear_results).pack(side='left', padx=5)
+        ttk.Button(btn_frame, text="Clear Log", command=self.clear_log).pack(side='left', padx=5)
+        ttk.Button(btn_frame, text="Close", command=self.destroy).pack(side='right', padx=5)
+    
+    def log(self, message):
+        """Log message to debug text widget"""
+        timestamp = datetime.now().strftime('%H:%M:%S')
+        self.log_text.insert(tk.END, f"[{timestamp}] {message}\n")
+        self.log_text.see(tk.END)
+        self.update_idletasks()
+    
+    def clear_log(self):
+        """Clear the debug log"""
+        self.log_text.delete(1.0, tk.END)
+    
+    def quick_search(self, label):
+        """Quick search for a specific label"""
+        self.search_type_var.set('label')
+        self.search_term_var.set(label)
+        self.start_search()
+    
+    def open_umpg_official_search(self):
+        """Open the official UMPG Music Library search in browser
+        
+        This is the authoritative source for checking if a song/artist
+        is protected by Universal Music Publishing Group.
+        URL format: https://www.umusicpub.com/us/Digital-Music-Library/search/{SearchTerm}
+        """
+        import webbrowser
+        
+        # Use the current search term if available
+        search_term = self.search_term_var.get().strip()
+        base_url = "https://www.umusicpub.com/us/Digital-Music-Library/search"
+        
+        if search_term:
+            # URL encode the search term for the path
+            search_encoded = urllib.parse.quote(search_term)
+            webbrowser.open(f"{base_url}/{search_encoded}")
+        else:
+            # Just open the search page if no term entered
+            webbrowser.open(base_url)
+    
+    def start_search(self):
+        """Start the UMG search"""
+        search_term = self.search_term_var.get().strip()
+        if not search_term:
+            messagebox.showwarning("Warning", "Please enter a search term")
+            return
+        
+        if self.is_searching:
+            messagebox.showwarning("Warning", "Search already in progress")
+            return
+        
+        self.is_searching = True
+        
+        # Clear previous results
+        for item in self.results_tree.get_children():
+            self.results_tree.delete(item)
+        self.results = []
+        
+        # Start search in thread
+        thread = threading.Thread(target=self._run_search, 
+                                 args=(self.search_type_var.get(), search_term),
+                                 daemon=True)
+        thread.start()
+    
+    def search_all_umpg(self):
+        """Search for all known UMPG artists"""
+        if self.is_searching:
+            messagebox.showwarning("Warning", "Search already in progress")
+            return
+        
+        # Get list of UMPG artists
+        umpg_artists = list(set(self.checker_app.umpg_artists.values()))
+        
+        if not umpg_artists:
+            messagebox.showwarning("Warning", "No UMPG artists in database")
+            return
+        
+        # Show confirmation
+        msg = f"This will search for {len(umpg_artists)} known UMPG artists.\n"
+        msg += "This may take several minutes.\n\nContinue?"
+        
+        if not messagebox.askyesno("Confirm", msg):
+            return
+        
+        self.is_searching = True
+        
+        # Clear previous results
+        for item in self.results_tree.get_children():
+            self.results_tree.delete(item)
+        self.results = []
+        
+        # Start search in thread
+        thread = threading.Thread(target=self._run_umpg_artist_search, 
+                                 args=(umpg_artists[:30],),  # Limit to first 30 for speed
+                                 daemon=True)
+        thread.start()
+    
+    def scan_ai_covers_for_umg(self):
+        """Scan all AI-COVERS directory for UMG protection"""
+        if self.is_searching:
+            messagebox.showwarning("Warning", "Search already in progress")
+            return
+        
+        # Get AI-COVERS path
+        ai_covers_path = self.checker_app.get_ai_covers_path()
+        
+        if not os.path.exists(ai_covers_path):
+            messagebox.showerror("Error", f"AI-COVERS directory not found: {ai_covers_path}")
+            return
+        
+        # Scan for songs in AI-COVERS
+        songs = []
+        try:
+            for decade_dir in os.listdir(ai_covers_path):
+                decade_path = os.path.join(ai_covers_path, decade_dir)
+                if not os.path.isdir(decade_path):
+                    continue
+                
+                for song_dir in os.listdir(decade_path):
+                    song_path = os.path.join(decade_path, song_dir)
+                    if not os.path.isdir(song_path):
+                        continue
+                    
+                    # Look for JSON file
+                    json_files = [f for f in os.listdir(song_path) 
+                                 if f.endswith('.json') and not f.startswith('grok_')]
+                    if not json_files:
+                        continue
+                    
+                    json_path = os.path.join(song_path, json_files[0])
+                    try:
+                        with open(json_path, 'r', encoding='utf-8') as f:
+                            song_data = json.load(f)
+                        
+                        song_name = song_data.get('song_name', '').strip()
+                        artist = song_data.get('artist', '').strip()
+                        
+                        if song_name:
+                            songs.append({
+                                'song_name': song_name,
+                                'artist': artist,
+                                'decade': decade_dir,
+                                'json_path': json_path
+                            })
+                    except Exception:
+                        continue
+        
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to scan AI-COVERS: {str(e)}")
+            return
+        
+        if not songs:
+            messagebox.showwarning("Warning", "No songs found in AI-COVERS directory")
+            return
+        
+        # Show confirmation
+        msg = f"Found {len(songs)} songs in AI-COVERS directory.\n"
+        msg += "This will check each song for UMG protection.\n"
+        msg += "This may take several minutes.\n\nContinue?"
+        
+        if not messagebox.askyesno("Confirm AI-COVERS UMG Scan", msg):
+            return
+        
+        self.is_searching = True
+        
+        # Clear previous results
+        for item in self.results_tree.get_children():
+            self.results_tree.delete(item)
+        self.results = []
+        
+        # Start search in thread
+        thread = threading.Thread(target=self._run_ai_covers_umg_scan, 
+                                 args=(songs,),
+                                 daemon=True)
+        thread.start()
+    
+    def _check_umpg_search_playwright(self, page, search_term, label, navigate_first=True):
+        """Check UMPG by using the search form (not URL) and return if results were found
+        
+        Args:
+            page: Playwright page object
+            search_term: Term to search for
+            label: Label for logging (e.g., "Artist" or "Song")
+            navigate_first: If True, navigate to the search page first
+            
+        Returns:
+            tuple: (has_results, result_count, error_message)
+        """
+        try:
+            self.after(0, lambda st=search_term: self.log(f"  {label} search: {st}"))
+            
+            # Navigate to the UMPG search page if needed
+            if navigate_first:
+                self.after(0, lambda: self.log(f"  Navigating to UMPG search page..."))
+                page.goto('https://www.umusicpub.com/us/Digital-Music-Library/search', wait_until='networkidle', timeout=30000)
+            
+            # Wait for the search input to be available
+            search_input_selector = 'input.advanced-search__input'
+            self.after(0, lambda: self.log(f"  Waiting for search input..."))
+            page.wait_for_selector(search_input_selector, timeout=15000)
+            
+            # Clear any existing text and type the search term
+            search_input = page.locator(search_input_selector)
+            search_input.clear()
+            search_input.fill(search_term)
+            self.after(0, lambda st=search_term: self.log(f"  Entered search term: {st}"))
+            
+            # Click the search button
+            search_button_selector = 'button.advanced-search__submit'
+            page.wait_for_selector(search_button_selector, timeout=5000)
+            page.click(search_button_selector)
+            self.after(0, lambda: self.log(f"  Clicked search button, waiting for results..."))
+            
+            # Wait at least 10 seconds for results to load (UMPG can be slow)
+            time.sleep(10)
+            
+            # Then wait for results to load
+            # Either the results table appears OR the "no results" message appears
+            try:
+                page.wait_for_selector(
+                    'umpg-results-grid-table-v2 tbody.table__body, .results-grid--no-results',
+                    timeout=10000
+                )
+                self.after(0, lambda: self.log(f"  Search completed."))
+            except Exception:
+                # Timeout - give it a bit more time
+                self.after(0, lambda: self.log(f"  Timeout waiting for results, checking page..."))
+                time.sleep(2)
+            
+            # Get the page content after JavaScript rendering
+            content = page.content()
+            
+            # Debug: log content length
+            self.after(0, lambda cl=len(content): self.log(f"  Page content length: {cl} chars"))
+            
+            # Look for the results count indicator: "X-Y of Z Results"
+            # This is the most reliable way to detect if there are results
+            import re
+            results_match = re.search(r'(\d+)-(\d+)\s+of\s+(\d+)\s+Results', content)
+            
+            if results_match:
+                # Found results! Extract the total count
+                total_results = int(results_match.group(3))
+                self.after(0, lambda tr=total_results: self.log(f"  Found results indicator: {tr} total results"))
+                has_results = total_results > 0
+                result_count = total_results
+            else:
+                # No results indicator found - check for explicit "no results" message
+                # or check if the results grid has the no-results class
+                has_no_results_class = 'results-grid--no-results' in content
+                
+                # Also check for song links as backup detection
+                song_links = content.count('/us/Digital-Music-Library/song/')
+                
+                if has_no_results_class:
+                    self.after(0, lambda l=label: self.log(f"  {l}: No results found on UMPG (no-results class)"))
+                    has_results = False
+                    result_count = 0
+                elif song_links > 0:
+                    # Found song links even without the counter
+                    self.after(0, lambda sl=song_links: self.log(f"  Found {sl} song links (no counter found)"))
+                    has_results = True
+                    result_count = song_links
+                else:
+                    self.after(0, lambda l=label: self.log(f"  {l}: No results found on UMPG"))
+                    has_results = False
+                    result_count = 0
+            
+            if has_results:
+                self.after(0, lambda l=label, rc=result_count: self.log(f"  >>> {l.upper()} FOUND ON UMPG! ({rc} results)"))
+            
+            return has_results, result_count, None
+            
+        except Exception as e:
+            error_msg = str(e)
+            self.after(0, lambda l=label, err=error_msg: self.log(f"  {l} ERROR: {err}"))
+            return False, 0, error_msg
+    
+    def _run_ai_covers_umg_scan(self, songs):
+        """Scan AI-COVERS songs for UMPG protection by checking the official UMPG website
+        
+        Uses Playwright to render the JavaScript-based UMPG search page.
+        Checks each song/artist on https://www.umusicpub.com/us/Digital-Music-Library/search/
+        """
+        playwright_obj = None
+        context = None
+        
+        try:
+            from playwright.sync_api import sync_playwright
+            
+            all_results = []
+            total = len(songs)
+            protected_count = 0
+            not_protected_count = 0
+            error_count = 0
+            
+            self.after(0, lambda: self.log(f"Starting UMPG scan for {total} songs..."))
+            self.after(0, lambda: self.log(f"Using Playwright browser for JavaScript rendering"))
+            self.after(0, lambda: self.log(f"UMPG search URL: https://www.umusicpub.com/us/Digital-Music-Library/search/"))
+            self.after(0, lambda: self.log("=" * 60))
+            
+            # Launch browser once and reuse for all checks
+            # Use persistent context to save/restore browser profile (cookies, session, etc.)
+            self.after(0, lambda: self.log("Launching headless browser..."))
+            playwright_obj = sync_playwright().start()
+            
+            # Create browser profile directory
+            browser_profile_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'browser_data', 'umpg_profile')
+            os.makedirs(browser_profile_dir, exist_ok=True)
+            self.after(0, lambda bpd=browser_profile_dir: self.log(f"Browser profile: {bpd}"))
+            
+            context = playwright_obj.chromium.launch_persistent_context(
+                browser_profile_dir,
+                headless=True,
+                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            )
+            page = context.new_page()
+            self.after(0, lambda: self.log("Browser ready."))
+            
+            # Navigate to search page once at the start
+            self.after(0, lambda: self.log("Navigating to UMPG search page..."))
+            page.goto('https://www.umusicpub.com/us/Digital-Music-Library/search', wait_until='networkidle', timeout=30000)
+            
+            for i, song_info in enumerate(songs):
+                song_name = song_info['song_name']
+                artist = song_info['artist']
+                decade = song_info['decade']
+                
+                self.progress_var.set(f"Checking {i+1}/{total}: {artist[:20]} - {song_name[:25]}")
+                self.progress_bar['value'] = (i / total) * 100
+                self.update_idletasks()
+                
+                # Build UMPG search URLs (for reference/logging)
+                umpg_search_artist = urllib.parse.quote(artist) if artist else ''
+                umpg_search_song = urllib.parse.quote(song_name) if song_name else ''
+                umpg_url_artist = f"https://www.umusicpub.com/us/Digital-Music-Library/search/{umpg_search_artist}"
+                umpg_url_song = f"https://www.umusicpub.com/us/Digital-Music-Library/search/{umpg_search_song}"
+                
+                self.after(0, lambda a=artist, s=song_name, d=decade, num=i+1, t=total: 
+                    self.log(f"\n[{num}/{t}] Checking: {a} - {s} ({d})"))
+                
+                # Check artist on UMPG
+                artist_protected = False
+                song_protected = False
+                check_error = False
+                
+                # Check artist using search form (don't navigate again, we're already on the page)
+                if artist:
+                    has_results, count, error = self._check_umpg_search_playwright(page, artist, "Artist", navigate_first=False)
+                    if error:
+                        check_error = True
+                    elif has_results:
+                        artist_protected = True
+                
+                # Small delay between requests
+                time.sleep(0.5)
+                
+                # Check song name using search form
+                if song_name:
+                    has_results, count, error = self._check_umpg_search_playwright(page, song_name, "Song", navigate_first=False)
+                    if error:
+                        check_error = True
+                    elif has_results:
+                        song_protected = True
+                
+                # Determine protection status
+                is_protected = artist_protected or song_protected
+                
+                if check_error:
+                    status = 'Error'
+                    error_count += 1
+                    self.after(0, lambda: self.log(f"  RESULT: Error checking"))
+                elif is_protected:
+                    if artist_protected and song_protected:
+                        status = 'PROTECTED (Artist + Song)'
+                    elif artist_protected:
+                        status = 'PROTECTED (Artist)'
+                    else:
+                        status = 'PROTECTED (Song)'
+                    protected_count += 1
+                    self.after(0, lambda s=status: self.log(f"  RESULT: {s} <<<"))
+                else:
+                    status = 'Not Protected'
+                    not_protected_count += 1
+                    self.after(0, lambda: self.log(f"  RESULT: Not Protected"))
+                
+                result = {
+                    'title': song_name,
+                    'artist': artist,
+                    'decade': decade,
+                    'umpg_url_artist': umpg_url_artist,
+                    'umpg_url_song': umpg_url_song,
+                    'source': 'AI-COVERS',
+                    'checked': True,
+                    'is_protected': is_protected,
+                    'artist_protected': artist_protected,
+                    'song_protected': song_protected,
+                    'status': status,
+                    'check_error': check_error,
+                }
+                
+                all_results.append(result)
+                
+                # Rate limiting - be nice to the server
+                time.sleep(0.5)
+            
+            self.results = all_results
+            self.after(0, self._display_results)
+            
+            # Log final summary
+            self.after(0, lambda: self.log("\n" + "=" * 60))
+            self.after(0, lambda: self.log("SCAN COMPLETE - SUMMARY"))
+            self.after(0, lambda: self.log("=" * 60))
+            self.after(0, lambda t=total: self.log(f"Total songs checked: {t}"))
+            self.after(0, lambda p=protected_count: self.log(f"PROTECTED (found on UMPG): {p}"))
+            self.after(0, lambda n=not_protected_count: self.log(f"Not Protected: {n}"))
+            if error_count > 0:
+                self.after(0, lambda e=error_count: self.log(f"Errors: {e}"))
+            self.after(0, lambda: self.log("=" * 60))
+            
+            summary = f"UMPG Check Complete!\n\n"
+            summary += f"Total songs checked: {total}\n"
+            summary += f"PROTECTED (found on UMPG): {protected_count}\n"
+            summary += f"Not Protected: {not_protected_count}\n"
+            if error_count > 0:
+                summary += f"Errors: {error_count}\n"
+            summary += f"\nRight-click to verify any result on UMPG website."
+            
+            self.after(0, lambda: messagebox.showinfo("UMPG Check Complete", summary))
+        
+        except ImportError:
+            self.after(0, lambda: self.log("ERROR: Playwright not installed!"))
+            self.after(0, lambda: self.log("Please run: pip install playwright"))
+            self.after(0, lambda: self.log("Then run: playwright install chromium"))
+            self.after(0, lambda: messagebox.showerror("Error", 
+                "Playwright not installed.\n\nRun these commands:\npip install playwright\nplaywright install chromium"))
+        
+        except Exception as e:
+            self.after(0, lambda err=str(e): self.log(f"FATAL ERROR: {err}"))
+            self.after(0, lambda: messagebox.showerror("Error", f"Check failed: {str(e)}"))
+        
+        finally:
+            # Clean up browser resources (persistent context)
+            if context:
+                try:
+                    context.close()
+                except Exception:
+                    pass
+            if playwright_obj:
+                try:
+                    playwright_obj.stop()
+                except Exception:
+                    pass
+            
+            self.is_searching = False
+            self.after(0, lambda: self.progress_var.set("Ready"))
+            self.after(0, lambda: self.progress_bar.configure(value=0))
+    
+    def _run_search(self, search_type, search_term):
+        """Search UMPG using Playwright with visible browser - uses search form"""
+        playwright_obj = None
+        context = None
+        
+        try:
+            from playwright.sync_api import sync_playwright
+            
+            search_encoded = urllib.parse.quote(search_term)
+            umpg_url = f"https://www.umusicpub.com/us/Digital-Music-Library/search/{search_encoded}"
+            
+            self.after(0, lambda: self.log(f"Searching UMPG for: {search_term}"))
+            self.after(0, lambda: self.log("Launching visible browser..."))
+            
+            # Launch browser in visible mode (headless=False) with persistent profile
+            playwright_obj = sync_playwright().start()
+            
+            # Create browser profile directory
+            browser_profile_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'browser_data', 'umpg_profile')
+            os.makedirs(browser_profile_dir, exist_ok=True)
+            self.after(0, lambda bpd=browser_profile_dir: self.log(f"Browser profile: {bpd}"))
+            
+            context = playwright_obj.chromium.launch_persistent_context(
+                browser_profile_dir,
+                headless=False,
+                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            )
+            page = context.new_page()
+            
+            # Use the search form method instead of URL navigation
+            has_results, result_count, error = self._check_umpg_search_playwright(page, search_term, search_type.capitalize(), navigate_first=True)
+            
+            # Determine status
+            if error:
+                status = 'Error'
+                is_protected = False
+            elif has_results:
+                status = f'PROTECTED ({result_count} results)'
+                is_protected = True
+            else:
+                status = 'Not Protected'
+                is_protected = False
+            
+            # Add to results list
+            result = {
+                'title': search_term if search_type == 'song' else '',
+                'artist': search_term if search_type == 'artist' else '',
+                'decade': '',
+                'umpg_url_artist': umpg_url if search_type == 'artist' else '',
+                'umpg_url_song': umpg_url if search_type == 'song' else '',
+                'source': 'Manual Search',
+                'checked': True,
+                'is_protected': is_protected,
+                'artist_protected': is_protected if search_type == 'artist' else False,
+                'song_protected': is_protected if search_type == 'song' else False,
+                'status': status,
+                'check_error': error is not None,
+            }
+            
+            self.results.append(result)
+            self.after(0, self._display_results)
+            
+            # Keep browser open for a moment so user can see results
+            self.after(0, lambda: self.log("Browser will close in 5 seconds..."))
+            time.sleep(5)
+        
+        except ImportError:
+            self.after(0, lambda: self.log("ERROR: Playwright not installed!"))
+            self.after(0, lambda: messagebox.showerror("Error", 
+                "Playwright not installed.\n\nRun these commands:\npip install playwright\nplaywright install chromium"))
+        
+        except Exception as e:
+            self.after(0, lambda err=str(e): self.log(f"ERROR: {err}"))
+            self.after(0, lambda: messagebox.showerror("Error", f"Failed to search UMPG: {str(e)}"))
+        
+        finally:
+            # Clean up browser resources (persistent context)
+            if context:
+                try:
+                    context.close()
+                except Exception:
+                    pass
+            if playwright_obj:
+                try:
+                    playwright_obj.stop()
+                except Exception:
+                    pass
+            
+            self.is_searching = False
+            self.after(0, lambda: self.progress_var.set("Ready"))
+            self.after(0, lambda: self.progress_bar.configure(value=0))
+    
+    def _run_umpg_artist_search(self, artists):
+        """Check known UMPG artists on the official UMPG website
+        
+        Uses Playwright to render the JavaScript-based UMPG search page.
+        Verifies each artist on https://www.umusicpub.com/us/Digital-Music-Library/search/
+        """
+        playwright_obj = None
+        context = None
+        
+        try:
+            from playwright.sync_api import sync_playwright
+            
+            all_results = []
+            total = len(artists)
+            protected_count = 0
+            not_protected_count = 0
+            error_count = 0
+            
+            self.after(0, lambda: self.log(f"Starting UMPG artist check for {total} artists..."))
+            self.after(0, lambda: self.log(f"Using Playwright browser for JavaScript rendering"))
+            self.after(0, lambda: self.log("=" * 60))
+            
+            # Launch browser once and reuse for all checks
+            # Use persistent context to save/restore browser profile (cookies, session, etc.)
+            self.after(0, lambda: self.log("Launching headless browser..."))
+            playwright_obj = sync_playwright().start()
+            
+            # Create browser profile directory
+            browser_profile_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'browser_data', 'umpg_profile')
+            os.makedirs(browser_profile_dir, exist_ok=True)
+            self.after(0, lambda bpd=browser_profile_dir: self.log(f"Browser profile: {bpd}"))
+            
+            context = playwright_obj.chromium.launch_persistent_context(
+                browser_profile_dir,
+                headless=True,
+                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            )
+            page = context.new_page()
+            self.after(0, lambda: self.log("Browser ready."))
+            
+            # Navigate to search page once at the start
+            self.after(0, lambda: self.log("Navigating to UMPG search page..."))
+            page.goto('https://www.umusicpub.com/us/Digital-Music-Library/search', wait_until='networkidle', timeout=30000)
+            
+            for i, artist in enumerate(artists):
+                self.progress_var.set(f"Checking artist {i+1}/{total}: {artist[:30]}")
+                self.progress_bar['value'] = (i / total) * 100
+                self.update_idletasks()
+                
+                artist_encoded = urllib.parse.quote(artist)
+                umpg_url = f"https://www.umusicpub.com/us/Digital-Music-Library/search/{artist_encoded}"
+                
+                self.after(0, lambda a=artist, num=i+1, t=total: self.log(f"\n[{num}/{t}] Checking artist: {a}"))
+                
+                # Check artist on UMPG using search form
+                has_results, count, error = self._check_umpg_search_playwright(page, artist, "Artist", navigate_first=False)
+                
+                is_protected = has_results
+                check_error = error is not None
+                
+                if check_error:
+                    status = 'Error'
+                    error_count += 1
+                elif is_protected:
+                    status = 'PROTECTED'
+                    protected_count += 1
+                else:
+                    status = 'Not Protected'
+                    not_protected_count += 1
+                    self.after(0, lambda: self.log(f"  Not found on UMPG"))
+                
+                result = {
+                    'title': '',
+                    'artist': artist,
+                    'decade': '',
+                    'umpg_url_artist': umpg_url,
+                    'umpg_url_song': '',
+                    'source': 'Known UMPG Artist',
+                    'checked': True,
+                    'is_protected': is_protected,
+                    'artist_protected': is_protected,
+                    'song_protected': False,
+                    'status': status,
+                    'check_error': check_error,
+                }
+                
+                all_results.append(result)
+                
+                # Rate limiting
+                time.sleep(0.5)
+            
+            self.results = all_results
+            self.after(0, self._display_results)
+            
+            # Log final summary
+            self.after(0, lambda: self.log("\n" + "=" * 60))
+            self.after(0, lambda: self.log("ARTIST CHECK COMPLETE - SUMMARY"))
+            self.after(0, lambda: self.log("=" * 60))
+            self.after(0, lambda t=total: self.log(f"Total artists checked: {t}"))
+            self.after(0, lambda p=protected_count: self.log(f"PROTECTED (found on UMPG): {p}"))
+            self.after(0, lambda n=not_protected_count: self.log(f"Not Found on UMPG: {n}"))
+            if error_count > 0:
+                self.after(0, lambda e=error_count: self.log(f"Errors: {e}"))
+            self.after(0, lambda: self.log("=" * 60))
+            
+            summary = f"UMPG Artist Check Complete!\n\n"
+            summary += f"Total artists checked: {total}\n"
+            summary += f"PROTECTED (found on UMPG): {protected_count}\n"
+            summary += f"Not Found on UMPG: {not_protected_count}\n"
+            if error_count > 0:
+                summary += f"Errors: {error_count}\n"
+            summary += f"\nRight-click to verify any result on UMPG website."
+            
+            self.after(0, lambda: messagebox.showinfo("UMPG Artist Check Complete", summary))
+        
+        except ImportError:
+            self.after(0, lambda: self.log("ERROR: Playwright not installed!"))
+            self.after(0, lambda: self.log("Please run: pip install playwright"))
+            self.after(0, lambda: self.log("Then run: playwright install chromium"))
+            self.after(0, lambda: messagebox.showerror("Error", 
+                "Playwright not installed.\n\nRun these commands:\npip install playwright\nplaywright install chromium"))
+        
+        except Exception as e:
+            self.after(0, lambda err=str(e): self.log(f"FATAL ERROR: {err}"))
+            self.after(0, lambda: messagebox.showerror("Error", f"Check failed: {str(e)}"))
+        
+        finally:
+            # Clean up browser resources (persistent context)
+            if context:
+                try:
+                    context.close()
+                except Exception:
+                    pass
+            if playwright_obj:
+                try:
+                    playwright_obj.stop()
+                except Exception:
+                    pass
+            
+            self.is_searching = False
+            self.after(0, lambda: self.progress_var.set("Ready"))
+            self.after(0, lambda: self.progress_bar.configure(value=0))
+    
+    def _display_results(self):
+        """Display results in tree view with UMPG protection status"""
+        # Clear tree
+        for item in self.results_tree.get_children():
+            self.results_tree.delete(item)
+        
+        show_protected_only = self.show_protected_only_var.get()
+        
+        displayed = 0
+        protected_count = 0
+        not_protected_count = 0
+        
+        for i, result in enumerate(self.results):
+            is_protected = result.get('is_protected', False)
+            
+            if is_protected:
+                protected_count += 1
+            else:
+                not_protected_count += 1
+            
+            # Filter if needed
+            if show_protected_only and not is_protected:
+                continue
+            
+            displayed += 1
+            
+            # Determine tag based on status
+            status = result.get('status', 'Not Checked')
+            if result.get('check_error'):
+                tag = 'error'
+            elif is_protected:
+                tag = 'protected'
+            else:
+                tag = 'not_protected'
+            
+            tags = (str(i), tag)
+            
+            self.results_tree.insert('', 'end', values=(
+                result.get('artist', '')[:40],
+                result.get('title', '')[:40],
+                status,
+                result.get('decade', ''),
+                result.get('source', '')[:15]
+            ), tags=tags)
+        
+        self.result_count_var.set(f"{displayed} shown | {protected_count} PROTECTED | {not_protected_count} Not Protected")
+    
+    def filter_results(self):
+        """Filter displayed results"""
+        self._display_results()
+    
+    def on_result_double_click(self, event):
+        """Open video URL on double-click"""
+        selection = self.results_tree.selection()
+        if not selection:
+            return
+        
+        item = selection[0]
+        tags = self.results_tree.item(item, 'tags')
+        if not tags:
+            return
+        
+        try:
+            result_index = int(tags[0])
+            if 0 <= result_index < len(self.results):
+                result = self.results[result_index]
+                # Open UMPG search for the artist
+                umpg_url = result.get('umpg_url_artist', '')
+                if umpg_url:
+                    import webbrowser
+                    webbrowser.open(umpg_url)
+                    # Mark as checked
+                    result['checked'] = True
+                    self._display_results()
+        except (ValueError, IndexError):
+            pass
+    
+    def on_result_right_click(self, event):
+        """Handle right-click to show context menu with search options"""
+        item = self.results_tree.identify_row(event.y)
+        if not item:
+            return
+        
+        # Select the item
+        self.results_tree.selection_set(item)
+        
+        tags = self.results_tree.item(item, 'tags')
+        if not tags:
+            return
+        
+        try:
+            result_index = int(tags[0])
+            if 0 <= result_index < len(self.results):
+                result = self.results[result_index]
+                self._show_context_menu(event, result)
+        except (ValueError, IndexError):
+            pass
+    
+    def _show_context_menu(self, event, result):
+        """Show context menu with UMPG search options"""
+        import webbrowser
+        
+        title = result.get('title', '')
+        artist = result.get('artist', '')
+        result_index = None
+        
+        # Find result index
+        for i, r in enumerate(self.results):
+            if r is result:
+                result_index = i
+                break
+        
+        # Create context menu
+        context_menu = tk.Menu(self, tearoff=0)
+        
+        # Build search terms
+        artist_encoded = urllib.parse.quote(artist) if artist else ''
+        title_encoded = urllib.parse.quote(title) if title else ''
+        
+        # UMPG base URL
+        umpg_base_url = "https://www.umusicpub.com/us/Digital-Music-Library/search"
+        
+        def open_umpg_and_mark(url):
+            """Open UMPG search and mark as checked"""
+            webbrowser.open(url)
+            if result_index is not None:
+                self.results[result_index]['checked'] = True
+                self._display_results()
+        
+        # UMPG search options - this is the main feature
+        if artist:
+            context_menu.add_command(
+                label=f"Check Artist on UMPG: \"{artist[:35]}\"",
+                command=lambda: open_umpg_and_mark(f"{umpg_base_url}/{artist_encoded}")
+            )
+        if title:
+            context_menu.add_command(
+                label=f"Check Song on UMPG: \"{title[:35]}\"",
+                command=lambda: open_umpg_and_mark(f"{umpg_base_url}/{title_encoded}")
+            )
+        
+        if not artist and not title:
+            context_menu.add_command(
+                label="Open UMPG Music Search",
+                command=lambda: webbrowser.open(umpg_base_url)
+            )
+        
+        context_menu.add_separator()
+        
+        # Copy options
+        copy_menu = tk.Menu(context_menu, tearoff=0)
+        
+        if title:
+            copy_menu.add_command(
+                label=f"Copy Song Title",
+                command=lambda: self._copy_to_clipboard(title)
+            )
+        if artist:
+            copy_menu.add_command(
+                label=f"Copy Artist",
+                command=lambda: self._copy_to_clipboard(artist)
+            )
+        if title and artist:
+            copy_menu.add_command(
+                label=f"Copy \"{artist} - {title[:20]}\"",
+                command=lambda: self._copy_to_clipboard(f"{artist} - {title}")
+            )
+        
+        context_menu.add_cascade(label="Copy", menu=copy_menu)
+        
+        # Copy options
+        context_menu.add_separator()
+        copy_menu = tk.Menu(context_menu, tearoff=0)
+        
+        if title:
+            copy_menu.add_command(
+                label=f"Copy Title: \"{title[:40]}\"",
+                command=lambda: self._copy_to_clipboard(title)
+            )
+        if artist:
+            copy_menu.add_command(
+                label=f"Copy Artist: \"{artist[:30]}\"",
+                command=lambda: self._copy_to_clipboard(artist)
+            )
+        if title and artist:
+            copy_menu.add_command(
+                label=f"Copy: \"{title[:25]} - {artist[:20]}\"",
+                command=lambda: self._copy_to_clipboard(f"{title} - {artist}")
+            )
+        
+        # Copy UMPG URL
+        umpg_url = result.get('umpg_url_artist', '')
+        if umpg_url:
+            copy_menu.add_command(
+                label="Copy UMPG Search URL",
+                command=lambda: self._copy_to_clipboard(umpg_url)
+            )
+        
+        context_menu.add_cascade(label="Copy", menu=copy_menu)
+        
+        # Show menu
+        try:
+            context_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            context_menu.grab_release()
+    
+    def _copy_to_clipboard(self, text):
+        """Copy text to clipboard"""
+        try:
+            self.clipboard_clear()
+            self.clipboard_append(text)
+        except Exception:
+            pass
+    
+    def clear_results(self):
+        """Clear all results"""
+        for item in self.results_tree.get_children():
+            self.results_tree.delete(item)
+        self.results = []
+        self.result_count_var.set("0 results")
+    
+    def export_results(self):
+        """Export results to CSV"""
+        if not self.results:
+            messagebox.showwarning("Warning", "No results to export")
+            return
+        
+        file_path = filedialog.asksaveasfilename(
+            title="Export UMG Check Results",
+            defaultextension=".csv",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
+        )
+        
+        if not file_path:
+            return
+        
+        try:
+            with open(file_path, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.DictWriter(f, fieldnames=[
+                    'Artist', 'Song Title', 'UMPG Status', 'Artist Protected', 'Song Protected',
+                    'Decade', 'Source', 'UMPG URL Artist', 'UMPG URL Song'
+                ])
+                writer.writeheader()
+                
+                for result in self.results:
+                    writer.writerow({
+                        'Artist': result.get('artist', ''),
+                        'Song Title': result.get('title', ''),
+                        'UMPG Status': result.get('status', 'Not Checked'),
+                        'Artist Protected': 'Yes' if result.get('artist_protected') else 'No',
+                        'Song Protected': 'Yes' if result.get('song_protected') else 'No',
+                        'Decade': result.get('decade', ''),
+                        'Source': result.get('source', ''),
+                        'UMPG URL Artist': result.get('umpg_url_artist', ''),
+                        'UMPG URL Song': result.get('umpg_url_song', '')
+                    })
+            
+            messagebox.showinfo("Success", f"Exported {len(self.results)} results to {file_path}")
+        
+        except Exception as e:
+            messagebox.showerror("Error", f"Export failed: {str(e)}")
+    
+    def add_to_main_results(self):
+        """Add UMPG-protected items to the main results view"""
+        protected_results = [r for r in self.results if r.get('is_protected')]
+        
+        if not protected_results:
+            messagebox.showwarning("Warning", "No UMPG-protected items to add")
+            return
+        
+        added = 0
+        for result in protected_results:
+            title = result.get('title', '')
+            artist = result.get('artist', '')
+            status = result.get('status', 'PROTECTED')
+            
+            # Check local UMPG artist list too
+            is_umpg, umpg_match = self.checker_app.check_umpg_artist(artist)
+            
+            main_result = {
+                'song_title': title,
+                'artist': artist,
+                'cover_count': 0,
+                'claims_count': 0,
+                'strikes_count': 0,
+                'claims_percent': 0,
+                'strikes_percent': 0,
+                'oldest_age': 'N/A',
+                'avg_views': 0,
+                'is_umpg': True,  # Confirmed via UMPG website
+                'ump_artist_match': umpg_match or artist,
+                'risk_level': 'ROT',
+                'recommendation': f'UMPG PROTECTED: {status}',
+                'covers': [],
+                'analysis': {'oldest_age': 'N/A', 'avg_views': 0}
+            }
+            
+            self.checker_app.add_result(main_result)
+            added += 1
+        
+        messagebox.showinfo("Added", f"Added {added} UMPG-protected songs to main results")
 
 
 class SettingsDialog(tk.Toplevel):
