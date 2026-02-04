@@ -5079,6 +5079,7 @@ Vibe: {vibe}
             variation_prompt = f"{final_prompt}\n\nPROFILE VARIATION {i+1}: keep the same character identity while varying camera angle, lighting, and subtle expression."
             
             try:
+                self.log_prompt_debug('Persona Images: profile image', variation_prompt, None)
                 selected_profile = self.profile_image_profile_var.get() if hasattr(self, 'profile_image_profile_var') else 'image_gen'
                 result = self.azure_image(variation_prompt, size='1024x1024', profile=selected_profile)
                 if result['success']:
@@ -5268,6 +5269,7 @@ TECHNICAL REQUIREMENTS:
                 prompt += "no background elements, no props except those described in the base prompt, "
                 prompt += "sharp focus, professional portrait photography style, reference sheet style, full-body shot"
             
+            self.log_prompt_debug('Persona Images: Front reference image', prompt, None)
             # Use a supported tall aspect ratio to reduce cropping
             selected_profile = self.reference_image_profile_var.get() if hasattr(self, 'reference_image_profile_var') else 'image_gen'
             result = self.azure_image(prompt, size='1024x1536', profile=selected_profile)
@@ -5374,6 +5376,7 @@ TECHNICAL REQUIREMENTS:
                 image_prompt += "even studio lighting with subtle dramatic shadows, high quality professional photography, "
                 image_prompt += "no background elements, sharp focus, professional portrait photography style, reference sheet style, full-body shot"
                 
+                self.log_prompt_debug(f'Persona Images: {view} reference image', image_prompt, None)
                 # Use a supported tall aspect ratio to reduce cropping
                 selected_profile = self.reference_image_profile_var.get() if hasattr(self, 'reference_image_profile_var') else 'image_gen'
                 result_img = self.azure_image(image_prompt, size='1024x1536', profile=selected_profile)
@@ -5631,6 +5634,7 @@ TECHNICAL REQUIREMENTS:
                     prompt += "no background elements, no props except those described in the base prompt, "
                     prompt += "sharp focus, professional portrait photography style, reference sheet style, full-body shot"
                 
+                self.log_prompt_debug('Persona Images: Front reference image (regenerate)', prompt, None)
                 selected_profile = self.reference_image_profile_var.get() if hasattr(self, 'reference_image_profile_var') else 'image_gen'
                 result = self.azure_image(prompt, size='1024x1536', profile=selected_profile)
                 if result.get('success'):
@@ -5691,6 +5695,7 @@ TECHNICAL REQUIREMENTS:
             image_prompt += "even studio lighting with subtle dramatic shadows, high quality professional photography, "
             image_prompt += "no background elements, sharp focus, professional portrait photography style, reference sheet style, full-body shot"
             
+            self.log_prompt_debug(f'Persona Images: {view} reference image (regenerate)', image_prompt, None)
             selected_profile = self.reference_image_profile_var.get() if hasattr(self, 'reference_image_profile_var') else 'image_gen'
             result_img = self.azure_image(image_prompt, size='1024x1536', profile=selected_profile)
             if result_img.get('success'):
