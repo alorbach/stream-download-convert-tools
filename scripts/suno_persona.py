@@ -5953,9 +5953,16 @@ TECHNICAL REQUIREMENTS:
         ttk.Label(video_loop_toolbar, text='sec', font=('TkDefaultFont', 8)).pack(side=tk.LEFT)
         
         self.video_loop_multiscene_var = tk.BooleanVar(value=False)
-        multiscene_cb = ttk.Checkbutton(video_loop_toolbar, text='Multi-Scene (2s)', variable=self.video_loop_multiscene_var)
+        multiscene_cb = ttk.Checkbutton(video_loop_toolbar, text='Multi-Scene', variable=self.video_loop_multiscene_var)
         multiscene_cb.pack(side=tk.LEFT, padx=(10, 2))
-        create_tooltip(multiscene_cb, 'Generate scene-switching prompt with scene changes every 2 seconds')
+        create_tooltip(multiscene_cb, 'Generate scene-switching prompt with direct camera cuts')
+        
+        ttk.Label(video_loop_toolbar, text='Scene dur:', font=('TkDefaultFont', 8)).pack(side=tk.LEFT, padx=(6, 2))
+        self.video_loop_scene_duration_var = tk.StringVar(value='2')
+        video_loop_scene_dur_spin = ttk.Spinbox(video_loop_toolbar, from_=1, to=10, textvariable=self.video_loop_scene_duration_var, width=3)
+        video_loop_scene_dur_spin.pack(side=tk.LEFT, padx=2)
+        ttk.Label(video_loop_toolbar, text='sec', font=('TkDefaultFont', 8)).pack(side=tk.LEFT)
+        create_tooltip(video_loop_scene_dur_spin, 'Duration of each scene in multi-scene mode (1-10 seconds)')
         
         self.video_loop_text = scrolledtext.ScrolledText(video_loop_frame, height=6, wrap=tk.WORD, width=60)
         self.video_loop_text.pack(fill=tk.BOTH, expand=True)
@@ -6117,9 +6124,16 @@ TECHNICAL REQUIREMENTS:
         ttk.Label(video_size_bar, text='sec').pack(side=tk.LEFT, padx=(2, 0))
         
         self.album_video_multiscene_var = tk.BooleanVar(value=False)
-        album_multiscene_cb = ttk.Checkbutton(video_size_bar, text='Multi-Scene (2s)', variable=self.album_video_multiscene_var)
+        album_multiscene_cb = ttk.Checkbutton(video_size_bar, text='Multi-Scene', variable=self.album_video_multiscene_var)
         album_multiscene_cb.pack(side=tk.LEFT, padx=(10, 0))
-        create_tooltip(album_multiscene_cb, 'Generate scene-switching prompt with direct camera cuts every 2 seconds')
+        create_tooltip(album_multiscene_cb, 'Generate scene-switching prompt with direct camera cuts')
+        
+        ttk.Label(video_size_bar, text='Scene dur:').pack(side=tk.LEFT, padx=(6, 2))
+        self.album_video_scene_duration_var = tk.StringVar(value='2')
+        album_scene_dur_spin = ttk.Spinbox(video_size_bar, from_=1, to=10, textvariable=self.album_video_scene_duration_var, width=3)
+        album_scene_dur_spin.pack(side=tk.LEFT, padx=2)
+        ttk.Label(video_size_bar, text='sec').pack(side=tk.LEFT, padx=(2, 0))
+        create_tooltip(album_scene_dur_spin, 'Duration of each scene in multi-scene mode (1-10 seconds)')
 
         self.album_video_text = scrolledtext.ScrolledText(album_prompt_frame, height=4, wrap=tk.WORD, width=60)
         self.album_video_text.pack(fill=tk.BOTH, expand=True, pady=(0, 4))
@@ -6235,18 +6249,18 @@ TECHNICAL REQUIREMENTS:
         self.storyboard_setup_count_var = tk.StringVar(value='6')
         ttk.Spinbox(controls_frame, from_=1, to=12, textvariable=self.storyboard_setup_count_var, width=4).pack(side=tk.LEFT, padx=2)
 
-        # Multi-scene options (2-second segments with direct camera cuts)
+        # Multi-scene options (sub-scenes with direct camera cuts)
         self.storyboard_multiscene_var = tk.BooleanVar(value=False)
-        storyboard_multiscene_cb = ttk.Checkbutton(controls_frame, text='Multi-Scene (2s)', variable=self.storyboard_multiscene_var)
+        storyboard_multiscene_cb = ttk.Checkbutton(controls_frame, text='Multi-Scene', variable=self.storyboard_multiscene_var)
         storyboard_multiscene_cb.pack(side=tk.LEFT, padx=(10, 2))
-        create_tooltip(storyboard_multiscene_cb, 'Generate scene prompts with direct camera cuts every 2 seconds within each video segment')
+        create_tooltip(storyboard_multiscene_cb, 'Generate scene prompts with direct camera cuts within each video segment')
 
         ttk.Label(controls_frame, text='Scene dur:', font=('TkDefaultFont', 9, 'bold')).pack(side=tk.LEFT, padx=(10, 5))
         self.storyboard_scene_duration_var = tk.StringVar(value='2')
-        storyboard_scene_dur_spin = ttk.Spinbox(controls_frame, from_=1, to=6, textvariable=self.storyboard_scene_duration_var, width=3)
+        storyboard_scene_dur_spin = ttk.Spinbox(controls_frame, from_=1, to=10, textvariable=self.storyboard_scene_duration_var, width=3)
         storyboard_scene_dur_spin.pack(side=tk.LEFT, padx=2)
         ttk.Label(controls_frame, text='sec', font=('TkDefaultFont', 8)).pack(side=tk.LEFT)
-        create_tooltip(storyboard_scene_dur_spin, 'Duration of each sub-scene within a video segment (default: 2 seconds)')
+        create_tooltip(storyboard_scene_dur_spin, 'Duration of each sub-scene within a video segment (1-10 seconds)')
 
         # Button row for Generate Storyboard and Export Generated Prompts
         button_frame = ttk.Frame(main_frame)
@@ -9662,7 +9676,7 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
             messagebox.showerror('Error', f'Failed to generate cover: {result.get("error", "Unknown error")}')
 
     def generate_album_video_prompt(self):
-        """Generate album-level video loop prompt. Supports multi-scene mode with direct camera cuts every 2 seconds."""
+        """Generate album-level video loop prompt. Supports multi-scene mode with direct camera cuts."""
         if not self.current_persona:
             messagebox.showwarning('Warning', 'Please select a persona first.')
             return
@@ -9675,8 +9689,12 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
         # Get multi-scene settings
         is_multiscene = self.album_video_multiscene_var.get() if hasattr(self, 'album_video_multiscene_var') else False
         video_duration = int(self.album_video_duration_var.get() or 6) if hasattr(self, 'album_video_duration_var') else 6
-        scene_duration = 2  # Scene switch every 2 seconds
-        num_scenes = video_duration // scene_duration if is_multiscene else 1
+        try:
+            scene_duration = int(self.album_video_scene_duration_var.get() or 2) if hasattr(self, 'album_video_scene_duration_var') else 2
+        except Exception:
+            scene_duration = 2
+        scene_duration = max(1, min(10, scene_duration))
+        num_scenes = max(1, video_duration // scene_duration) if is_multiscene else 1
         
         merged_style = self._get_sanitized_style_text()
         visual_aesthetic = self.current_persona.get('visual_aesthetic', '')
@@ -11612,7 +11630,7 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
             self.config(cursor='')
     
     def generate_video_loop(self):
-        """Generate video loop prompt. Supports multi-scene mode with scene switches every 2 seconds."""
+        """Generate video loop prompt. Supports multi-scene mode with scene switches."""
         if not self.current_persona:
             messagebox.showwarning('Warning', 'Please select a persona first.')
             return
@@ -11629,8 +11647,12 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
         # Get multi-scene settings
         is_multiscene = self.video_loop_multiscene_var.get() if hasattr(self, 'video_loop_multiscene_var') else False
         video_duration = int(self.video_loop_duration_var.get() or 6) if hasattr(self, 'video_loop_duration_var') else 6
-        scene_duration = 2  # Scene switch every 2 seconds
-        num_scenes = video_duration // scene_duration if is_multiscene else 1
+        try:
+            scene_duration = int(self.video_loop_scene_duration_var.get() or 2) if hasattr(self, 'video_loop_scene_duration_var') else 2
+        except Exception:
+            scene_duration = 2
+        scene_duration = max(1, min(10, scene_duration))
+        num_scenes = max(1, video_duration // scene_duration) if is_multiscene else 1
         
         # Check if persona reference images exist
         safe_name = self._safe_persona_basename()
@@ -12790,7 +12812,7 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
             scene_duration = int(self.storyboard_scene_duration_var.get() or 2) if hasattr(self, 'storyboard_scene_duration_var') else 2
         except Exception:
             scene_duration = 2
-        scene_duration = max(1, min(6, scene_duration))
+        scene_duration = max(1, min(10, scene_duration))
         subscenes_per_video = seconds_per_video // scene_duration if is_multiscene and scene_duration > 0 else 1
         
         persona_name = self.current_persona.get('name', '')
@@ -13263,7 +13285,7 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
             scene_duration = int(self.storyboard_scene_duration_var.get() or 2) if hasattr(self, 'storyboard_scene_duration_var') else 2
         except Exception:
             scene_duration = 2
-        scene_duration = max(1, min(6, scene_duration))
+        scene_duration = max(1, min(10, scene_duration))
         subscenes_per_video = seconds_per_video // scene_duration if is_multiscene and scene_duration > 0 else 1
         
         prompt = f"Generate ONLY scenes {batch_start} through {batch_end} (out of {total_scenes} total scenes) for this music video storyboard.\n\n"

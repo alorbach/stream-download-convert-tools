@@ -62,16 +62,20 @@ if exist "%ROOT_DIR%\requirements.txt" (
 )
 
 echo.
-echo [INFO] Launching Launcher GUI...
+echo [INFO] Launching Launcher GUI (no console window)...
 echo.
 
-REM Launch the GUI launcher
-"%PYTHON_EXE%" "%ROOT_DIR%\scripts\launcher_gui.py"
-
-if errorlevel 1 (
-    echo [ERROR] Failed to launch GUI launcher.
-    pause
-    exit /b 1
+REM Launch the GUI with pythonw.exe so no command prompt window stays open
+set PYTHONW_EXE=%VENV_DIR%\Scripts\pythonw.exe
+if exist "%PYTHONW_EXE%" (
+    start "" "%PYTHONW_EXE%" "%ROOT_DIR%\scripts\launcher_gui.py"
+) else (
+    "%PYTHON_EXE%" "%ROOT_DIR%\scripts\launcher_gui.py"
+    if errorlevel 1 (
+        echo [ERROR] Failed to launch GUI launcher.
+        pause
+        exit /b 1
+    )
 )
 
 endlocal
