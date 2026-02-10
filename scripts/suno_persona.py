@@ -191,6 +191,75 @@ def load_styles_from_csv(csv_path: str) -> list[dict]:
     return styles
 
 
+def load_styles_from_css(css_path: str) -> list[dict]:
+    """Load styles from a .css-style file into a list of dicts with 'style' and 'prompt'.
+    Supports line-based 'Style Name: prompt text' and block 'Style Name { prompt text }'.
+    """
+    styles = []
+    try:
+        with open(css_path, 'r', encoding='utf-8') as f:
+            text = f.read()
+    except FileNotFoundError:
+        print(f'Error: Styles file not found at {css_path}')
+        return []
+    except Exception as exc:
+        print(f'Error: Failed to read styles file:\n{exc}')
+        return []
+
+    # Block format: "Name { ... }"
+    block_pattern = re.compile(r'([^{\s][^{]*?)\s*\{\s*([^}]*?)\s\}', re.DOTALL)
+    for m in block_pattern.finditer(text):
+        name = (m.group(1) or '').strip().strip('."\'')
+        prompt = (m.group(2) or '').strip()
+        if name:
+            styles.append({'style': name, 'prompt': prompt})
+
+    # Line-based format: "Name: prompt" (only if no blocks found, or add as supplement)
+    if not styles:
+        for line in text.splitlines():
+            line = line.strip()
+            if not line or line.startswith('#') or line.startswith('//'):
+                continue
+            if ':' in line:
+                idx = line.index(':')
+                name = line[:idx].strip().strip('."\'')
+                prompt = line[idx + 1:].strip()
+                if name:
+                    styles.append({'style': name, 'prompt': prompt})
+    return styles
+
+
+def load_styles_from_file(file_path: str) -> list[dict]:
+    """Load styles from a CSV or CSS file. Returns list of dicts with at least 'style' and 'prompt'."""
+    if not file_path or not os.path.isfile(file_path):
+        return []
+    lower = file_path.lower()
+    if lower.endswith('.css'):
+        return load_styles_from_css(file_path)
+    if lower.endswith('.csv'):
+        return load_styles_from_csv(file_path)
+    return []
+
+
+def resolve_styles_import_path(config: dict = None) -> str:
+    """Resolve path for loading styles from CSV/CSS files (default: D:/AI/suno)."""
+    rel = ''
+    if config:
+        rel = (config.get('general', {}) or {}).get('styles_import_path', '') or ''
+    rel = rel.strip() if isinstance(rel, str) else ''
+    if not rel:
+        return 'D:/AI/suno'
+    if os.path.isabs(rel):
+        return rel
+    return os.path.join(get_project_root(config), rel)
+
+
+def get_styles_import_base_name(config: dict) -> str:
+    """Get the base name filter for styles import (files starting with this)."""
+    name = (config.get('general', {}) or {}).get('styles_import_base_name', '') or ''
+    return name.strip() if isinstance(name, str) else ''
+
+
 def resolve_analysis_data_path(config: dict = None) -> str:
     """Resolve path to SongStyleAnalyzer JSON outputs (default: data/)."""
     rel = ''
@@ -307,6 +376,8 @@ def load_config() -> dict:
             "personas_path": "AI/Personas",
             "default_save_path": "",
             "styles_csv_path": "AI/suno/suno_sound_styles.csv",
+            "styles_import_path": "D:/AI/suno",
+            "styles_import_base_name": "",
             "analysis_data_path": "data",
             "auto_import_song_style_from_analysis": True
         },
@@ -1373,7 +1444,10 @@ class BulkCoverDialog(tk.Toplevel):
         
         # Overwrite option
         self.overwrite_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(main_frame, text='Overwrite existing cover files', variable=self.overwrite_var).pack(anchor=tk.W, pady=(0, 15))
+        ttk.Checkbutton(main_frame, text='Overwrite existing cover files', variable=self.overwrite_var).pack(anchor=tk.W, pady=(0, 5))
+        # Include persona in cover (default on; applies when generating missing prompts in bulk)
+        self.include_persona_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(main_frame, text='Include persona in cover', variable=self.include_persona_var).pack(anchor=tk.W, pady=(0, 15))
         
         # Buttons
         btn_frame = ttk.Frame(main_frame)
@@ -1391,7 +1465,8 @@ class BulkCoverDialog(tk.Toplevel):
             'scope': self.scope_var.get(),
             'size': self.size_var.get(),
             'format': self.format_var.get(),
-            'overwrite': self.overwrite_var.get()
+            'overwrite': self.overwrite_var.get(),
+            'include_persona': self.include_persona_var.get()
         }
         self.destroy()
     
@@ -1457,6 +1532,14 @@ class SettingsDialog(tk.Toplevel):
         styles_entry = ttk.Entry(general_frame, textvariable=self.general_vars['styles_csv_path'], width=40)
         styles_entry.grid(row=5, column=1, pady=5, padx=5, sticky=tk.W)
         ttk.Button(general_frame, text='Browse...', command=self.browse_styles_csv).grid(row=5, column=2, pady=5, padx=5)
+
+        ttk.Label(general_frame, text='Load Styles from File (CSV/CSS in folder):', font=('TkDefaultFont', 9, 'bold')).grid(row=6, column=0, sticky=tk.W, pady=(15, 2), columnspan=3)
+        ttk.Label(general_frame, text='Folder:', font=('TkDefaultFont', 8)).grid(row=7, column=0, sticky=tk.W, pady=5, padx=(10, 0))
+        self.general_vars['styles_import_path'] = tk.StringVar(value=general_data.get('styles_import_path', 'D:/AI/suno'))
+        ttk.Entry(general_frame, textvariable=self.general_vars['styles_import_path'], width=40).grid(row=7, column=1, pady=5, padx=5, sticky=tk.W)
+        ttk.Label(general_frame, text='Base name (filter):', font=('TkDefaultFont', 8)).grid(row=8, column=0, sticky=tk.W, pady=5, padx=(10, 0))
+        self.general_vars['styles_import_base_name'] = tk.StringVar(value=general_data.get('styles_import_base_name', ''))
+        ttk.Entry(general_frame, textvariable=self.general_vars['styles_import_base_name'], width=40).grid(row=8, column=1, pady=5, padx=5, sticky=tk.W)
         
         profiles = self.config.get('profiles', {})
         
@@ -1722,7 +1805,9 @@ class SettingsDialog(tk.Toplevel):
             'base_path': self.general_vars['base_path'].get(),
             'personas_path': self.general_vars['personas_path'].get(),
             'default_save_path': self.config.get('general', {}).get('default_save_path', ''),
-            'styles_csv_path': self.general_vars['styles_csv_path'].get()
+            'styles_csv_path': self.general_vars['styles_csv_path'].get(),
+            'styles_import_path': self.general_vars['styles_import_path'].get(),
+            'styles_import_base_name': self.general_vars['styles_import_base_name'].get()
         }
         
         profiles = {}
@@ -2533,6 +2618,7 @@ def load_song_config(song_path: str) -> dict:
         'storyboard_image_size': '3:2 (1536x1024)',
         'album_cover_size': '1:1 (1024x1024)',
         'album_cover_format': 'PNG',
+        'include_persona_in_cover': True,
         'video_loop_size': '9:16 (720x1280)',
         'video_loop_duration': 6,
         'video_loop_multiscene': False,
@@ -5721,14 +5807,18 @@ TECHNICAL REQUIREMENTS:
         """Create the AI Songs management tab."""
         main_frame = ttk.Frame(parent, padding=10)
         main_frame.pack(fill=tk.BOTH, expand=True)
+        self.include_persona_in_cover_var = tk.BooleanVar(value=True)
         
         top_frame = ttk.Frame(main_frame)
         top_frame.pack(fill=tk.X, pady=(0, 10))
-        
-        ttk.Button(top_frame, text='New Song', command=self.new_song).pack(side=tk.LEFT, padx=5)
-        ttk.Button(top_frame, text='Create Full Album (AI)', command=self.create_full_album_ai).pack(side=tk.LEFT, padx=5)
-        ttk.Button(top_frame, text='Clone Song', command=self.clone_song).pack(side=tk.LEFT, padx=5)
-        ttk.Button(top_frame, text='Delete Song', command=self.delete_song).pack(side=tk.LEFT, padx=5)
+        top_row1 = ttk.Frame(top_frame)
+        top_row1.pack(fill=tk.X, pady=(0, 4))
+        ttk.Button(top_row1, text='New Song', command=self.new_song).pack(side=tk.LEFT, padx=5)
+        ttk.Button(top_row1, text='Clone Song', command=self.clone_song).pack(side=tk.LEFT, padx=5)
+        ttk.Button(top_row1, text='Delete Song', command=self.delete_song).pack(side=tk.LEFT, padx=5)
+        top_row2 = ttk.Frame(top_frame)
+        top_row2.pack(fill=tk.X)
+        ttk.Button(top_row2, text='Create Full Album (AI)', command=self.create_full_album_ai).pack(side=tk.LEFT, padx=5)
         
         songs_list_frame = ttk.LabelFrame(main_frame, text='Songs', padding=5)
         songs_list_frame.pack(fill=tk.X, pady=(0, 10))  # Fixed height, don't expand
@@ -5780,8 +5870,12 @@ TECHNICAL REQUIREMENTS:
         # Action buttons above tabs
         header_actions = ttk.Frame(parent)
         header_actions.pack(fill=tk.X, pady=(0, 6))
-        ttk.Button(header_actions, text='Save Song', command=self.save_song).pack(side=tk.LEFT, padx=5)
-        ttk.Button(header_actions, text='Export YouTube Description', command=self.export_youtube_description).pack(side=tk.LEFT, padx=5)
+        header_row1 = ttk.Frame(header_actions)
+        header_row1.pack(fill=tk.X, pady=(0, 4))
+        ttk.Button(header_row1, text='Save Song', command=self.save_song).pack(side=tk.LEFT, padx=5)
+        header_row2 = ttk.Frame(header_actions)
+        header_row2.pack(fill=tk.X)
+        ttk.Button(header_row2, text='Export YouTube Description', command=self.export_youtube_description).pack(side=tk.LEFT, padx=5)
 
         details_notebook = ttk.Notebook(parent)
         details_notebook.pack(fill=tk.BOTH, expand=True)
@@ -5826,16 +5920,16 @@ TECHNICAL REQUIREMENTS:
         
         ttk.Label(scrollable_frame, text='Song Name:', font=('TkDefaultFont', 9, 'bold')).grid(row=0, column=0, sticky=tk.W, pady=5)
         self.song_name_var = tk.StringVar()
-        ttk.Entry(scrollable_frame, textvariable=self.song_name_var, width=60).grid(row=0, column=1, columnspan=2, sticky=tk.W+tk.E, pady=5, padx=5)
+        ttk.Entry(scrollable_frame, textvariable=self.song_name_var).grid(row=0, column=1, columnspan=2, sticky=tk.W+tk.E, pady=5, padx=5)
         
         ttk.Label(scrollable_frame, text='Full Song Name:', font=('TkDefaultFont', 9, 'bold')).grid(row=1, column=0, sticky=tk.W, pady=5)
         self.full_song_name_var = tk.StringVar()
-        ttk.Entry(scrollable_frame, textvariable=self.full_song_name_var, width=60).grid(row=1, column=1, columnspan=2, sticky=tk.W+tk.E, pady=5, padx=5)
+        ttk.Entry(scrollable_frame, textvariable=self.full_song_name_var).grid(row=1, column=1, columnspan=2, sticky=tk.W+tk.E, pady=5, padx=5)
         ttk.Button(scrollable_frame, text='Generate', command=self.generate_full_song_name).grid(row=1, column=3, padx=5)
         
         ttk.Label(scrollable_frame, text='Persona Image Preset:', font=('TkDefaultFont', 9, 'bold')).grid(row=2, column=0, sticky=tk.W, pady=5)
         self.song_persona_preset_var = tk.StringVar()
-        self.song_persona_preset_combo = ttk.Combobox(scrollable_frame, textvariable=self.song_persona_preset_var, state='readonly', width=40)
+        self.song_persona_preset_combo = ttk.Combobox(scrollable_frame, textvariable=self.song_persona_preset_var, state='readonly')
         self.song_persona_preset_combo.grid(row=2, column=1, columnspan=2, sticky=tk.W+tk.E, pady=5, padx=5)
         ttk.Button(scrollable_frame, text='Refresh Presets', command=self.refresh_song_preset_options).grid(row=2, column=3, padx=5)
         
@@ -5844,11 +5938,11 @@ TECHNICAL REQUIREMENTS:
         self.play_mp3_button.grid(row=1, column=4, padx=5)
         
         ttk.Label(scrollable_frame, text='Lyric Ideas:', font=('TkDefaultFont', 9, 'bold')).grid(row=3, column=0, sticky=tk.NW, pady=5)
-        self.lyric_ideas_text = scrolledtext.ScrolledText(scrollable_frame, height=3, wrap=tk.WORD, width=60)
+        self.lyric_ideas_text = scrolledtext.ScrolledText(scrollable_frame, height=3, wrap=tk.WORD)
         self.lyric_ideas_text.grid(row=3, column=1, columnspan=2, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
         
         ttk.Label(scrollable_frame, text='Lyrics:', font=('TkDefaultFont', 9, 'bold')).grid(row=4, column=0, sticky=tk.NW, pady=5)
-        self.lyrics_text = scrolledtext.ScrolledText(scrollable_frame, height=6, wrap=tk.WORD, width=60)
+        self.lyrics_text = scrolledtext.ScrolledText(scrollable_frame, height=6, wrap=tk.WORD)
         self.lyrics_text.grid(row=4, column=1, columnspan=2, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
         lyrics_btn_frame = ttk.Frame(scrollable_frame)
         lyrics_btn_frame.grid(row=4, column=3, padx=5, pady=5, sticky=tk.N)
@@ -5857,17 +5951,18 @@ TECHNICAL REQUIREMENTS:
         ttk.Button(lyrics_btn_frame, text='Copy Distro Lyrics', command=self.copy_distro_lyrics).pack(fill=tk.X)
         
         ttk.Label(scrollable_frame, text='Song Style:', font=('TkDefaultFont', 9, 'bold')).grid(row=5, column=0, sticky=tk.NW, pady=5)
-        self.song_style_text = scrolledtext.ScrolledText(scrollable_frame, height=3, wrap=tk.WORD, width=60)
+        self.song_style_text = scrolledtext.ScrolledText(scrollable_frame, height=3, wrap=tk.WORD)
         self.song_style_text.grid(row=5, column=1, columnspan=2, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
 
         style_btn_frame = ttk.Frame(scrollable_frame)
         style_btn_frame.grid(row=5, column=3, padx=5, pady=5, sticky=tk.N)
         ttk.Button(style_btn_frame, text='Select Styles...', command=lambda: self.open_style_selector(False)).pack(fill=tk.X, pady=(0, 4))
         ttk.Button(style_btn_frame, text='Select + Merge', command=lambda: self.open_style_selector(True)).pack(fill=tk.X, pady=(0, 4))
-        ttk.Button(style_btn_frame, text='Import Analysis', command=self.import_song_style_from_analysis_dialog).pack(fill=tk.X)
+        ttk.Button(style_btn_frame, text='Import Analysis', command=self.import_song_style_from_analysis_dialog).pack(fill=tk.X, pady=(0, 4))
+        ttk.Button(style_btn_frame, text='Load Styles from File...', command=self.load_styles_from_file_dialog).pack(fill=tk.X)
         
         ttk.Label(scrollable_frame, text='Merged Style:', font=('TkDefaultFont', 9, 'bold')).grid(row=6, column=0, sticky=tk.NW, pady=5)
-        self.merged_style_text = scrolledtext.ScrolledText(scrollable_frame, height=3, wrap=tk.WORD, width=60)
+        self.merged_style_text = scrolledtext.ScrolledText(scrollable_frame, height=3, wrap=tk.WORD)
         self.merged_style_text.grid(row=6, column=1, columnspan=2, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
         merged_btn_frame = ttk.Frame(scrollable_frame)
         merged_btn_frame.grid(row=6, column=3, padx=5, pady=5, sticky=tk.N)
@@ -5875,14 +5970,14 @@ TECHNICAL REQUIREMENTS:
         ttk.Button(merged_btn_frame, text='Improve', command=self.improve_merged_style).pack(fill=tk.X)
 
         ttk.Label(scrollable_frame, text='Exclude Style (Negative):', font=('TkDefaultFont', 9, 'bold')).grid(row=7, column=0, sticky=tk.NW, pady=5)
-        self.exclude_style_text = scrolledtext.ScrolledText(scrollable_frame, height=2, wrap=tk.WORD, width=60)
+        self.exclude_style_text = scrolledtext.ScrolledText(scrollable_frame, height=2, wrap=tk.WORD)
         self.exclude_style_text.grid(row=7, column=1, columnspan=2, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
         exclude_btn_frame = ttk.Frame(scrollable_frame)
         exclude_btn_frame.grid(row=7, column=3, padx=5, pady=5, sticky=tk.N)
         ttk.Button(exclude_btn_frame, text='Clear', command=lambda: self.exclude_style_text.delete('1.0', tk.END)).pack(fill=tk.X)
 
         ttk.Label(scrollable_frame, text='Storyboard Theme / Global Image Style:', font=('TkDefaultFont', 9, 'bold')).grid(row=8, column=0, sticky=tk.NW, pady=5)
-        self.storyboard_theme_text = scrolledtext.ScrolledText(scrollable_frame, height=3, wrap=tk.WORD, width=60)
+        self.storyboard_theme_text = scrolledtext.ScrolledText(scrollable_frame, height=3, wrap=tk.WORD)
         self.storyboard_theme_text.grid(row=8, column=1, columnspan=2, sticky=tk.W+tk.E+tk.N+tk.S, pady=5, padx=5)
         theme_btn_frame = ttk.Frame(scrollable_frame)
         theme_btn_frame.grid(row=8, column=3, padx=5, pady=5, sticky=tk.N)
@@ -5898,35 +5993,37 @@ TECHNICAL REQUIREMENTS:
         
         album_cover_toolbar = ttk.Frame(album_cover_frame)
         album_cover_toolbar.pack(fill=tk.X, padx=2, pady=2)
-        ttk.Button(album_cover_toolbar, text='Generate Prompt', command=self.generate_album_cover).pack(side=tk.LEFT, padx=2)
-        ttk.Button(album_cover_toolbar, text='Improve', command=self.improve_album_cover_prompt).pack(side=tk.LEFT, padx=2)
-        ttk.Button(album_cover_toolbar, text='Translate', command=lambda: self.translate_prompt(self.album_cover_text, 'Song Cover Prompt')).pack(side=tk.LEFT, padx=2)
-        ttk.Button(album_cover_toolbar, text='Run', command=self.run_image_model).pack(side=tk.LEFT, padx=2)
-        ttk.Button(album_cover_toolbar, text='Preview', command=self.preview_last_song_cover).pack(side=tk.LEFT, padx=2)
-        ttk.Button(album_cover_toolbar, text='Bulk Generate Covers', command=self.bulk_generate_covers).pack(side=tk.LEFT, padx=2)
-        
-        ttk.Label(album_cover_toolbar, text='Size:', font=('TkDefaultFont', 8)).pack(side=tk.LEFT, padx=(10, 2))
+        cover_row1 = ttk.Frame(album_cover_toolbar)
+        cover_row1.pack(fill=tk.X, pady=(0, 4))
+        ttk.Button(cover_row1, text='Generate Prompt', command=self.generate_album_cover).pack(side=tk.LEFT, padx=2)
+        ttk.Button(cover_row1, text='Improve', command=self.improve_album_cover_prompt).pack(side=tk.LEFT, padx=2)
+        ttk.Button(cover_row1, text='Translate', command=lambda: self.translate_prompt(self.album_cover_text, 'Song Cover Prompt')).pack(side=tk.LEFT, padx=2)
+        ttk.Button(cover_row1, text='Run', command=self.run_image_model).pack(side=tk.LEFT, padx=2)
+        ttk.Button(cover_row1, text='Preview', command=self.preview_last_song_cover).pack(side=tk.LEFT, padx=2)
+        ttk.Button(cover_row1, text='Bulk Generate Covers', command=self.bulk_generate_covers).pack(side=tk.LEFT, padx=2)
+        ttk.Checkbutton(cover_row1, text='Include persona in cover', variable=self.include_persona_in_cover_var).pack(side=tk.LEFT, padx=(10, 2))
+        cover_row2 = ttk.Frame(album_cover_toolbar)
+        cover_row2.pack(fill=tk.X)
+        ttk.Label(cover_row2, text='Size:', font=('TkDefaultFont', 8)).pack(side=tk.LEFT, padx=(0, 2))
         self.album_cover_size_var = tk.StringVar(value='1:1 (1024x1024)')
-        album_cover_size_combo = ttk.Combobox(album_cover_toolbar, textvariable=self.album_cover_size_var, 
-                                              values=['1:1 (1024x1024)', '3:2 (1536x1024)', '16:9 (1792x1024)', 
+        album_cover_size_combo = ttk.Combobox(cover_row2, textvariable=self.album_cover_size_var,
+                                              values=['1:1 (1024x1024)', '3:2 (1536x1024)', '16:9 (1792x1024)',
                                                       '4:3 (1365x1024)', '2:3 (1024x1536)', '9:16 (1024x1792)', '21:9 (2048x1024)'],
                                               state='readonly', width=18)
         album_cover_size_combo.pack(side=tk.LEFT, padx=2)
-        
-        ttk.Label(album_cover_toolbar, text='Format:', font=('TkDefaultFont', 8)).pack(side=tk.LEFT, padx=(10, 2))
+        ttk.Label(cover_row2, text='Format:', font=('TkDefaultFont', 8)).pack(side=tk.LEFT, padx=(10, 2))
         self.album_cover_format_var = tk.StringVar(value='PNG')
-        album_cover_format_combo = ttk.Combobox(album_cover_toolbar, textvariable=self.album_cover_format_var, 
+        album_cover_format_combo = ttk.Combobox(cover_row2, textvariable=self.album_cover_format_var,
                                                values=['PNG', 'JPEG'], state='readonly', width=8)
         album_cover_format_combo.pack(side=tk.LEFT, padx=2)
-        
-        ttk.Label(album_cover_toolbar, text='API Profile:', font=('TkDefaultFont', 8)).pack(side=tk.LEFT, padx=(10, 2))
+        ttk.Label(cover_row2, text='API Profile:', font=('TkDefaultFont', 8)).pack(side=tk.LEFT, padx=(10, 2))
         image_profiles = self._get_available_image_profiles()
         self.album_cover_profile_var = tk.StringVar(value='image_gen' if 'image_gen' in image_profiles else (image_profiles[0] if image_profiles else 'image_gen'))
-        album_cover_profile_combo = ttk.Combobox(album_cover_toolbar, textvariable=self.album_cover_profile_var, 
+        album_cover_profile_combo = ttk.Combobox(cover_row2, textvariable=self.album_cover_profile_var,
                                                  values=image_profiles, state='readonly', width=15)
         album_cover_profile_combo.pack(side=tk.LEFT, padx=2)
         
-        self.album_cover_text = scrolledtext.ScrolledText(album_cover_frame, height=6, wrap=tk.WORD, width=60)
+        self.album_cover_text = scrolledtext.ScrolledText(album_cover_frame, height=6, wrap=tk.WORD)
         self.album_cover_text.pack(fill=tk.BOTH, expand=True)
         
         video_loop_frame = ttk.Frame(ai_results_notebook)
@@ -5964,7 +6061,7 @@ TECHNICAL REQUIREMENTS:
         ttk.Label(video_loop_toolbar, text='sec', font=('TkDefaultFont', 8)).pack(side=tk.LEFT)
         create_tooltip(video_loop_scene_dur_spin, 'Duration of each scene in multi-scene mode (1-10 seconds)')
         
-        self.video_loop_text = scrolledtext.ScrolledText(video_loop_frame, height=6, wrap=tk.WORD, width=60)
+        self.video_loop_text = scrolledtext.ScrolledText(video_loop_frame, height=6, wrap=tk.WORD)
         self.video_loop_text.pack(fill=tk.BOTH, expand=True)
         
         extracted_lyrics_frame = ttk.Frame(ai_results_notebook)
@@ -5972,7 +6069,9 @@ TECHNICAL REQUIREMENTS:
         self.create_extracted_lyrics_tab(extracted_lyrics_frame)
         
         scrollable_frame.columnconfigure(1, weight=1)
-        scrollable_frame.rowconfigure(4, weight=1)
+        scrollable_frame.columnconfigure(2, weight=1)
+        for r in (3, 4, 5, 6, 7, 8):
+            scrollable_frame.rowconfigure(r, weight=1)
         scrollable_frame.rowconfigure(9, weight=1)
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
@@ -6078,13 +6177,18 @@ TECHNICAL REQUIREMENTS:
 
         cover_bar = ttk.Frame(album_prompt_frame)
         cover_bar.pack(fill=tk.X, pady=(0, 2))
-        ttk.Label(cover_bar, text='Album Cover:', font=('TkDefaultFont', 9, 'bold')).pack(side=tk.LEFT)
-        ttk.Button(cover_bar, text='Generate Prompt', command=self.generate_album_cover_prompt_album).pack(side=tk.LEFT, padx=4)
-        ttk.Button(cover_bar, text='Improve', command=self.improve_album_cover_prompt_album).pack(side=tk.LEFT, padx=4)
-        ttk.Button(cover_bar, text='Translate', command=lambda: self.translate_prompt(self.album_cover_album_text, 'Album Cover Prompt')).pack(side=tk.LEFT, padx=4)
-        ttk.Button(cover_bar, text='Run Cover Image', command=self.run_album_cover_image).pack(side=tk.LEFT, padx=4)
-        ttk.Button(cover_bar, text='Preview', command=self.preview_last_album_cover).pack(side=tk.LEFT, padx=4)
-        ttk.Button(cover_bar, text='Bulk Generate Covers', command=self.bulk_generate_covers).pack(side=tk.LEFT, padx=4)
+        cover_album_row1 = ttk.Frame(cover_bar)
+        cover_album_row1.pack(fill=tk.X, pady=(0, 4))
+        ttk.Label(cover_album_row1, text='Album Cover:', font=('TkDefaultFont', 9, 'bold')).pack(side=tk.LEFT)
+        ttk.Checkbutton(cover_album_row1, text='Include persona in cover', variable=self.include_persona_in_cover_var).pack(side=tk.LEFT, padx=(4, 0))
+        ttk.Button(cover_album_row1, text='Generate Prompt', command=self.generate_album_cover_prompt_album).pack(side=tk.LEFT, padx=4)
+        ttk.Button(cover_album_row1, text='Improve', command=self.improve_album_cover_prompt_album).pack(side=tk.LEFT, padx=4)
+        ttk.Button(cover_album_row1, text='Translate', command=lambda: self.translate_prompt(self.album_cover_album_text, 'Album Cover Prompt')).pack(side=tk.LEFT, padx=4)
+        ttk.Button(cover_album_row1, text='Run Cover Image', command=self.run_album_cover_image).pack(side=tk.LEFT, padx=4)
+        ttk.Button(cover_album_row1, text='Preview', command=self.preview_last_album_cover).pack(side=tk.LEFT, padx=4)
+        cover_album_row2 = ttk.Frame(cover_bar)
+        cover_album_row2.pack(fill=tk.X)
+        ttk.Button(cover_album_row2, text='Bulk Generate Covers', command=self.bulk_generate_covers).pack(side=tk.LEFT, padx=4)
 
         size_bar = ttk.Frame(album_prompt_frame)
         size_bar.pack(fill=tk.X, pady=(0, 2))
@@ -8105,6 +8209,8 @@ TECHNICAL REQUIREMENTS:
             self.album_cover_size_var.set(self.current_song.get('album_cover_size', '1:1 (1024x1024)'))
         if hasattr(self, 'album_cover_format_var'):
             self.album_cover_format_var.set(self.current_song.get('album_cover_format', 'PNG'))
+        if hasattr(self, 'include_persona_in_cover_var'):
+            self.include_persona_in_cover_var.set(bool(self.current_song.get('include_persona_in_cover', True)))
         if hasattr(self, 'video_loop_size_var'):
             self.video_loop_size_var.set(self.current_song.get('video_loop_size', '9:16 (720x1280)'))
         if hasattr(self, 'video_loop_duration_var'):
@@ -8664,6 +8770,7 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
             'storyboard_image_size': self.storyboard_image_size_var.get() if hasattr(self, 'storyboard_image_size_var') else '3:2 (1536x1024)',
             'album_cover_size': self.album_cover_size_var.get() if hasattr(self, 'album_cover_size_var') else '1:1 (1024x1024)',
             'album_cover_format': self.album_cover_format_var.get() if hasattr(self, 'album_cover_format_var') else 'PNG',
+            'include_persona_in_cover': bool(self.include_persona_in_cover_var.get()) if hasattr(self, 'include_persona_in_cover_var') else True,
             'video_loop_size': self.video_loop_size_var.get() if hasattr(self, 'video_loop_size_var') else '9:16 (720x1280)',
             'video_loop_duration': int(self.video_loop_duration_var.get() or 6) if hasattr(self, 'video_loop_duration_var') else 6,
             'video_loop_multiscene': bool(self.video_loop_multiscene_var.get()) if hasattr(self, 'video_loop_multiscene_var') else False,
@@ -9533,6 +9640,7 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
         if not self.current_persona:
             messagebox.showwarning('Warning', 'Please select a persona first.')
             return
+        include_persona = self.include_persona_in_cover_var.get() if hasattr(self, 'include_persona_in_cover_var') else True
         album_name = self.album_name_var.get().strip()
         if not album_name:
             messagebox.showwarning('Warning', 'Enter an album name first.')
@@ -9549,24 +9657,28 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
 
         merged_style = self._get_sanitized_style_text()
         storyboard_theme = self.storyboard_theme_text.get('1.0', tk.END).strip() if hasattr(self, 'storyboard_theme_text') else ''
-        visual_aesthetic = self.current_persona.get('visual_aesthetic', '')
-        base_image_prompt = self.current_persona.get('base_image_prompt', '')
-        vibe = self.current_persona.get('vibe', '')
-        preset_key = self._get_song_persona_preset_key()
-        base_path = self.get_persona_image_base_path(preset_key)
-        safe_name = self._safe_persona_basename()
+        visual_aesthetic = self.current_persona.get('visual_aesthetic', '') if include_persona else ''
+        base_image_prompt = self.current_persona.get('base_image_prompt', '') if include_persona else ''
+        vibe = self.current_persona.get('vibe', '') if include_persona else ''
         references = []
-        for view in ['Front', 'Side', 'Back']:
-            p = os.path.join(base_path, f'{safe_name}-{view}.png')
-            if os.path.exists(p):
-                references.append(p)
+        if include_persona:
+            preset_key = self._get_song_persona_preset_key()
+            base_path = self.get_persona_image_base_path(preset_key)
+            safe_name = self._safe_persona_basename()
+            for view in ['Front', 'Side', 'Back']:
+                p = os.path.join(base_path, f'{safe_name}-{view}.png')
+                if os.path.exists(p):
+                    references.append(p)
 
         prompt = (
             f"Create an album cover prompt for the album \"{album_name}\"."
             f"\nSongs: {', '.join(song_titles) if song_titles else 'N/A'}"
-            f"\nPersona: {self.current_persona.get('name', '')}"
             f"\nMerged Style: {merged_style}"
         )
+        if include_persona:
+            prompt += f"\nPersona: {self.current_persona.get('name', '')}"
+        else:
+            prompt += "\nCRITICAL: No persona. No human figures, characters, or people in the image. Cover must be purely environmental, abstract, symbolic, or atmospheric."
         if storyboard_theme:
             prompt += f"\nStoryboard Theme (primary aesthetic): {storyboard_theme}"
         if visual_aesthetic:
@@ -9577,7 +9689,11 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
             prompt += f"\nPersona Vibe: {vibe}"
         prompt += (
             "\nReturn only the album cover image prompt text."
-            "\nMANDATORY TYPOGRAPHY: Render the full album title and persona/artist name verbatim, with no truncation, no abbreviation, and no ellipsis. Text must be fully readable in the final cover."
+            "\nMANDATORY TYPOGRAPHY: Render the full album title verbatim, with no truncation, no abbreviation, and no ellipsis. Text must be fully readable in the final cover."
+        )
+        if include_persona:
+            prompt += " Also render the persona/artist name verbatim."
+        prompt += (
             "\nTEXT LAYOUT RULES: Reserve clear space so the full title and artist fit without clipping. Do not crop or cut off any characters. Adjust composition/scale to keep 100% of the text visible and readable. No ellipsis, no partial words."
             "\nIMPORTANT: If any song names contain parenthetical content (e.g., ' - (devotional folk meditative)'), ignore it completely. Do not include any parenthetical descriptions or style keywords in the album cover prompt. Use only the core song titles without any parenthetical additions."
         )
@@ -10749,6 +10865,121 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
         dialog.bind('<Escape>', lambda _e: dialog.destroy())
         filter_entry.focus_set()
 
+    def load_styles_from_file_dialog(self):
+        """Load styles from a CSV or CSS file in the configured styles import path (e.g. D:\\AI\\suno), filtered by base name."""
+        import_dir = resolve_styles_import_path(self.ai_config)
+        base_name = get_styles_import_base_name(self.ai_config)
+        if not os.path.isdir(import_dir):
+            import_dir = os.getcwd()
+
+        dialog = tk.Toplevel(self)
+        dialog.title('Load Styles from File')
+        dialog.geometry('560x420')
+        dialog.transient(self)
+        dialog.grab_set()
+
+        main = ttk.Frame(dialog, padding=10)
+        main.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(main, text='Folder:', font=('TkDefaultFont', 9, 'bold')).pack(anchor=tk.W)
+        folder_var = tk.StringVar(value=import_dir)
+        folder_entry = ttk.Entry(main, textvariable=folder_var, width=60)
+        folder_entry.pack(fill=tk.X, pady=(2, 4))
+        ttk.Label(main, text='Base name (files starting with; leave empty for all):', font=('TkDefaultFont', 9, 'bold')).pack(anchor=tk.W, pady=(10, 2))
+        base_var = tk.StringVar(value=base_name)
+        base_entry = ttk.Entry(main, textvariable=base_var, width=40)
+        base_entry.pack(fill=tk.X, pady=(2, 4))
+
+        list_frame = ttk.Frame(main)
+        list_frame.pack(fill=tk.BOTH, expand=True, pady=(8, 4))
+        file_listbox = tk.Listbox(list_frame, exportselection=False, height=12)
+        file_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        sb = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=file_listbox.yview)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+        file_listbox.configure(yscrollcommand=sb.set)
+
+        status_var = tk.StringVar(value='')
+        ttk.Label(main, textvariable=status_var, foreground='gray').pack(anchor=tk.W, pady=(2, 0))
+
+        def refresh_list():
+            folder = folder_var.get().strip()
+            prefix = base_var.get().strip().lower()
+            file_listbox.delete(0, tk.END)
+            if not folder or not os.path.isdir(folder):
+                status_var.set('Folder not found.')
+                return
+            candidates = []
+            for name in sorted(os.listdir(folder)):
+                low = name.lower()
+                if not (low.endswith('.csv') or low.endswith('.css')):
+                    continue
+                if prefix and not low.startswith(prefix):
+                    continue
+                candidates.append(name)
+            for name in candidates:
+                file_listbox.insert(tk.END, name)
+            status_var.set(f'{len(candidates)} file(s) (.csv / .css)')
+
+        refresh_list()
+        base_var.trace_add('write', lambda *_: refresh_list())
+        folder_var.trace_add('write', lambda *_: refresh_list())
+
+        def browse_folder():
+            path = filedialog.askdirectory(title='Select folder (e.g. D:\\AI\\suno)', initialdir=folder_var.get() or os.getcwd())
+            if path:
+                folder_var.set(path)
+
+        def do_open():
+            sel = file_listbox.curselection()
+            if not sel:
+                messagebox.showwarning('Warning', 'Select a file.')
+                return
+            idx = sel[0]
+            name = file_listbox.get(idx)
+            folder = folder_var.get().strip()
+            if not folder or not os.path.isdir(folder):
+                messagebox.showerror('Error', 'Invalid folder.')
+                return
+            file_path = os.path.join(folder, name)
+            styles = load_styles_from_file(file_path)
+            dialog.destroy()
+            if not styles:
+                messagebox.showwarning('Warning', f'No styles found in:\n{file_path}')
+                return
+            current_text = self.song_style_text.get('1.0', tk.END).strip()
+            style_dialog = StyleSelectionDialog(self, styles, initial_text=current_text)
+            self.wait_window(style_dialog)
+            if style_dialog.selected_style is None:
+                return
+            selected_name = style_dialog.selected_style
+            selected_row = next((r for r in styles if (r.get('style', '').strip() == selected_name)), None)
+            keywords = ''
+            if selected_row:
+                keywords = (selected_row.get('prompt') or '').strip()
+                if not keywords:
+                    keywords = (selected_row.get('style') or '').strip()
+            if not keywords:
+                keywords = selected_name
+            sanitized = self._sanitize_style_keywords(keywords)
+            self.song_style_text.delete('1.0', tk.END)
+            self.song_style_text.insert('1.0', sanitized)
+            self.log_debug('INFO', f'Loaded style from file: {selected_name}')
+
+        btn_row = ttk.Frame(main)
+        btn_row.pack(fill=tk.X, pady=(10, 0))
+        ttk.Button(btn_row, text='Browse...', command=browse_folder).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(btn_row, text='Open', command=do_open).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(btn_row, text='Cancel', command=dialog.destroy).pack(side=tk.LEFT)
+
+        file_listbox.bind('<Double-Button-1>', lambda _e: do_open())
+        dialog.bind('<Return>', lambda _e: do_open())
+        dialog.bind('<Escape>', lambda _e: dialog.destroy())
+
+        dialog.update_idletasks()
+        x = self.winfo_x() + (self.winfo_width() // 2) - (dialog.winfo_width() // 2)
+        y = self.winfo_y() + (self.winfo_height() // 2) - (dialog.winfo_height() // 2)
+        dialog.geometry(f'+{x}+{y}')
+
     def auto_import_song_style_from_analysis_if_needed(self):
         """Auto-fill Song Style from analysis data if enabled and empty."""
         try:
@@ -11152,10 +11383,12 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
             messagebox.showwarning('Warning', 'Please select a persona first.')
             return
         
+        include_persona = self.include_persona_in_cover_var.get() if hasattr(self, 'include_persona_in_cover_var') else True
+        
         song_name = self.song_name_var.get().strip()
         full_song_name = self.full_song_name_var.get().strip()
         merged_style = self._get_sanitized_style_text()
-        visual_aesthetic = self.current_persona.get('visual_aesthetic', '')
+        visual_aesthetic = self.current_persona.get('visual_aesthetic', '') if include_persona else ''
         preset_key = self._get_song_persona_preset_key()
         base_path = self.get_persona_image_base_path(preset_key)
         storyboard_theme = self.storyboard_theme_text.get('1.0', tk.END).strip() if hasattr(self, 'storyboard_theme_text') else ''
@@ -11166,27 +11399,30 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
             messagebox.showwarning('Warning', 'Please enter a song name.')
             return
         
-        # Check if persona reference images exist
-        safe_name = self._safe_persona_basename()
-        front_image_path = os.path.join(base_path, f'{safe_name}-Front.png')
-        side_image_path = os.path.join(base_path, f'{safe_name}-Side.png')
-        back_image_path = os.path.join(base_path, f'{safe_name}-Back.png')
-        
+        # Check if persona reference images exist (only when including persona)
         reference_images = []
-        if os.path.exists(front_image_path):
-            reference_images.append(front_image_path)
-        if os.path.exists(side_image_path):
-            reference_images.append(side_image_path)
-        if os.path.exists(back_image_path):
-            reference_images.append(back_image_path)
+        if include_persona:
+            safe_name = self._safe_persona_basename()
+            front_image_path = os.path.join(base_path, f'{safe_name}-Front.png')
+            side_image_path = os.path.join(base_path, f'{safe_name}-Side.png')
+            back_image_path = os.path.join(base_path, f'{safe_name}-Back.png')
+            if os.path.exists(front_image_path):
+                reference_images.append(front_image_path)
+            if os.path.exists(side_image_path):
+                reference_images.append(side_image_path)
+            if os.path.exists(back_image_path):
+                reference_images.append(back_image_path)
         
-        # Get full persona visual description
-        base_image_prompt = self.current_persona.get('base_image_prompt', '')
-        vibe = self.current_persona.get('vibe', '')
+        # Get full persona visual description (only when including persona)
+        base_image_prompt = self.current_persona.get('base_image_prompt', '') if include_persona else ''
+        vibe = self.current_persona.get('vibe', '') if include_persona else ''
         
         # Build base prompt
         artist_name = self.current_persona.get('name', '')
-        prompt = f"Generate an album cover prompt for '{song_name}' by the AI persona '{artist_name}'."
+        if include_persona:
+            prompt = f"Generate an album cover prompt for '{song_name}' by the AI persona '{artist_name}'."
+        else:
+            prompt = f"Generate an album cover prompt for '{song_name}' (no persona or human figures in the image)."
         # Remove parenthetical content from full_song_name for prompt generation
         clean_full_song_name = self._remove_parenthetical_content(full_song_name) if full_song_name else ''
         prompt += f"\n\nFull Song Name: {clean_full_song_name if clean_full_song_name else full_song_name}"
@@ -11207,7 +11443,8 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
             prompt += f"\n\n=== SONG LYRICS (CRITICAL FOR CHARACTER AND SCENE) ==="
             prompt += f"\n{song_lyrics}"
             prompt += "\n\nIMPORTANT: The song lyrics MUST heavily influence:"
-            prompt += "\n- CHARACTER DEPICTION: Use lyrical themes, emotions, and narrative to shape how the persona appears"
+            if include_persona:
+                prompt += "\n- CHARACTER DEPICTION: Use lyrical themes, emotions, and narrative to shape how the persona appears"
             prompt += "\n- SCENE CONTENT: Extract visual elements, settings, and imagery directly from the lyrics"
             prompt += "\n- COLORING: Use colors and moods described or implied in the lyrics"
             prompt += "\n- ATMOSPHERE: The lyrics should inform the overall mood and visual tone of the cover"
@@ -11217,17 +11454,16 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
         if storyboard_theme:
             prompt += f"\n\nSTORYBOARD THEME (MANDATORY - primary art direction): {storyboard_theme}"
             prompt += "\nUse this storyboard theme 100% as the core visual aesthetic. All album cover decisions must align with it."
-        # Ensure title/artist appear on the cover
-        # Use cleaned version without parenthetical content for album title
+        # Ensure title/artist appear on the cover (artist only when including persona)
         album_title = clean_full_song_name if clean_full_song_name else (full_song_name if full_song_name else song_name)
-        if album_title or artist_name:
+        if album_title or (artist_name and include_persona):
             prompt += "\n\nMANDATORY TEXT ELEMENTS:"
             if album_title:
                 prompt += f"\n- Include the album title \"{album_title}\" as integrated cover typography (no subtitle bars)."
-            if artist_name:
+            if artist_name and include_persona:
                 prompt += f"\n- Include the artist name \"{artist_name}\" as integrated cover typography."
             prompt += (
-                "\n- Render BOTH strings visibly on the cover. Title and artist must be readable and distinct."
+                "\n- Render the listed strings visibly on the cover. Title and artist must be readable and distinct."
                 "\n- Use cohesive typography that matches the storyboard theme; embed text into the scene (on armor plates, signage, HUD, ground, etc.), not as floating UI overlays."
                 "\n- Keep text placement clean and legible while integrated with the environment."
                 "\n- Do NOT truncate, abbreviate, or shorten the title or artist name. Render the full strings exactly as provided, verbatim."
@@ -11236,24 +11472,29 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
             prompt += "\n\nRENDER TEXT ON COVER (verbatim):"
             if album_title:
                 prompt += f"\n1) \"{album_title}\""
-            if artist_name:
+            if artist_name and include_persona:
                 prompt += f"\n2) \"{artist_name}\""
         
-        # Include full persona visual description
-        if visual_aesthetic:
-            prompt += f"\n\nPersona Visual Aesthetic: {visual_aesthetic}"
-        if base_image_prompt:
-            prompt += f"\n\nPersona Base Image Prompt (Character Visual Description): {base_image_prompt}"
-        if vibe:
-            prompt += f"\n\nPersona Vibe: {vibe}"
-        
-        # Force non-centered, scene-driven placement for the persona
-        prompt += (
-            "\n\nComposition and placement rules:"
-            "\n- Embed the persona into the environment; do NOT default to centering them."
-            "\n- Place the persona wherever the scene reads best (left/right third, foreground or background, over-shoulder, partial silhouette, small-in-frame, or cropped)."
-            "\n- Choose the strongest composition for this scene; only center if the scene explicitly benefits from it."
-        )
+        if include_persona:
+            # Include full persona visual description
+            if visual_aesthetic:
+                prompt += f"\n\nPersona Visual Aesthetic: {visual_aesthetic}"
+            if base_image_prompt:
+                prompt += f"\n\nPersona Base Image Prompt (Character Visual Description): {base_image_prompt}"
+            if vibe:
+                prompt += f"\n\nPersona Vibe: {vibe}"
+            # Force non-centered, scene-driven placement for the persona
+            prompt += (
+                "\n\nComposition and placement rules:"
+                "\n- Embed the persona into the environment; do NOT default to centering them."
+                "\n- Place the persona wherever the scene reads best (left/right third, foreground or background, over-shoulder, partial silhouette, small-in-frame, or cropped)."
+                "\n- Choose the strongest composition for this scene; only center if the scene explicitly benefits from it."
+            )
+        else:
+            prompt += (
+                "\n\nCRITICAL: No persona present. No characters. No human figures. No artist. No people."
+                "\nThe generated image MUST NOT include ANY human figures. The cover must be purely environmental, abstract, symbolic, or atmospheric visuals."
+            )
         
         # Instruction to ignore parenthetical content
         prompt += "\n\nIMPORTANT: If the song name contains parenthetical content (e.g., ' - (devotional folk meditative)'), ignore it completely. Do not include any parenthetical descriptions or style keywords in the album cover prompt. Use only the core song title without any parenthetical additions."
@@ -11286,25 +11527,35 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
                 self.log_debug('ERROR', f'Error generating album cover prompt: {e}')
                 return
         else:
-            prompt += "\n\nIMPORTANT: The album cover must fully incorporate ALL visual characteristics from the persona's Visual Aesthetic and Base Image Prompt descriptions above."
-            if storyboard_theme:
-                prompt += "\nMANDATORY: The storyboard theme overrides any conflicting cues. Keep the theme fully intact while merging persona visuals."
-            prompt += "\n\nCreate a detailed album cover prompt suitable for image generation that incorporates ALL of the persona's visual characteristics, appearance, styling, and aesthetic."
+            if include_persona:
+                prompt += "\n\nIMPORTANT: The album cover must fully incorporate ALL visual characteristics from the persona's Visual Aesthetic and Base Image Prompt descriptions above."
+                if storyboard_theme:
+                    prompt += "\nMANDATORY: The storyboard theme overrides any conflicting cues. Keep the theme fully intact while merging persona visuals."
+                prompt += "\n\nCreate a detailed album cover prompt suitable for image generation that incorporates ALL of the persona's visual characteristics, appearance, styling, and aesthetic."
+            else:
+                prompt += "\n\nCreate a detailed album cover prompt suitable for image generation. The image must contain NO human figures, characters, or people - only environmental, abstract, symbolic, or atmospheric visuals."
             # Reinforce merged style and lyrics influence on coloring and scene
             if merged_style or song_lyrics:
                 prompt += "\n\nCRITICAL REMINDER FOR COLORING AND SCENE:"
                 if merged_style:
                     prompt += "\n- Use the merged style as the PRIMARY source for color palette, lighting, and overall visual aesthetic"
                 if song_lyrics:
-                    prompt += "\n- Use the song lyrics as the PRIMARY source for scene content, character depiction, and symbolic imagery"
+                    prompt += "\n- Use the song lyrics as the PRIMARY source for scene content and symbolic imagery"
                 prompt += "\n- The merged style and lyrics should be the dominant influences on the final cover's coloring and scene composition"
             
-            self.log_debug('INFO', 'Generating album cover prompt (no reference images available)...')
+            self.log_debug('INFO', 'Generating album cover prompt (no reference images available)...' if include_persona else 'Generating album cover prompt (persona excluded)...')
             self.config(cursor='wait')
             self.update()
             
             try:
-                system_message = 'You are an image prompt generator. Output ONLY the image prompt text, nothing else.'
+                if include_persona:
+                    system_message = 'You are an image prompt generator. Output ONLY the image prompt text, nothing else.'
+                else:
+                    system_message = (
+                        'You are an image prompt generator. Output ONLY the image prompt text, nothing else. '
+                        'CRITICAL: The prompt must describe ONLY environments, landscapes, objects, abstract art, or symbolic imagery. '
+                        'Do NOT describe any person, character, human figure, face, or artist. The image must have zero people in it.'
+                    )
                 result = self.azure_ai(prompt, system_message, profile='text')
             except Exception as e:
                 messagebox.showerror('Error', f'Error generating album cover prompt: {e}')
@@ -11315,6 +11566,8 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
             if result['success']:
                 cover_prompt_raw = result['content'].strip()
                 cover_prompt = self._sanitize_style_keywords(cover_prompt_raw)
+                if not include_persona and cover_prompt and not cover_prompt.lower().startswith('no person'):
+                    cover_prompt = 'No person present. No characters. No human figures. No people. ' + cover_prompt
                 self.album_cover_text.delete('1.0', tk.END)
                 self.album_cover_text.insert('1.0', cover_prompt)
                 self.log_debug('INFO', 'Album cover prompt generated successfully')
@@ -15077,8 +15330,9 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
         if dialog.result:
             prompt = f"{prompt} {dialog.result}"
         
-        # Check if Front Persona Image exists and analyze it for reference
-        if self.current_persona and self.current_persona_path:
+        include_persona = self.include_persona_in_cover_var.get() if hasattr(self, 'include_persona_in_cover_var') else True
+        # Check if Front Persona Image exists and analyze it for reference (only when including persona in cover)
+        if include_persona and self.current_persona and self.current_persona_path:
             preset_key = self._get_song_persona_preset_key()
             base_path = self.get_persona_image_base_path(preset_key)
             safe_name = self._safe_persona_basename()
@@ -15216,6 +15470,7 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
         size = dialog.result['size']
         format_type = dialog.result['format']
         overwrite = dialog.result['overwrite']
+        include_persona = dialog.result.get('include_persona', True)
         
         # Get songs based on scope
         songs_to_process = []
@@ -15249,16 +15504,17 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
         confirm_msg = f'Generate covers for {len(songs_to_process)} song(s)?\n\n'
         confirm_msg += f'Format: {size}\n'
         confirm_msg += f'File Format: {format_type}\n'
-        confirm_msg += f'Overwrite existing: {"Yes" if overwrite else "No"}'
+        confirm_msg += f'Overwrite existing: {"Yes" if overwrite else "No"}\n'
+        confirm_msg += f'Include persona in cover: {"Yes" if include_persona else "No"}'
         
         if not messagebox.askyesno('Confirm Bulk Cover Generation', confirm_msg):
             return
         
-        # Process songs
-        self._process_bulk_covers(songs_to_process, size, format_type, overwrite)
+        # Process songs (include_persona is for future use when generating missing prompts in bulk)
+        self._process_bulk_covers(songs_to_process, size, format_type, overwrite, include_persona)
     
-    def _process_bulk_covers(self, song_paths: list[str], size: str, format_type: str, overwrite: bool):
-        """Process bulk cover generation for multiple songs."""
+    def _process_bulk_covers(self, song_paths: list[str], size: str, format_type: str, overwrite: bool, include_persona: bool = True):
+        """Process bulk cover generation for multiple songs. include_persona is reserved for future use when generating missing prompts in bulk."""
         # Track albums being processed
         albums_processed = set()
         
@@ -15432,10 +15688,14 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
     def _generate_single_cover(self, song_path: str, song_config: dict, prompt: str, size: str, format_type: str, filename: str, overwrite: bool) -> bool:
         """Generate a single cover image for a song."""
         try:
-            # Enhance prompt with persona reference if available
+            # Enhance prompt with persona reference only if song has include_persona_in_cover and prompt does not request no person
+            include_persona = bool(song_config.get('include_persona_in_cover', True))
+            prompt_lower = prompt.lower()
+            no_persona_markers = ('no person', 'no human', 'no character', 'no people', 'no figures', 'no persona present')
+            exclude_persona = not include_persona or any(m in prompt_lower for m in no_persona_markers)
             enhanced_prompt = prompt
             
-            if self.current_persona and self.current_persona_path:
+            if not exclude_persona and self.current_persona and self.current_persona_path:
                 preset_key = song_config.get('persona_image_preset', self.current_persona.get('current_image_preset', 'default'))
                 base_path = self.get_persona_image_base_path(preset_key)
                 safe_name = self._safe_persona_basename()
