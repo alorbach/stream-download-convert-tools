@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import csv
+import tempfile
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, scrolledtext, simpledialog
 import requests
@@ -54,6 +55,26 @@ try:
     MUTAGEN_AVAILABLE = True
 except ImportError:
     MUTAGEN_AVAILABLE = False
+
+
+def _scale_image_to_half(image_path: str) -> Optional[str]:
+    """Scale image to 50% and save to temp file. Returns temp path or None on error."""
+    if not image_path or not os.path.isfile(image_path):
+        return None
+    try:
+        with Image.open(image_path) as img:
+            img.load()
+            w, h = img.size
+            new_size = (max(1, w // 2), max(1, h // 2))
+            scaled = img.resize(new_size, Image.Resampling.LANCZOS)
+            ext = os.path.splitext(image_path)[1].lower()
+            fmt = 'PNG' if ext in ['.png'] else 'JPEG'
+            fd, tmp_path = tempfile.mkstemp(suffix=ext or '.png')
+            os.close(fd)
+            scaled.save(tmp_path, format=fmt, quality=90)
+            return tmp_path
+    except Exception:
+        return None
 
 
 class ToolTip:
@@ -1002,6 +1023,51 @@ class AIPromptDialog(tk.Toplevel):
         self.result = extra_instructions
         self.destroy()
     
+    def cancel_clicked(self):
+        self.result = None
+        self.destroy()
+
+
+class PromptGenerationIdeasDialog(tk.Toplevel):
+    """Dialog for adding optional ideas before generating a cover/video prompt."""
+
+    def __init__(self, parent, prompt_type: str, context: str = 'Song'):
+        super().__init__(parent)
+        self.prompt_type = prompt_type
+        self.context = context
+        self.title(f'Generate {prompt_type} Prompt')
+        self.geometry('600x380')
+        self.transient(parent)
+        self.grab_set()
+
+        self.result = None
+
+        self.create_widgets()
+        self.update_idletasks()
+        x = parent.winfo_x() + (parent.winfo_width() // 2) - (self.winfo_width() // 2)
+        y = parent.winfo_y() + (parent.winfo_height() // 2) - (self.winfo_height() // 2)
+        self.geometry(f"+{x}+{y}")
+        self.ideas_text.focus_set()
+
+    def create_widgets(self):
+        main_frame = ttk.Frame(self, padding=10)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(main_frame, text=f'Generate {self.prompt_type} Prompt ({self.context})', font=('TkDefaultFont', 10, 'bold')).pack(anchor=tk.W, pady=(0, 10))
+        ttk.Label(main_frame, text='Add basic ideas for the cover/video (optional):', font=('TkDefaultFont', 8, 'bold')).pack(anchor=tk.W, pady=(5, 2))
+        help_text = '(e.g., "dark and moody", "include a road", "noir aesthetic", "cinematic lighting")'
+        ttk.Label(main_frame, text=help_text, font=('TkDefaultFont', 7), foreground='gray').pack(anchor=tk.W, pady=(0, 5))
+        self.ideas_text = scrolledtext.ScrolledText(main_frame, height=8, wrap=tk.WORD, font=('Consolas', 9))
+        self.ideas_text.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(fill=tk.X, pady=(5, 0))
+        ttk.Button(btn_frame, text='Generate', command=self.ok_clicked).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text='Cancel', command=self.cancel_clicked).pack(side=tk.LEFT, padx=5)
+        self.bind('<Escape>', lambda e: self.cancel_clicked())
+
+    def ok_clicked(self):
+        self.result = self.ideas_text.get('1.0', tk.END).strip()
+        self.destroy()
+
     def cancel_clicked(self):
         self.result = None
         self.destroy()
@@ -6032,6 +6098,7 @@ TECHNICAL REQUIREMENTS:
         video_loop_toolbar = ttk.Frame(video_loop_frame)
         video_loop_toolbar.pack(fill=tk.X, padx=2, pady=2)
         ttk.Button(video_loop_toolbar, text='Generate Prompt', command=self.generate_video_loop).pack(side=tk.LEFT, padx=2)
+        ttk.Button(video_loop_toolbar, text='Improve', command=self.improve_video_loop_prompt).pack(side=tk.LEFT, padx=2)
         ttk.Button(video_loop_toolbar, text='Run', command=self.run_video_loop_model).pack(side=tk.LEFT, padx=2)
         ttk.Button(video_loop_toolbar, text='Save', command=self.save_video_loop_prompt).pack(side=tk.LEFT, padx=2)
         
@@ -6210,6 +6277,7 @@ TECHNICAL REQUIREMENTS:
         video_bar.pack(fill=tk.X, pady=(0, 2))
         ttk.Label(video_bar, text='Album Video Prompt:', font=('TkDefaultFont', 9, 'bold')).pack(side=tk.LEFT)
         ttk.Button(video_bar, text='Generate', command=self.generate_album_video_prompt).pack(side=tk.LEFT, padx=4)
+        ttk.Button(video_bar, text='Improve', command=self.improve_album_video_prompt).pack(side=tk.LEFT, padx=4)
         ttk.Button(video_bar, text='Translate', command=lambda: self.translate_prompt(self.album_video_text, 'Album Video Prompt')).pack(side=tk.LEFT, padx=4)
         ttk.Button(video_bar, text='Save', command=self.save_album_video_prompt).pack(side=tk.LEFT, padx=4)
 
@@ -8816,6 +8884,8 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
             self.album_video_duration_var.set('6')
         if hasattr(self, 'album_video_multiscene_var'):
             self.album_video_multiscene_var.set(False)
+        if hasattr(self, 'album_video_scene_duration_var'):
+            self.album_video_scene_duration_var.set('2')
         self.album_suggestions_list.delete(0, tk.END)
         self.album_songs_list.delete(0, tk.END)
         self.current_album_songs = []
@@ -8851,6 +8921,8 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
             self.album_video_duration_var.set(str(self.current_album.get('video_duration', 6)))
         if hasattr(self, 'album_video_multiscene_var'):
             self.album_video_multiscene_var.set(self.current_album.get('video_multiscene', False))
+        if hasattr(self, 'album_video_scene_duration_var'):
+            self.album_video_scene_duration_var.set(str(self.current_album.get('video_scene_duration', 2)))
         self.album_cover_album_text.delete('1.0', tk.END)
         self.album_cover_album_text.insert('1.0', self.current_album.get('cover_prompt', ''))
         self.album_video_text.delete('1.0', tk.END)
@@ -8956,6 +9028,7 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
         config['video_size'] = self.album_video_size_var.get()
         config['video_duration'] = int(self.album_video_duration_var.get() or 6) if hasattr(self, 'album_video_duration_var') else 6
         config['video_multiscene'] = bool(self.album_video_multiscene_var.get()) if hasattr(self, 'album_video_multiscene_var') else False
+        config['video_scene_duration'] = int(self.album_video_scene_duration_var.get() or 2) if hasattr(self, 'album_video_scene_duration_var') else 2
         config['songs'] = selected
         config['cover_prompt'] = self.album_cover_album_text.get('1.0', tk.END).strip()
         config['video_prompt'] = self.album_video_text.get('1.0', tk.END).strip()
@@ -9045,6 +9118,7 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
             'video_size': self.album_video_size_var.get(),
             'video_duration': int(self.album_video_duration_var.get() or 6) if hasattr(self, 'album_video_duration_var') else 6,
             'video_multiscene': bool(self.album_video_multiscene_var.get()) if hasattr(self, 'album_video_multiscene_var') else False,
+            'video_scene_duration': int(self.album_video_scene_duration_var.get() or 2) if hasattr(self, 'album_video_scene_duration_var') else 2,
             'cover_prompt': self.album_cover_album_text.get('1.0', tk.END).strip(),
             'video_prompt': self.album_video_text.get('1.0', tk.END).strip(),
             'songs': songs,
@@ -9640,6 +9714,13 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
         if not self.current_persona:
             messagebox.showwarning('Warning', 'Please select a persona first.')
             return
+
+        dialog = PromptGenerationIdeasDialog(self, 'Album Cover', 'Album')
+        self.wait_window(dialog)
+        if dialog.result is None:
+            return
+        user_ideas = (dialog.result or '').strip()
+
         include_persona = self.include_persona_in_cover_var.get() if hasattr(self, 'include_persona_in_cover_var') else True
         album_name = self.album_name_var.get().strip()
         if not album_name:
@@ -9687,6 +9768,8 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
             prompt += f"\nPersona Base Image Prompt: {base_image_prompt}"
         if vibe:
             prompt += f"\nPersona Vibe: {vibe}"
+        if user_ideas:
+            prompt += f"\n\n=== ADDITIONAL USER IDEAS (MUST INCORPORATE) ===\n{user_ideas}\n=== END USER IDEAS ===\n"
         prompt += (
             "\nReturn only the album cover image prompt text."
             "\nMANDATORY TYPOGRAPHY: Render the full album title verbatim, with no truncation, no abbreviation, and no ellipsis. Text must be fully readable in the final cover."
@@ -9796,6 +9879,13 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
         if not self.current_persona:
             messagebox.showwarning('Warning', 'Please select a persona first.')
             return
+
+        dialog = PromptGenerationIdeasDialog(self, 'Album Video', 'Album')
+        self.wait_window(dialog)
+        if dialog.result is None:
+            return
+        user_ideas = (dialog.result or '').strip()
+
         album_name = self.album_name_var.get().strip()
         base_prompt = self.album_cover_album_text.get('1.0', tk.END).strip()
         if not base_prompt:
@@ -9824,6 +9914,8 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
                 f"with {num_scenes} distinct scenes, each lasting {scene_duration} seconds.\n\n"
                 f"Based on this cover description:\n{base_prompt}\n\nMerged Style: {merged_style}"
             )
+            if user_ideas:
+                prompt += f"\n\n=== ADDITIONAL USER IDEAS (MUST INCORPORATE) ===\n{user_ideas}\n=== END USER IDEAS ===\n"
             if visual_aesthetic:
                 prompt += f"\nPersona Visual Aesthetic: {visual_aesthetic}"
             if base_image_prompt:
@@ -9831,25 +9923,34 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
             if vibe:
                 prompt += f"\nPersona Vibe: {vibe}"
             
-            prompt += "\n\n=== MULTI-SCENE REQUIREMENTS ==="
-            prompt += "\n- Each scene must be visually distinct but thematically connected to the album"
-            prompt += "\n- Use DIRECT CAMERA CUTS between scenes (NO smooth transitions, NO fades, NO morphing)"
-            prompt += "\n- The persona/character must appear consistently across all scenes"
-            prompt += "\n- Each scene should have a different camera angle, setting, or composition"
-            prompt += "\n- Scene changes should feel dynamic and match the album's energy"
-            prompt += "\n\nFormat your output as:"
+            prompt += "\n\n=== MULTI-SCENE REQUIREMENTS (CRITICAL FOR AI VIDEO TOOLS) ==="
+            prompt += "\n- Use HARD CUTS / JUMP CUTS between scenes - NO smooth transitions, NO fades, NO morphing, NO continuity"
+            prompt += "\n- Each scene must RADICALLY change - wildly different environments, settings, or compositions every " + str(scene_duration) + " second(s)"
+            prompt += "\n- Add keywords: 'rapid scene changes', 'montage style', 'abrupt transitions', 'hyper-fast cuts' to encourage the AI to actually change scenes"
+            prompt += "\n- The persona/character must appear consistently across all scenes (if included)"
+            prompt += "\n- Use explicit time markers in output - AI video tools (Runway, Kling, etc.) respond to timeline phrasing"
+            prompt += "\n- Avoid: smooth gradual transition, slow motion, same scene persisting, boring, static"
+            prompt += "\n\nFormat your output as (use exact timestamps):"
             for i in range(num_scenes):
                 start_time = i * scene_duration
                 end_time = start_time + scene_duration
-                prompt += f"\n\n[{start_time}s-{end_time}s] Scene {i+1}: [describe the scene]"
+                prompt += f"\n\n[{start_time}s-{end_time}s] Scene {i+1}: [describe a RADICALLY different scene - distinct setting, angle, or composition]"
             
-            system_message = f'You are a video loop prompt generator. Create a {video_duration}-second multi-scene video with {num_scenes} distinct scenes ({scene_duration}s each) using direct camera cuts. Output only the final prompt text with scene timestamps.'
+            system_message = (
+                f'You are a video prompt generator for AI video tools (Runway, Kling, Grok Imagine, etc.). '
+                f'Create a {video_duration}-second multi-scene video with {num_scenes} distinct scenes ({scene_duration}s each). '
+                'CRITICAL: Use HARD CUTS, JUMP CUTS - each scene must be wildly different. Add "rapid transitions", "montage style", "abrupt", "no continuity" to your output. '
+                'AI video tools often smooth everything - your prompt must explicitly demand radical scene changes every second. '
+                'Output ONLY the final prompt text with scene timestamps.'
+            )
         else:
             # Single scene prompt (original behavior)
             prompt = (
                 f"Create a seamless looping video prompt for the album \"{album_name}\" "
                 f"based on this cover description:\n{base_prompt}\n\nMerged Style: {merged_style}"
             )
+            if user_ideas:
+                prompt += f"\n\n=== ADDITIONAL USER IDEAS (MUST INCORPORATE) ===\n{user_ideas}\n=== END USER IDEAS ===\n"
             if visual_aesthetic:
                 prompt += f"\nPersona Visual Aesthetic: {visual_aesthetic}"
             if base_image_prompt:
@@ -9860,11 +9961,21 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
             
             system_message = 'You are a video loop prompt generator. Output only the final prompt text.'
 
+        scaled_cover_path = None
         try:
             self.config(cursor='wait')
             self.update()
             self.log_debug('INFO', f'Generating {"multi-scene " if is_multiscene else ""}album video prompt...')
-            result = self.azure_ai(prompt, system_message=system_message, profile='text')
+            if hasattr(self, 'last_album_cover_path') and self.last_album_cover_path and os.path.isfile(self.last_album_cover_path):
+                scaled_cover_path = _scale_image_to_half(self.last_album_cover_path)
+                if scaled_cover_path:
+                    prompt = f"This is the generated album cover image (scaled). Create a video prompt that matches and extends this visual.\n\n{prompt}"
+                    result = self.azure_vision([scaled_cover_path], prompt, system_message=system_message, profile='text')
+                    self.log_debug('INFO', 'Using album cover image for video prompt generation')
+                else:
+                    result = self.azure_ai(prompt, system_message=system_message, profile='text')
+            else:
+                result = self.azure_ai(prompt, system_message=system_message, profile='text')
         except Exception as exc:
             self.config(cursor='')
             messagebox.showerror('Error', f'Failed to generate album video prompt: {exc}')
@@ -9872,6 +9983,11 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
             return
         finally:
             self.config(cursor='')
+            if scaled_cover_path and os.path.exists(scaled_cover_path):
+                try:
+                    os.unlink(scaled_cover_path)
+                except Exception:
+                    pass
 
         if result.get('success'):
             text = result.get('content', '').strip()
@@ -9923,8 +10039,8 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
             album_path = self._get_album_path(album_id) or os.path.join(self._albums_dir() or '', album_id)
             os.makedirs(album_path, exist_ok=True)
             
-            # Save with same basename as album cover image, but as .json file with -Video suffix
-            filename = enable_long_paths(os.path.join(album_path, f'{safe_basename}-Video{aspect_ratio_suffix}.json'))
+            # Save with same basename as album cover image, as .json file (aspect ratio suffix if not 1:1)
+            filename = enable_long_paths(os.path.join(album_path, f'{safe_basename}{aspect_ratio_suffix}.json'))
             
             # Create backup if file exists
             backup_path = self.backup_file_if_exists(filename)
@@ -9955,6 +10071,50 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
             messagebox.showerror('Error', f'Failed to save album video prompt: {e}')
             self.log_debug('ERROR', f'Failed to save album video prompt: {e}')
     
+    def improve_album_video_prompt(self):
+        """Improve the album video prompt using AI based on user feedback."""
+        current_prompt = self.album_video_text.get('1.0', tk.END).strip()
+        if not current_prompt:
+            messagebox.showwarning('Warning', 'Please generate an album video prompt first.')
+            return
+
+        dialog = PromptImprovementDialog(self, 'Album Video', current_prompt)
+        self.wait_window(dialog)
+        if not dialog.result:
+            return
+
+        improvement_request = dialog.result
+        prompt = f"Improve the following album video prompt based on these requested changes:\n\n"
+        prompt += f"REQUESTED CHANGES: {improvement_request}\n\n"
+        prompt += f"CURRENT PROMPT:\n{current_prompt}\n\n"
+        prompt += "Generate an improved version of the video prompt that incorporates the requested changes while maintaining the core concept, style, and scene structure. Output ONLY the improved prompt text, nothing else."
+
+        try:
+            self.config(cursor='wait')
+            self.update()
+            system_message = 'You are an expert at improving video generation prompts. Analyze the current prompt and requested changes, then generate an improved version that incorporates the changes while maintaining quality, coherence, and proper scene formatting. Output ONLY the improved prompt text.'
+            result = self.azure_ai(prompt, system_message=system_message, profile='text', max_tokens=2000, temperature=0.7)
+
+            if result.get('success'):
+                improved_prompt = result.get('content', '').strip()
+                result_dialog = ImprovedPromptResultDialog(self, improved_prompt, current_prompt)
+                self.wait_window(result_dialog)
+                if result_dialog.result:
+                    self.album_video_text.delete('1.0', tk.END)
+                    self.album_video_text.insert('1.0', improved_prompt)
+                    if self.current_album is not None:
+                        self.current_album['video_prompt'] = improved_prompt
+                    self.log_debug('INFO', 'Album video prompt improved and saved')
+                    messagebox.showinfo('Success', 'Improved prompt saved.')
+            else:
+                messagebox.showerror('Error', f'Failed to improve prompt: {result.get("error", "Unknown error")}')
+                self.log_debug('ERROR', f'Failed to improve album video prompt: {result.get("error", "Unknown error")}')
+        except Exception as e:
+            messagebox.showerror('Error', f'Error improving album video prompt: {e}')
+            self.log_debug('ERROR', f'Error improving album video prompt: {e}')
+        finally:
+            self.config(cursor='')
+
     def _ask_language(self, title='Select Language'):
         """Show a dialog to select language (English or German). Returns 'en' or 'de', or None if cancelled."""
         dialog = tk.Toplevel(self)
@@ -11382,7 +11542,13 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
         if not self.current_persona:
             messagebox.showwarning('Warning', 'Please select a persona first.')
             return
-        
+
+        dialog = PromptGenerationIdeasDialog(self, 'Album Cover', 'Song')
+        self.wait_window(dialog)
+        if dialog.result is None:
+            return
+        user_ideas = (dialog.result or '').strip()
+
         include_persona = self.include_persona_in_cover_var.get() if hasattr(self, 'include_persona_in_cover_var') else True
         
         song_name = self.song_name_var.get().strip()
@@ -11498,7 +11664,10 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
         
         # Instruction to ignore parenthetical content
         prompt += "\n\nIMPORTANT: If the song name contains parenthetical content (e.g., ' - (devotional folk meditative)'), ignore it completely. Do not include any parenthetical descriptions or style keywords in the album cover prompt. Use only the core song title without any parenthetical additions."
-        
+
+        if user_ideas:
+            prompt += f"\n\n=== ADDITIONAL USER IDEAS (MUST INCORPORATE) ===\n{user_ideas}\n=== END USER IDEAS ===\n"
+
         # If reference images exist, use vision API to analyze them
         if reference_images:
             prompt += f"\n\nAnalyze the provided reference images of this persona and create an album cover prompt that matches the character's visual appearance, styling, and aesthetic from these images."
@@ -11881,13 +12050,61 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
             self.log_debug('ERROR', f'Error translating {prompt_type}: {e}')
         finally:
             self.config(cursor='')
-    
+
+    def improve_video_loop_prompt(self):
+        """Improve the song video loop prompt using AI based on user feedback."""
+        current_prompt = self.video_loop_text.get('1.0', tk.END).strip()
+        if not current_prompt:
+            messagebox.showwarning('Warning', 'Please generate a video loop prompt first.')
+            return
+
+        dialog = PromptImprovementDialog(self, 'Video Loop', current_prompt)
+        self.wait_window(dialog)
+        if not dialog.result:
+            return
+
+        improvement_request = dialog.result
+        prompt = f"Improve the following video loop prompt based on these requested changes:\n\n"
+        prompt += f"REQUESTED CHANGES: {improvement_request}\n\n"
+        prompt += f"CURRENT PROMPT:\n{current_prompt}\n\n"
+        prompt += "Generate an improved version of the video prompt that incorporates the requested changes while maintaining the core concept, style, and scene structure. Output ONLY the improved prompt text, nothing else."
+
+        try:
+            self.config(cursor='wait')
+            self.update()
+            system_message = 'You are an expert at improving video generation prompts. Analyze the current prompt and requested changes, then generate an improved version that incorporates the changes while maintaining quality, coherence, and proper scene formatting. Output ONLY the improved prompt text.'
+            result = self.azure_ai(prompt, system_message=system_message, profile='text', max_tokens=2000, temperature=0.7)
+
+            if result.get('success'):
+                improved_prompt = result.get('content', '').strip()
+                result_dialog = ImprovedPromptResultDialog(self, improved_prompt, current_prompt)
+                self.wait_window(result_dialog)
+                if result_dialog.result:
+                    self.video_loop_text.delete('1.0', tk.END)
+                    self.video_loop_text.insert('1.0', improved_prompt)
+                    self.log_debug('INFO', 'Video loop prompt improved and saved')
+                    messagebox.showinfo('Success', 'Improved prompt saved.')
+            else:
+                messagebox.showerror('Error', f'Failed to improve prompt: {result.get("error", "Unknown error")}')
+                self.log_debug('ERROR', f'Failed to improve video loop prompt: {result.get("error", "Unknown error")}')
+        except Exception as e:
+            messagebox.showerror('Error', f'Error improving video loop prompt: {e}')
+            self.log_debug('ERROR', f'Error improving video loop prompt: {e}')
+        finally:
+            self.config(cursor='')
+
     def generate_video_loop(self):
         """Generate video loop prompt. Supports multi-scene mode with scene switches."""
         if not self.current_persona:
             messagebox.showwarning('Warning', 'Please select a persona first.')
             return
-        
+
+        dialog = PromptGenerationIdeasDialog(self, 'Video Loop', 'Song')
+        self.wait_window(dialog)
+        if dialog.result is None:
+            return
+        user_ideas = (dialog.result or '').strip()
+
         album_cover = self.album_cover_text.get('1.0', tk.END).strip()
         merged_style = self._get_sanitized_style_text()
         preset_key = self._get_song_persona_preset_key()
@@ -11914,6 +12131,13 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
         back_image_path = os.path.join(base_path, f'{safe_name}-Back.png')
         
         reference_images = []
+        scaled_cover_path = None
+        cover_path = self.get_album_cover_filepath() if hasattr(self, 'get_album_cover_filepath') else ''
+        if cover_path and os.path.isfile(cover_path):
+            scaled_cover_path = _scale_image_to_half(cover_path)
+            if scaled_cover_path:
+                reference_images.append(scaled_cover_path)
+                self.log_debug('INFO', 'Including scaled album cover image in video prompt generation')
         if os.path.exists(front_image_path):
             reference_images.append(front_image_path)
         if os.path.exists(side_image_path):
@@ -11928,7 +12152,10 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
         
         # Build base prompt
         prompt = f"Generate a video loop prompt based on this album cover description:\n\n{album_cover}\n\nMerged Style: {merged_style}"
-        
+
+        if user_ideas:
+            prompt += f"\n\n=== ADDITIONAL USER IDEAS (MUST INCORPORATE) ===\n{user_ideas}\n=== END USER IDEAS ===\n"
+
         # Include full persona visual description
         if visual_aesthetic:
             prompt += f"\n\nPersona Visual Aesthetic: {visual_aesthetic}"
@@ -11941,20 +12168,23 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
         if is_multiscene and num_scenes > 1:
             prompt += f"\n\n=== MULTI-SCENE VIDEO LOOP ({video_duration} seconds total) ==="
             prompt += f"\n\nCreate a {video_duration}-second video loop with {num_scenes} distinct scenes, each lasting {scene_duration} seconds."
-            prompt += "\n\nIMPORTANT MULTI-SCENE REQUIREMENTS:"
-            prompt += "\n- Each scene must be visually distinct but thematically connected"
-            prompt += "\n- Use DIRECT CAMERA CUTS between scenes (NO smooth transitions, NO fades, NO morphing)"
-            prompt += "\n- The persona/character must appear consistently across all scenes"
-            prompt += "\n- Scene changes should feel dynamic and match the music energy"
-            prompt += "\n- Each scene should have a different camera angle, setting, or composition"
-            prompt += "\n\nFormat your output as:"
+            prompt += "\n\nIMPORTANT MULTI-SCENE REQUIREMENTS (CRITICAL FOR AI VIDEO TOOLS):"
+            prompt += "\n- Use HARD CUTS / JUMP CUTS between scenes - NO smooth transitions, NO fades, NO morphing, NO continuity"
+            prompt += "\n- Each scene must RADICALLY change - wildly different environments, settings, or compositions every " + str(scene_duration) + " second(s)"
+            prompt += "\n- Add keywords: 'rapid scene changes', 'montage style', 'abrupt transitions', 'hyper-fast cuts' to encourage the AI to actually change scenes"
+            prompt += "\n- The persona/character must appear consistently across all scenes (if included)"
+            prompt += "\n- Use explicit time markers in output - AI video tools (Runway, Kling, etc.) respond to timeline phrasing"
+            prompt += "\n- Avoid: smooth gradual transition, slow motion, same scene persisting, boring, static"
+            prompt += "\n\nFormat your output as (use exact timestamps):"
             for i in range(num_scenes):
                 start_time = i * scene_duration
                 end_time = start_time + scene_duration
-                prompt += f"\n\n[{start_time}s-{end_time}s] Scene {i+1}: [describe the scene]"
+                prompt += f"\n\n[{start_time}s-{end_time}s] Scene {i+1}: [describe a RADICALLY different scene - distinct setting, angle, or composition]"
         
         # If reference images exist, use vision API to analyze them
         if reference_images:
+            if cover_path and os.path.isfile(cover_path):
+                prompt += "\n\nThe FIRST image is the generated album cover. Create a video prompt that matches and extends this visual."
             prompt += f"\n\nAnalyze the provided reference images of this persona and create a video loop prompt that matches the character's visual appearance, styling, and aesthetic from these images."
             prompt += "\n\nIMPORTANT: The video loop must fully incorporate ALL visual characteristics from the persona's Visual Aesthetic and Base Image Prompt descriptions above."
             if not is_multiscene:
@@ -11966,7 +12196,13 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
             
             try:
                 if is_multiscene:
-                    system_message = f'You are a professional video prompt generator for music visualizers. Create a {video_duration}-second multi-scene video with {num_scenes} distinct scenes ({scene_duration}s each). Analyze the reference images and ensure the character appears consistently across all scenes. Generate clean, artistic, SFW video prompts suitable for music content. Output ONLY the final video prompt text with scene timestamps.'
+                    system_message = (
+                        f'You are a video prompt generator for AI video tools (Runway, Kling, Grok Imagine, etc.). '
+                        f'Create a {video_duration}-second multi-scene video with {num_scenes} distinct scenes ({scene_duration}s each). '
+                        'CRITICAL: Use HARD CUTS, JUMP CUTS - each scene must be wildly different. Add "rapid transitions", "montage style", "abrupt", "no continuity" to your output. '
+                        'Analyze the reference images and ensure the character appears consistently across all scenes. '
+                        'AI video tools often smooth everything - your prompt must explicitly demand radical scene changes. Output ONLY the final video prompt text with scene timestamps.'
+                    )
                 else:
                     system_message = 'You are a professional video prompt generator for music visualizers. Analyze the reference images and create a video loop prompt that matches the character\'s visual appearance. Generate clean, artistic, SFW video prompts suitable for music content. Output ONLY the final video prompt text with no explanations.'
                 result = self.azure_vision(reference_images, prompt, system_message=system_message, profile='text')
@@ -11974,6 +12210,12 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
                 messagebox.showerror('Error', f'Error generating video loop prompt: {e}')
                 self.log_debug('ERROR', f'Error generating video loop prompt: {e}')
                 return
+            finally:
+                if scaled_cover_path and os.path.exists(scaled_cover_path):
+                    try:
+                        os.unlink(scaled_cover_path)
+                    except Exception:
+                        pass
         else:
             prompt += "\n\nIMPORTANT: The video loop must fully incorporate ALL visual characteristics from the persona's Visual Aesthetic and Base Image Prompt descriptions above."
             if not is_multiscene:
@@ -11985,7 +12227,12 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
             
             try:
                 if is_multiscene:
-                    system_message = f'You are a professional video prompt generator for music visualizers. Create a {video_duration}-second multi-scene video with {num_scenes} distinct scenes ({scene_duration}s each). Generate clean, artistic, SFW video prompts suitable for music content. Output ONLY the final video prompt text with scene timestamps.'
+                    system_message = (
+                        f'You are a video prompt generator for AI video tools (Runway, Kling, Grok Imagine, etc.). '
+                        f'Create a {video_duration}-second multi-scene video with {num_scenes} distinct scenes ({scene_duration}s each). '
+                        'CRITICAL: Use HARD CUTS, JUMP CUTS - each scene must be wildly different. Add "rapid transitions", "montage style", "abrupt", "no continuity" to your output. '
+                        'AI video tools often smooth everything - your prompt must explicitly demand radical scene changes. Output ONLY the final video prompt text with scene timestamps.'
+                    )
                 else:
                     system_message = 'You are a professional video prompt generator for music visualizers. Generate clean, artistic, SFW video prompts suitable for music content. Output ONLY the final video prompt text with no explanations.'
                 result = self.azure_ai(prompt, system_message, profile='text')
@@ -15618,7 +15865,7 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
                     
                     # Check if video prompt file already exists
                     safe_basename = album_name.replace(':', '_').replace('/', '_').replace('\\', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace("'", "'").replace('<', '_').replace('>', '_').replace('|', '_')
-                    video_prompt_file = os.path.join(album_path, f'{safe_basename}-Video{aspect_ratio_suffix}.json')
+                    video_prompt_file = os.path.join(album_path, f'{safe_basename}{aspect_ratio_suffix}.json')
                     
                     # Check if video prompt exists in config or file
                     existing_video_prompt = album_config.get('video_prompt', '')

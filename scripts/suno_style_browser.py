@@ -102,6 +102,49 @@ def create_tooltip(widget, text):
     return ToolTip(widget, text)
 
 
+class PromptGenerationIdeasDialog(tk.Toplevel):
+    """Dialog for adding optional ideas before generating a cover/video prompt."""
+
+    def __init__(self, parent, prompt_type: str, context: str = 'Song'):
+        super().__init__(parent)
+        self.prompt_type = prompt_type
+        self.context = context
+        self.title(f'Generate {prompt_type} Prompt')
+        self.geometry('600x380')
+        self.transient(parent)
+        self.grab_set()
+        self.result = None
+        self.create_widgets()
+        self.update_idletasks()
+        x = parent.winfo_x() + (parent.winfo_width() // 2) - (self.winfo_width() // 2)
+        y = parent.winfo_y() + (parent.winfo_height() // 2) - (self.winfo_height() // 2)
+        self.geometry(f"+{x}+{y}")
+        self.ideas_text.focus_set()
+
+    def create_widgets(self):
+        main_frame = ttk.Frame(self, padding=10)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(main_frame, text=f'Generate {self.prompt_type} Prompt ({self.context})', font=('TkDefaultFont', 10, 'bold')).pack(anchor=tk.W, pady=(0, 10))
+        ttk.Label(main_frame, text='Add basic ideas for the cover/video (optional):', font=('TkDefaultFont', 8, 'bold')).pack(anchor=tk.W, pady=(5, 2))
+        help_text = '(e.g., "dark and moody", "include a road", "noir aesthetic", "cinematic lighting")'
+        ttk.Label(main_frame, text=help_text, font=('TkDefaultFont', 7), foreground='gray').pack(anchor=tk.W, pady=(0, 5))
+        self.ideas_text = scrolledtext.ScrolledText(main_frame, height=8, wrap=tk.WORD, font=('Consolas', 9))
+        self.ideas_text.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(fill=tk.X, pady=(5, 0))
+        ttk.Button(btn_frame, text='Generate', command=self.ok_clicked).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text='Cancel', command=self.cancel_clicked).pack(side=tk.LEFT, padx=5)
+        self.bind('<Escape>', lambda e: self.cancel_clicked())
+
+    def ok_clicked(self):
+        self.result = self.ideas_text.get('1.0', tk.END).strip()
+        self.destroy()
+
+    def cancel_clicked(self):
+        self.result = None
+        self.destroy()
+
+
 class PromptImprovementDialog(tk.Toplevel):
     """Dialog for requesting prompt improvements."""
     
@@ -279,6 +322,24 @@ def get_ai_covers_root(config: dict = None) -> str:
     """Get the path to AI-COVERS directory relative to project root."""
     project_root = get_project_root(config)
     return os.path.join(project_root, 'AI-COVERS')
+
+
+def resolve_styles_import_path(config: dict = None) -> str:
+    """Resolve path for loading styles from CSV/CSS files (default: AI/suno)."""
+    rel = ''
+    if config:
+        rel = (config.get('general', {}) or {}).get('styles_import_path', '') or ''
+    rel = rel.strip() if isinstance(rel, str) else ''
+    if not rel:
+        return os.path.join(get_project_root(config), 'AI', 'suno')
+    if os.path.isabs(rel):
+        return rel
+    return os.path.join(get_project_root(config), rel)
+
+
+def get_styles_import_base_name(config: dict) -> str:
+    """Get the base name filter for styles import (files starting with this)."""
+    return (config.get('general', {}) or {}).get('styles_import_base_name', '') or ''
 
 
 def resolve_analysis_data_path(config: dict = None) -> str:
@@ -581,6 +642,8 @@ def load_config() -> dict:
         "general": {
             "base_path": "",
             "csv_file_path": "suno/suno_sound_styles.csv",
+            "styles_import_path": "AI/suno",
+            "styles_import_base_name": "",
             "default_save_path": "",
             "title_appendix": "Cover",
             "maker_links": "• Subscribe: [Your Channel Link]",
@@ -695,7 +758,8 @@ def save_config(config: dict):
         return False
 
 
-def load_styles(csv_path: str):
+def load_styles_from_csv(csv_path: str) -> list:
+    """Load styles from CSV into a list of dicts."""
     styles = []
     try:
         with open(csv_path, 'r', encoding='utf-8') as f:
@@ -703,10 +767,65 @@ def load_styles(csv_path: str):
             for row in reader:
                 styles.append(row)
     except FileNotFoundError:
-        print(f'Error: CSV not found:\n{csv_path}')
+        print(f'Error: Styles CSV not found at {csv_path}')
     except Exception as exc:
-        print(f'Error: Failed to read CSV:\n{exc}')
+        print(f'Error: Failed to read styles CSV:\n{exc}')
     return styles
+
+
+def load_styles_from_css(css_path: str) -> list:
+    """Load styles from a .css-style file into a list of dicts with 'style' and 'prompt'.
+    Supports line-based 'Style Name: prompt text' and block 'Style Name { prompt text }'.
+    """
+    styles = []
+    try:
+        with open(css_path, 'r', encoding='utf-8') as f:
+            text = f.read()
+    except FileNotFoundError:
+        print(f'Error: Styles file not found at {css_path}')
+        return []
+    except Exception as exc:
+        print(f'Error: Failed to read styles file:\n{exc}')
+        return []
+
+    # Block format: "Name { ... }"
+    block_pattern = re.compile(r'([^{\s][^{]*?)\s*\{\s*([^}]*?)\s\}', re.DOTALL)
+    for m in block_pattern.finditer(text):
+        name = (m.group(1) or '').strip().strip('."\'')
+        prompt = (m.group(2) or '').strip()
+        if name:
+            styles.append({'style': name, 'prompt': prompt})
+
+    # Line-based format: "Name: prompt" (only if no blocks found)
+    if not styles:
+        for line in text.splitlines():
+            line = line.strip()
+            if not line or line.startswith('#') or line.startswith('//'):
+                continue
+            if ':' in line:
+                idx = line.index(':')
+                name = line[:idx].strip().strip('."\'')
+                prompt = line[idx + 1:].strip()
+                if name:
+                    styles.append({'style': name, 'prompt': prompt})
+    return styles
+
+
+def load_styles_from_file(file_path: str) -> list:
+    """Load styles from a CSV or CSS file. Returns list of dicts with at least 'style' and 'prompt'."""
+    if not file_path or not os.path.isfile(file_path):
+        return []
+    lower = file_path.lower()
+    if lower.endswith('.css'):
+        return load_styles_from_css(file_path)
+    if lower.endswith('.csv'):
+        return load_styles_from_csv(file_path)
+    return []
+
+
+def load_styles(file_path: str) -> list:
+    """Load styles from a CSV or CSS file. Alias for load_styles_from_file for backward compatibility."""
+    return load_styles_from_file(file_path)
 
 
 def get_prompt_template(template_name: str, config: dict = None) -> str:
@@ -1314,8 +1433,8 @@ class SettingsDialog(tk.Toplevel):
         base_path_entry.grid(row=1, column=1, pady=5, padx=5, sticky=tk.W)
         ttk.Button(general_frame, text='Browse...', command=self.browse_base_path).grid(row=1, column=2, pady=5, padx=5)
         
-        # CSV File Path
-        ttk.Label(general_frame, text='Suno Styles CSV File:', font=('TkDefaultFont', 9, 'bold')).grid(row=2, column=0, sticky=tk.W, pady=(15, 2), columnspan=3)
+        # Styles File Path (CSV or CSS)
+        ttk.Label(general_frame, text='Suno Styles File (CSV or CSS):', font=('TkDefaultFont', 9, 'bold')).grid(row=2, column=0, sticky=tk.W, pady=(15, 2), columnspan=3)
         ttk.Label(general_frame, text='Filename:', font=('TkDefaultFont', 8)).grid(row=3, column=0, sticky=tk.W, pady=5, padx=(10, 0))
         self.general_vars['csv_file_path'] = tk.StringVar(value=general_data.get('csv_file_path', 'suno_sound_styles.csv'))
         csv_entry = ttk.Entry(general_frame, textvariable=self.general_vars['csv_file_path'], width=40)
@@ -1412,8 +1531,8 @@ class SettingsDialog(tk.Toplevel):
         initial_dir = suno_dir if os.path.exists(suno_dir) else project_root
         
         path = filedialog.askopenfilename(
-            title='Select Suno Styles CSV',
-            filetypes=[('CSV Files', '*.csv'), ('All Files', '*.*')],
+            title='Select Styles File (CSV or CSS)',
+            filetypes=[('CSV Files', '*.csv'), ('CSS Style Files', '*.css'), ('All Files', '*.*')],
             initialdir=initial_dir
         )
         if path:
@@ -1558,7 +1677,8 @@ class SunoStyleBrowser(tk.Tk):
         song_menu.add_separator()
         song_menu.add_command(label='Load Style from Song...', command=self.show_style_derivation_dialog)
         song_menu.add_command(label='Load Style from Analysis (data/*.json)...', command=self.show_style_import_from_analysis_dialog)
-        
+        song_menu.add_command(label='Load Styles from File...', command=self.load_styles_from_file_dialog)
+
         settings_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label='Settings', menu=settings_menu)
         settings_menu.add_command(label='Settings...', command=self.open_settings)
@@ -1612,7 +1732,7 @@ class SunoStyleBrowser(tk.Tk):
         refresh_covers_btn.pack(side=tk.RIGHT, padx=4)
         create_tooltip(refresh_covers_btn, 'Refresh AI Covers tree')
         
-        open_csv_btn = ttk.Button(top_frame, text='Open CSV', command=self.choose_csv)
+        open_csv_btn = ttk.Button(top_frame, text='Open Styles File', command=self.choose_csv)
         open_csv_btn.pack(side=tk.RIGHT, padx=4)
         create_tooltip(open_csv_btn, 'Open a different CSV file')
         
@@ -2836,11 +2956,16 @@ class SunoStyleBrowser(tk.Tk):
         """Generate album cover prompt using AI."""
         song_name = self.song_name_var.get().strip()
         artist = self.artist_var.get().strip()
-        
         if not song_name or not artist:
             self.log_debug('WARNING', 'Generate Album Cover: Please enter Song Name and Artist.')
             return
-        
+
+        dialog = PromptGenerationIdeasDialog(self, 'Album Cover', 'Song')
+        self.wait_window(dialog)
+        if dialog.result is None:
+            return
+        user_ideas = (dialog.result or '').strip()
+
         # Get style - prefer Merged Style result, fallback to Styles field
         style_keywords = self.merged_style_text.get('1.0', tk.END).strip()
         if not style_keywords or style_keywords.startswith('Error:'):
@@ -2926,7 +3051,9 @@ class SunoStyleBrowser(tk.Tk):
         prompt = prompt.replace('{SUGGESTED_VISUAL_ELEMENTS}', suggested_elements)
         prompt = prompt.replace('{TYPOGRAPHY_STYLE}', typography_style)
         prompt = prompt.replace('{AI_COVER_NAME}', ai_cover_name)
-        
+        if user_ideas:
+            prompt += f"\n\n=== ADDITIONAL USER IDEAS (MUST INCORPORATE) ===\n{user_ideas}\n=== END USER IDEAS ===\n"
+
         self.log_debug('DEBUG', f'Generate Album Cover Prompt:\n{prompt}')
         # Call Azure AI with system message to output only the prompt
         # TODO: Change to profile='image_gen' when image generation endpoint is implemented
@@ -3003,11 +3130,16 @@ class SunoStyleBrowser(tk.Tk):
         """Generate video loop prompt from album cover and style."""
         # Check if album cover prompt exists
         album_cover_description = self.album_cover_text.get('1.0', tk.END).strip()
-        
         if not album_cover_description or album_cover_description.startswith('Error:'):
             self.log_debug('WARNING', 'Generate Video Loop: Please generate an album cover prompt first.')
             return
-        
+
+        dialog = PromptGenerationIdeasDialog(self, 'Video Loop', 'Song')
+        self.wait_window(dialog)
+        if dialog.result is None:
+            return
+        user_ideas = (dialog.result or '').strip()
+
         if not self.current_row:
             self.log_debug('WARNING', 'Generate Video Loop: Please select a music style from the list.')
             return
@@ -3099,7 +3231,9 @@ class SunoStyleBrowser(tk.Tk):
         prompt = prompt.replace('{CAMERA_STYLE}', camera_style)
         prompt = prompt.replace('{LIGHTING_DESCRIPTION}', lighting_description)
         prompt = prompt.replace('{ANIMATION_DESCRIPTION}', animation_description)
-        
+        if user_ideas:
+            prompt += f"\n\n=== ADDITIONAL USER IDEAS (MUST INCORPORATE) ===\n{user_ideas}\n=== END USER IDEAS ===\n"
+
         self.log_debug('DEBUG', f'Generate Video Loop Prompt:\n{prompt}')
         # Call Azure AI with system message to output only the prompt
         # TODO: Change to profile='video_gen' when video generation endpoint is implemented
@@ -4349,11 +4483,117 @@ Version: 1.0"""
             else:
                 self.log_debug('ERROR', 'Failed to save settings.')
 
+    def load_styles_from_file_dialog(self):
+        """Load styles from a CSV or CSS file in the configured styles import path, replacing current styles."""
+        import_dir = resolve_styles_import_path(self.ai_config)
+        base_name = get_styles_import_base_name(self.ai_config)
+        if not os.path.isdir(import_dir):
+            import_dir = get_project_root(self.ai_config)
+            import_dir = os.path.join(import_dir, 'AI', 'suno')
+        if not os.path.isdir(import_dir):
+            import_dir = os.getcwd()
+
+        dialog = tk.Toplevel(self)
+        dialog.title('Load Styles from File')
+        dialog.geometry('560x420')
+        dialog.transient(self)
+        dialog.grab_set()
+
+        main = ttk.Frame(dialog, padding=10)
+        main.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(main, text='Folder:', font=('TkDefaultFont', 9, 'bold')).pack(anchor=tk.W)
+        folder_var = tk.StringVar(value=import_dir)
+        folder_entry = ttk.Entry(main, textvariable=folder_var, width=60)
+        folder_entry.pack(fill=tk.X, pady=(2, 4))
+        ttk.Label(main, text='Base name (files starting with; leave empty for all):', font=('TkDefaultFont', 9, 'bold')).pack(anchor=tk.W, pady=(10, 2))
+        base_var = tk.StringVar(value=base_name)
+        base_entry = ttk.Entry(main, textvariable=base_var, width=40)
+        base_entry.pack(fill=tk.X, pady=(2, 4))
+
+        list_frame = ttk.Frame(main)
+        list_frame.pack(fill=tk.BOTH, expand=True, pady=(8, 4))
+        file_listbox = tk.Listbox(list_frame, exportselection=False, height=12)
+        file_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        sb = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=file_listbox.yview)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+        file_listbox.configure(yscrollcommand=sb.set)
+
+        status_var = tk.StringVar(value='')
+        ttk.Label(main, textvariable=status_var, foreground='gray').pack(anchor=tk.W, pady=(2, 0))
+
+        def refresh_list():
+            folder = folder_var.get().strip()
+            prefix = base_var.get().strip().lower()
+            file_listbox.delete(0, tk.END)
+            if not folder or not os.path.isdir(folder):
+                status_var.set('Folder not found.')
+                return
+            candidates = []
+            for name in sorted(os.listdir(folder)):
+                low = name.lower()
+                if not (low.endswith('.csv') or low.endswith('.css')):
+                    continue
+                if prefix and not low.startswith(prefix):
+                    continue
+                candidates.append(name)
+            for name in candidates:
+                file_listbox.insert(tk.END, name)
+            status_var.set(f'{len(candidates)} file(s) (.csv / .css)')
+
+        refresh_list()
+        base_var.trace_add('write', lambda *_: refresh_list())
+        folder_var.trace_add('write', lambda *_: refresh_list())
+
+        def browse_folder():
+            path = filedialog.askdirectory(title='Select folder (e.g. AI/suno)', initialdir=folder_var.get() or os.getcwd())
+            if path:
+                folder_var.set(path)
+
+        def do_open():
+            sel = file_listbox.curselection()
+            if not sel:
+                messagebox.showwarning('Warning', 'Select a file.')
+                return
+            idx = sel[0]
+            name = file_listbox.get(idx)
+            folder = folder_var.get().strip()
+            if not folder or not os.path.isdir(folder):
+                messagebox.showerror('Error', 'Invalid folder.')
+                return
+            file_path = os.path.join(folder, name)
+            styles = load_styles_from_file(file_path)
+            dialog.destroy()
+            if not styles:
+                messagebox.showwarning('Warning', f'No styles found in:\n{file_path}')
+                return
+            self.csv_path = file_path
+            self.styles = styles
+            self.filtered = list(self.styles)
+            self.apply_filter()
+            self.status_var.set(f'Loaded {len(self.styles)} styles from {self.csv_path}')
+            self.log_debug('INFO', f'Loaded {len(self.styles)} styles from {file_path}')
+
+        btn_row = ttk.Frame(main)
+        btn_row.pack(fill=tk.X, pady=(10, 0))
+        ttk.Button(btn_row, text='Browse...', command=browse_folder).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(btn_row, text='Open', command=do_open).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(btn_row, text='Cancel', command=dialog.destroy).pack(side=tk.LEFT)
+
+        file_listbox.bind('<Double-Button-1>', lambda _e: do_open())
+        dialog.bind('<Return>', lambda _e: do_open())
+        dialog.bind('<Escape>', lambda _e: dialog.destroy())
+
+        dialog.update_idletasks()
+        x = self.winfo_x() + (self.winfo_width() // 2) - (dialog.winfo_width() // 2)
+        y = self.winfo_y() + (self.winfo_height() // 2) - (dialog.winfo_height() // 2)
+        dialog.geometry(f'+{x}+{y}')
+
     def choose_csv(self):
         initial = os.path.dirname(self.csv_path) if os.path.exists(self.csv_path) else os.path.dirname(resolve_csv_path(self.ai_config))
         path = filedialog.askopenfilename(
-            title='Select Suno Styles CSV',
-            filetypes=[('CSV Files', '*.csv')],
+            title='Select Styles File (CSV or CSS)',
+            filetypes=[('CSV Files', '*.csv'), ('CSS Style Files', '*.css'), ('All Files', '*.*')],
             initialdir=initial
         )
         if path:
