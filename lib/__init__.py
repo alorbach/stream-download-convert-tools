@@ -27,11 +27,15 @@ from .ffmpeg_utils import FFmpegManager
 from .gui_utils import GUIManager, LogManager
 from .file_utils import FileManager
 from .process_utils import ProcessManager
+from .legal_utils import LegalManager
+from .security_utils import SecurityManager
 
 __all__ = [
     'FFmpegManager',
-    'GUIManager', 
+    'GUIManager',
     'LogManager',
     'FileManager',
-    'ProcessManager'
+    'ProcessManager',
+    'LegalManager',
+    'SecurityManager',
 ]
