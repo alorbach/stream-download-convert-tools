@@ -3056,6 +3056,55 @@ class SunoPersona(tk.Tk):
         else:
             messagebox.showinfo('Info', 'No song cover generated yet.')
 
+    def open_folder_in_explorer(self, path: str, select_file: bool = True) -> bool:
+        """Open a folder (or file's parent) in the system file manager. Optionally select the file."""
+        if not path or not os.path.exists(path):
+            return False
+        target = path
+        if os.path.isfile(path) and select_file:
+            target = os.path.dirname(path)
+        try:
+            target = os.path.normpath(os.path.abspath(target))
+            if sys.platform == 'win32':
+                if os.path.isfile(path) and select_file:
+                    subprocess.run(['explorer', '/select,', path], check=False)
+                else:
+                    os.startfile(target)
+            elif sys.platform == 'darwin':
+                if os.path.isfile(path) and select_file:
+                    subprocess.run(['open', '-R', path], check=False)
+                else:
+                    subprocess.run(['open', target], check=False)
+            else:
+                subprocess.run(['xdg-open', target], check=False)
+            return True
+        except Exception as e:
+            self.log_debug('ERROR', f'Failed to open in Explorer: {e}')
+            messagebox.showerror('Error', f'Failed to open folder: {e}')
+            return False
+
+    def explorer_song_cover(self):
+        """Open song cover folder in Explorer. Uses last generated or existing cover path."""
+        path = self.last_song_cover_path or self.get_album_cover_filepath()
+        if not path and self.current_song_path:
+            path = self.current_song_path
+        if path:
+            self.open_folder_in_explorer(path, select_file=bool(path and os.path.isfile(path)))
+        else:
+            messagebox.showwarning('Warning', 'No song selected. Select a song first.')
+
+    def explorer_album_cover(self):
+        """Open album cover folder in Explorer. Uses last generated or existing cover path."""
+        path = self.last_album_cover_path or (self.current_album.get('cover_image_file', '') if self.current_album else '')
+        if not path and self.current_album_id:
+            album_path = self._get_album_path(self.current_album_id)
+            if album_path and os.path.isdir(album_path):
+                path = album_path
+        if path:
+            self.open_folder_in_explorer(path, select_file=bool(path and os.path.isfile(path)))
+        else:
+            messagebox.showwarning('Warning', 'No album cover path. Select an album or generate a cover first.')
+
     def preview_last_album_cover(self):
         """Preview the last generated album cover."""
         if self.last_album_cover_path:
@@ -6066,6 +6115,9 @@ TECHNICAL REQUIREMENTS:
         ttk.Button(cover_row1, text='Translate', command=lambda: self.translate_prompt(self.album_cover_text, 'Song Cover Prompt')).pack(side=tk.LEFT, padx=2)
         ttk.Button(cover_row1, text='Run', command=self.run_image_model).pack(side=tk.LEFT, padx=2)
         ttk.Button(cover_row1, text='Preview', command=self.preview_last_song_cover).pack(side=tk.LEFT, padx=2)
+        song_explorer_btn = ttk.Button(cover_row1, text='\U0001F4C1 Explorer', command=self.explorer_song_cover)
+        song_explorer_btn.pack(side=tk.LEFT, padx=2)
+        create_tooltip(song_explorer_btn, 'Open song cover folder in file explorer')
         ttk.Button(cover_row1, text='Bulk Generate Covers', command=self.bulk_generate_covers).pack(side=tk.LEFT, padx=2)
         ttk.Checkbutton(cover_row1, text='Include persona in cover', variable=self.include_persona_in_cover_var).pack(side=tk.LEFT, padx=(10, 2))
         cover_row2 = ttk.Frame(album_cover_toolbar)
@@ -6253,6 +6305,9 @@ TECHNICAL REQUIREMENTS:
         ttk.Button(cover_album_row1, text='Translate', command=lambda: self.translate_prompt(self.album_cover_album_text, 'Album Cover Prompt')).pack(side=tk.LEFT, padx=4)
         ttk.Button(cover_album_row1, text='Run Cover Image', command=self.run_album_cover_image).pack(side=tk.LEFT, padx=4)
         ttk.Button(cover_album_row1, text='Preview', command=self.preview_last_album_cover).pack(side=tk.LEFT, padx=4)
+        album_explorer_btn = ttk.Button(cover_album_row1, text='\U0001F4C1 Explorer', command=self.explorer_album_cover)
+        album_explorer_btn.pack(side=tk.LEFT, padx=4)
+        create_tooltip(album_explorer_btn, 'Open album cover folder in file explorer')
         cover_album_row2 = ttk.Frame(cover_bar)
         cover_album_row2.pack(fill=tk.X)
         ttk.Button(cover_album_row2, text='Bulk Generate Covers', command=self.bulk_generate_covers).pack(side=tk.LEFT, padx=4)
@@ -7628,7 +7683,7 @@ TECHNICAL REQUIREMENTS:
                 self.log_debug('ERROR', f'Failed to delete song: {e}')
     
     def clone_song(self):
-        """Clone the selected song with a new name, copying only config.json."""
+        """Clone the selected song with a new name, copying only config (song data). Does not copy images or MP3 files."""
         if not self.current_song_path:
             messagebox.showwarning('Warning', 'Please select a song to clone.')
             return
@@ -7637,8 +7692,11 @@ TECHNICAL REQUIREMENTS:
             messagebox.showwarning('Warning', 'No persona selected.')
             return
         
-        # Get original song name
-        original_song_name = self.current_song.get('song_name', os.path.basename(self.current_song_path))
+        # Prefer full_song_name for default (richer display), fallback to song_name
+        original_song_name = (
+            self.current_song.get('full_song_name', '').strip()
+            or self.current_song.get('song_name', os.path.basename(self.current_song_path))
+        )
         
         # Create dialog for new song name
         dialog = tk.Toplevel(self)
@@ -7714,8 +7772,9 @@ TECHNICAL REQUIREMENTS:
                     with open(source_config_file, 'r', encoding='utf-8') as f:
                         config = json.load(f)
                     
-                    # Update song name in config
+                    # Update song name and full_song_name in config
                     config['song_name'] = result[0]
+                    config['full_song_name'] = result[0]
                     
                     # Clear album assignment
                     config['album_id'] = ''
@@ -7726,15 +7785,21 @@ TECHNICAL REQUIREMENTS:
                     with open(dest_config_file, 'w', encoding='utf-8') as f:
                         json.dump(config, f, indent=4)
                     
-                    self.log_debug('INFO', f'Cloned song "{original_song_name}" to "{result[0]}"')
-                    messagebox.showinfo('Success', f'Song cloned successfully as "{result[0]}"')
+                    self.log_debug('INFO', f'Cloned song "{original_song_name}" to "{result[0]}" (config only, no images/MP3)')
+                    messagebox.showinfo('Success', f'Song cloned successfully as "{result[0]}"\n\n(Only song data copied; images and MP3 files were not copied.)')
                 else:
                     messagebox.showerror('Error', 'Source song config.json not found!')
                     shutil.rmtree(new_song_path)
                     return
                 
-                # Refresh song list
+                # Refresh song list and select the new song
                 self.refresh_songs_list()
+                try:
+                    self.songs_tree.selection_set(safe_name)
+                    self.songs_tree.see(safe_name)
+                    self.on_song_select(None)
+                except tk.TclError:
+                    pass
                 
             except Exception as e:
                 messagebox.showerror('Error', f'Failed to clone song: {e}')
@@ -12470,6 +12535,7 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
     def extract_lyrics_from_mp3(self, mp3_path: str) -> str:
         """Extract lyrics from MP3 or MP4 file using AI transcription.
         
+        Prefers (Vocals) variant when present for better lyric extraction.
         If both MP3 and MP4 files exist with the same basename, asks user which to use.
         
         Returns:
@@ -12478,9 +12544,19 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
         if not os.path.exists(mp3_path):
             return ''
         
+        base_path = os.path.splitext(mp3_path)[0]
+        # Prefer vocal-only track for lyrics extraction when it exists
+        vocals_mp3_path = base_path + ' (Vocals).mp3'
+        vocals_mp4_path = base_path + ' (Vocals).mp4'
+        if os.path.exists(vocals_mp3_path):
+            self.log_debug('INFO', f'Using vocal file for lyrics extraction: {os.path.basename(vocals_mp3_path)}')
+            return self.extract_lyrics_with_ai(vocals_mp3_path)
+        if os.path.exists(vocals_mp4_path):
+            self.log_debug('INFO', f'Using vocal file for lyrics extraction: {os.path.basename(vocals_mp4_path)}')
+            return self.extract_lyrics_with_ai(vocals_mp4_path)
+        
         # Check if MP4 file with same basename exists
         audio_path = mp3_path
-        base_path = os.path.splitext(mp3_path)[0]
         mp4_path = base_path + '.mp4'
         
         mp3_exists = os.path.exists(mp3_path)
