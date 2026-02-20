@@ -12464,7 +12464,11 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
                         for scene in existing_list:
                             scene_num = scene.get('scene')
                             if scene_num is not None:
-                                existing_storyboard[scene_num] = scene
+                                try:
+                                    key = int(scene_num) if not isinstance(scene_num, int) else scene_num
+                                    existing_storyboard[key] = scene
+                                except (ValueError, TypeError):
+                                    existing_storyboard[scene_num] = scene
             except Exception as e:
                 # Fallback to current_song if reload fails
                 self.log_debug('WARNING', f'Failed to reload config.json for storyboard merge: {e}')
@@ -12473,14 +12477,22 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
                     for scene in existing_list:
                         scene_num = scene.get('scene')
                         if scene_num is not None:
-                            existing_storyboard[scene_num] = scene
+                            try:
+                                key = int(scene_num) if not isinstance(scene_num, int) else scene_num
+                                existing_storyboard[key] = scene
+                            except (ValueError, TypeError):
+                                existing_storyboard[scene_num] = scene
         elif self.current_song:
             # Fallback if no path available
             existing_list = self.current_song.get('storyboard', [])
             for scene in existing_list:
                 scene_num = scene.get('scene')
                 if scene_num is not None:
-                    existing_storyboard[scene_num] = scene
+                    try:
+                        key = int(scene_num) if not isinstance(scene_num, int) else scene_num
+                        existing_storyboard[key] = scene
+                    except (ValueError, TypeError):
+                        existing_storyboard[scene_num] = scene
         
         storyboard = []
         for item in self.storyboard_tree.get_children():
@@ -12488,7 +12500,7 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
             
             # Extract basic fields from treeview
             if len(values) >= 5:
-                scene_num = int(values[0]) if values[0].isdigit() else len(storyboard) + 1
+                scene_num = int(values[0]) if str(values[0]).isdigit() else len(storyboard) + 1
                 timestamp = values[1]
                 duration = values[2]
                 lyrics = values[3] if len(values) > 3 else ''
@@ -13180,6 +13192,45 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
         sanitized = re.sub(r'\s{2,}', ' ', sanitized)
         return sanitized.strip()
 
+    def _sanitize_no_character_scene_prompt_for_video(self, prompt: str) -> str:
+        """Sanitize stored prompts for no-character scenes: remove lyric-embedding and lip-sync
+        instructions that would cause the video model to render visible text.
+        Use when returning a stored generated_prompt that has no-character markers."""
+        if not prompt:
+            return prompt
+        result = self.sanitize_prompt_no_lyrics(prompt)
+        # Remove lip-sync timing block (no character to sync - would cause video to render text)
+        result = re.sub(
+            r'\n\nIMPORTANT:\s*You shall synchronize[\s\S]*',
+            '',
+            result,
+            flags=re.IGNORECASE | re.DOTALL
+        )
+        # Remove CRITICAL - LYRICS EMBEDDING / CRITICAL INSTRUCTIONS that mandate lyric embedding
+        result = re.sub(
+            r'\n\nCRITICAL\s*-\s*LYRICS\s*EMBEDDING[^\n]*(?:\n[^\n]*)*',
+            '',
+            result,
+            flags=re.IGNORECASE
+        )
+        # Remove CRITICAL INSTRUCTIONS blocks that mandate lyric embedding
+        result = re.sub(
+            r'\n\nCRITICAL INSTRUCTIONS FOR THIS SCENE:\n(?:\d+\.\s*[^\n]*\n)*\d+\.\s*CRITICAL\s*-\s*LYRICS\s*EMBEDDING[^\n]*(?:\n[^\n]*)*',
+            '',
+            result,
+            flags=re.IGNORECASE
+        )
+        # Remove LYRICS INTEGRATION instructions
+        result = re.sub(
+            r'\n\nLYRICS\s*INTEGRATION[^\n]*(?:\n[^\n]*)*(?:\n[^\n]*)*',
+            '',
+            result,
+            flags=re.IGNORECASE
+        )
+        # Add strong no-text instruction
+        result += "\n\nCRITICAL: No characters in this scene. Do NOT embed, carve, or display any lyric text. Use lyrics for mood and symbolism only; keep the scene completely text-free."
+        return result.strip()
+
     def sanitize_prompt_no_lyrics(self, prompt_text: str) -> str:
         """Remove lyric-embedding phrases when scene has no lyrics (time does not match).
         Only lyrics whose timing matches the scene should appear in the prompt."""
@@ -13205,6 +13256,22 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
         )
         result = re.sub(
             r'[^.]*[Ll]yric phrase readable only as[^.]*\.',
+            ' ', result
+        )
+        result = re.sub(
+            r'[^.;]*[Tt]he lyric text appears as[^.;]*[.;]',
+            ' ', result
+        )
+        result = re.sub(
+            r'[^.;]*[Ll]yric words become visible[^.;]*[.;]',
+            ' ', result
+        )
+        result = re.sub(
+            r'[^.;]*[Ff]ull lyric phrase is legible[^.;]*[.;]',
+            ' ', result
+        )
+        result = re.sub(
+            r'[^.;]*[Ee]tched words of the lyric[^.;]*[.;]',
             ' ', result
         )
         # Remove LYRICS FOR THIS SCENE lines
@@ -13969,7 +14036,7 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
                             }
                         )
                         
-                        batch_result = self.azure_ai(batch_prompt, system_message=system_message, max_tokens=max_tokens, temperature=1)
+                        batch_result = self.azure_ai(batch_prompt, system_message=system_message, profile='text', max_tokens=max_tokens, temperature=1)
                         
                         if batch_result['success']:
                             batch_content = batch_result['content'].strip()
@@ -13996,6 +14063,7 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
                     combined_content = '\n\n'.join(all_scenes_content)
                     self.log_debug('INFO', f'Combined all batches (total length: {len(combined_content)} chars)')
                     self.parse_storyboard_response(combined_content, seconds_per_video)
+                    self.save_song()
                     self.log_debug('INFO', 'Storyboard generated successfully in batches')
                     return
                 
@@ -14026,6 +14094,7 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
                     return
                 
                 self.parse_storyboard_response(combined_content, seconds_per_video)
+                self.save_song()
                 self.log_debug('INFO', 'Storyboard generated successfully')
             else:
                 messagebox.showerror('Error', f'Failed to generate storyboard: {result["error"]}')
@@ -14040,6 +14109,7 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
                                         visual_aesthetic, base_image_prompt, vibe, lyric_segments,
                                         song_duration, seconds_per_video, batch_start, batch_end, total_scenes):
         """Create a prompt for generating a specific batch of scenes."""
+        embed_lyrics = bool(self.embed_lyrics_var.get()) if hasattr(self, 'embed_lyrics_var') else True
         # Check multi-scene settings
         is_multiscene = self.storyboard_multiscene_var.get() if hasattr(self, 'storyboard_multiscene_var') else False
         try:
@@ -14066,7 +14136,7 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
             "COLOR VARIATION: Each scene MUST include a COLOR PALETTE line and rotate distinct palettes across scenes. "
             "Do NOT reuse the same base palette in consecutive scenes; avoid repeating the previous two palettes. "
             "Examples: teal+orange neon, warm amber dusk, cool moonlit blue, crimson/gold stage, pastel haze, emerald+violet, silver+magenta, sepia+turquoise. "
-            "Assign each of the {storyboard_setup_count} setups its own base palette family (e.g., warm, cool, neon, dusk). When you revisit a setup, keep its base palette but you may tweak lighting accents. If the global theme suggests green, limit green to a single setup and force other setups into contrasting palettes (warm/cool/neon/dusk) so the storyboard is not all green. "
+            f"Assign each of the {storyboard_setup_count} setups its own base palette family (e.g., warm, cool, neon, dusk). When you revisit a setup, keep its base palette but you may tweak lighting accents. If the global theme suggests green, limit green to a single setup and force other setups into contrasting palettes (warm/cool/neon/dusk) so the storyboard is not all green. "
             "Keep a palette consistent within a scene but shift between scenes while fitting the theme and lyrics mood.\n\n"
         )
         prompt += (
@@ -14120,14 +14190,23 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
             if batch_start > 1:
                 prompt += f"STORY CONTINUITY NOTE: You are generating scenes {batch_start}-{batch_end} of a {total_scenes}-scene story. Previous scenes have established the narrative world, locations, and story elements. Continue the story thread - reference or evolve elements from earlier scenes to maintain narrative flow.\n\n"
             prompt += f"CRITICAL: Generate ONLY scenes {batch_start} through {batch_end}. For EACH scene, you MUST:\n"
-            prompt += "1. Include the exact lyrics that play during that scene's time period (from LYRICS TIMING section above)\n"
-            prompt += "2. Format: SCENE X: [duration] seconds\nLYRICS FOR THIS SCENE: \"[exact lyrics text]\"\nCRITICAL INSTRUCTIONS FOR THIS SCENE:\n"
-            prompt += "   a. MOST SCENES (60-70%) MUST NOT include the persona. If this is a scene WITHOUT the persona AND without story characters, you MUST start the scene prompt with 'No persona present. No characters. No human figures. No artist. No people.' and create a purely abstract, environmental, symbolic, or atmospheric visual that represents the lyrics WITHOUT any human presence. However, if a story character (distinct from persona) fits naturally into this scene and serves the narrative, you may include them - but mark it clearly as a story character scene, not a persona scene.\n"
-            prompt += "   b. The image must visually represent and incorporate the lyrics above - include visual elements that match what the lyrics describe\n"
-            prompt += "   c. The lyrics text MUST be embedded and integrated into the scene and background, merging seamlessly with the surroundings. The lyrics should appear as part of the environment - written on surfaces, integrated into textures, blended into the background, appearing on signs/walls/objects in the scene, or woven into the visual design itself. They should NOT appear as a floating text overlay, but rather as an organic part of the scene that merges with the background and surroundings\n"
-            prompt += "   d. Format the image prompt to include: [visual description] + \"with the lyrics text '[exact lyrics]' embedded INTO THE ENVIRONMENT ONLY (e.g., carved into walls, glowing in neon signs, written on objects, formed by patterns, integrated into textures) - NO text overlays, NO bottom bars, NO subtitles, NO floating text\"\n"
-            prompt += "3. The image prompt MUST directly incorporate and visualize what the lyrics describe AND include instructions to embed the lyrics text into the scene design, merging with the background and surroundings\n"
-            prompt += "4. CRITICAL: When a scene prompt starts with 'No persona present', the generated image MUST be completely free of ANY human figures, characters, or people. Only environmental, abstract, symbolic, or atmospheric elements should be present.\n"
+            if embed_lyrics:
+                prompt += "1. Include the exact lyrics that play during that scene's time period (from LYRICS TIMING section above)\n"
+                prompt += "2. Format: SCENE X: [duration] seconds\nLYRICS FOR THIS SCENE: \"[exact lyrics text]\"\nCRITICAL INSTRUCTIONS FOR THIS SCENE:\n"
+                prompt += "   a. MOST SCENES (60-70%) MUST NOT include the persona. If this is a scene WITHOUT the persona AND without story characters, you MUST start the scene prompt with 'No persona present. No characters. No human figures. No artist. No people.' and create a purely abstract, environmental, symbolic, or atmospheric visual that represents the lyrics WITHOUT any human presence. However, if a story character (distinct from persona) fits naturally into this scene and serves the narrative, you may include them - but mark it clearly as a story character scene, not a persona scene.\n"
+                prompt += "   b. The image must visually represent and incorporate the lyrics above - include visual elements that match what the lyrics describe\n"
+                prompt += "   c. The lyrics text MUST be embedded and integrated into the scene and background, merging seamlessly with the surroundings. The lyrics should appear as part of the environment - written on surfaces, integrated into textures, blended into the background, appearing on signs/walls/objects in the scene, or woven into the visual design itself. They should NOT appear as a floating text overlay, but rather as an organic part of the scene that merges with the background and surroundings\n"
+                prompt += "   d. Format the image prompt to include: [visual description] + \"with the lyrics text '[exact lyrics]' embedded INTO THE ENVIRONMENT ONLY (e.g., carved into walls, glowing in neon signs, written on objects, formed by patterns, integrated into textures) - NO text overlays, NO bottom bars, NO subtitles, NO floating text\"\n"
+                prompt += "3. The image prompt MUST directly incorporate and visualize what the lyrics describe AND include instructions to embed the lyrics text into the scene design, merging with the background and surroundings\n"
+                prompt += "4. CRITICAL: When a scene prompt starts with 'No persona present', the generated image MUST be completely free of ANY human figures, characters, or people. Only environmental, abstract, symbolic, or atmospheric elements should be present.\n"
+            else:
+                prompt += "1. Include the lyrics that play during that scene's time period for MOOD REFERENCE ONLY (from LYRICS TIMING section above)\n"
+                prompt += "2. Format: SCENE X: [duration] seconds\nLYRICS FOR THIS SCENE (mood reference only): \"[exact lyrics text]\"\nCRITICAL INSTRUCTIONS FOR THIS SCENE:\n"
+                prompt += "   a. MOST SCENES (60-70%) MUST NOT include the persona. If this is a scene WITHOUT the persona AND without story characters, you MUST start the scene prompt with 'No persona present. No characters. No human figures. No artist. No people.' and create a purely abstract, environmental, symbolic, or atmospheric visual that represents the lyrics WITHOUT any human presence. However, if a story character (distinct from persona) fits naturally into this scene and serves the narrative, you may include them - but mark it clearly as a story character scene, not a persona scene.\n"
+                prompt += "   b. Do NOT render or embed any visible text or lyrics in the scene. Keep all scenes text-free (no overlays, no environmental text)\n"
+                prompt += "   c. Use the feeling of the lyrics to shape lighting, color, and symbolism only - convey the mood and meaning through visuals, not through displayed text\n"
+                prompt += "   d. The image prompt MUST visually represent the lyrics' mood and meaning through atmosphere, color, lighting, and symbolic imagery - NO visible lyric text anywhere in the scene\n"
+                prompt += "3. CRITICAL: When a scene prompt starts with 'No persona present', the generated image MUST be completely free of ANY human figures, characters, or people. Only environmental, abstract, symbolic, or atmospheric elements should be present.\n"
             prompt += f"Start immediately with SCENE {batch_start}:, no preamble, no explanations.\n\n"
         else:
             prompt += f"CRITICAL: Generate ONLY scenes {batch_start} through {batch_end}. Start immediately with SCENE {batch_start}:, no preamble, no explanations.\n\n"
@@ -14138,22 +14217,8 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
             scene2_lyrics = scene_lyrics_dict.get(batch_start + 1, '') if batch_start < batch_end else ''
             
             if scene1_lyrics:
-                prompt += f"SCENE {batch_start}: [duration] seconds\nLYRICS FOR THIS SCENE: \"{scene1_lyrics}\"\nCOLOR PALETTE: [distinct palette for this scene]\n"
-                prompt += "CRITICAL INSTRUCTIONS FOR THIS SCENE:\n"
-                prompt += "1. CONTENT SAFETY: Use safe, artistic language. Avoid 'black' (use 'dark', 'shadowy'), 'void' (use 'empty space'), 'compressing/bending under force' (use 'curving', 'warping'), 'praying' (use 'pleading', 'hoping'). Create visually poetic prompts that pass content moderation.\n"
-                prompt += "2. The image must visually represent and incorporate the lyrics above - include visual elements that match what the lyrics describe.\n"
-                prompt += "3. CRITICAL - LYRICS EMBEDDING: The lyrics text MUST be embedded and integrated INTO THE SCENE ENVIRONMENT ONLY - written on surfaces, integrated into textures, blended into backgrounds, appearing on signs/walls/objects, or woven into the visual design. They MUST merge seamlessly with the surroundings as an organic part of the scene.\n"
-                prompt += "   - DO NOT add lyrics as text overlays, subtitles, captions, or bottom bars\n"
-                prompt += "   - DO NOT add lyrics floating on top of the image\n"
-                prompt += "   - Lyrics should ONLY appear as part of the environment itself (e.g., carved into walls, glowing in neon signs, written on objects, formed by patterns, etc.)\n"
-                prompt += "   - If lyrics cannot be naturally integrated into the environment, focus on visual representation of the lyrics' meaning instead\n"
-                prompt += f"3. Format the image prompt to include: [visual description] + \"with the lyrics text '{scene1_lyrics}' embedded INTO THE ENVIRONMENT ONLY (e.g., carved into walls, glowing in neon signs, written on objects, formed by patterns, integrated into textures) - NO text overlays, NO bottom bars, NO subtitles, NO floating text\"\n\n"
-            else:
-                prompt += f"SCENE {batch_start}: [duration] seconds\n[NO LYRICS - do NOT embed any lyrics text]\nCOLOR PALETTE: [distinct palette for this scene]\n[detailed image prompt - mood and atmosphere only, NO lyric text, keep scene text-free]\n\n"
-            
-            if batch_start < batch_end:
-                if scene2_lyrics:
-                    prompt += f"SCENE {batch_start + 1}: [duration] seconds\nLYRICS FOR THIS SCENE: \"{scene2_lyrics}\"\nCOLOR PALETTE: [distinct palette for this scene]\n"
+                if embed_lyrics:
+                    prompt += f"SCENE {batch_start}: [duration] seconds\nLYRICS FOR THIS SCENE: \"{scene1_lyrics}\"\nCOLOR PALETTE: [distinct palette for this scene]\n"
                     prompt += "CRITICAL INSTRUCTIONS FOR THIS SCENE:\n"
                     prompt += "1. CONTENT SAFETY: Use safe, artistic language. Avoid 'black' (use 'dark', 'shadowy'), 'void' (use 'empty space'), 'compressing/bending under force' (use 'curving', 'warping'), 'praying' (use 'pleading', 'hoping'). Create visually poetic prompts that pass content moderation.\n"
                     prompt += "2. The image must visually represent and incorporate the lyrics above - include visual elements that match what the lyrics describe.\n"
@@ -14162,7 +14227,29 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
                     prompt += "   - DO NOT add lyrics floating on top of the image\n"
                     prompt += "   - Lyrics should ONLY appear as part of the environment itself (e.g., carved into walls, glowing in neon signs, written on objects, formed by patterns, etc.)\n"
                     prompt += "   - If lyrics cannot be naturally integrated into the environment, focus on visual representation of the lyrics' meaning instead\n"
-                    prompt += f"4. Format the image prompt to include: [visual description] + \"with the lyrics text '{scene2_lyrics}' embedded INTO THE ENVIRONMENT ONLY (e.g., carved into walls, glowing in neon signs, written on objects, formed by patterns, integrated into textures) - NO text overlays, NO bottom bars, NO subtitles, NO floating text\"\n\n"
+                    prompt += f"3. Format the image prompt to include: [visual description] + \"with the lyrics text '{scene1_lyrics}' embedded INTO THE ENVIRONMENT ONLY (e.g., carved into walls, glowing in neon signs, written on objects, formed by patterns, integrated into textures) - NO text overlays, NO bottom bars, NO subtitles, NO floating text\"\n\n"
+                else:
+                    prompt += f"SCENE {batch_start}: [duration] seconds\nLYRICS FOR THIS SCENE (mood reference only): \"{scene1_lyrics}\"\nCOLOR PALETTE: [distinct palette for this scene]\n"
+                    prompt += "Mood/symbolism only - NO visible lyric text. Use lighting, color, and symbolism to convey the lyrics' feeling. [detailed image prompt]\n\n"
+            else:
+                prompt += f"SCENE {batch_start}: [duration] seconds\n[NO LYRICS - do NOT embed any lyrics text]\nCOLOR PALETTE: [distinct palette for this scene]\n[detailed image prompt - mood and atmosphere only, NO lyric text, keep scene text-free]\n\n"
+            
+            if batch_start < batch_end:
+                if scene2_lyrics:
+                    if embed_lyrics:
+                        prompt += f"SCENE {batch_start + 1}: [duration] seconds\nLYRICS FOR THIS SCENE: \"{scene2_lyrics}\"\nCOLOR PALETTE: [distinct palette for this scene]\n"
+                        prompt += "CRITICAL INSTRUCTIONS FOR THIS SCENE:\n"
+                        prompt += "1. CONTENT SAFETY: Use safe, artistic language. Avoid 'black' (use 'dark', 'shadowy'), 'void' (use 'empty space'), 'compressing/bending under force' (use 'curving', 'warping'), 'praying' (use 'pleading', 'hoping'). Create visually poetic prompts that pass content moderation.\n"
+                        prompt += "2. The image must visually represent and incorporate the lyrics above - include visual elements that match what the lyrics describe.\n"
+                        prompt += "3. CRITICAL - LYRICS EMBEDDING: The lyrics text MUST be embedded and integrated INTO THE SCENE ENVIRONMENT ONLY - written on surfaces, integrated into textures, blended into backgrounds, appearing on signs/walls/objects, or woven into the visual design. They MUST merge seamlessly with the surroundings as an organic part of the scene.\n"
+                        prompt += "   - DO NOT add lyrics as text overlays, subtitles, captions, or bottom bars\n"
+                        prompt += "   - DO NOT add lyrics floating on top of the image\n"
+                        prompt += "   - Lyrics should ONLY appear as part of the environment itself (e.g., carved into walls, glowing in neon signs, written on objects, formed by patterns, etc.)\n"
+                        prompt += "   - If lyrics cannot be naturally integrated into the environment, focus on visual representation of the lyrics' meaning instead\n"
+                        prompt += f"4. Format the image prompt to include: [visual description] + \"with the lyrics text '{scene2_lyrics}' embedded INTO THE ENVIRONMENT ONLY (e.g., carved into walls, glowing in neon signs, written on objects, formed by patterns, integrated into textures) - NO text overlays, NO bottom bars, NO subtitles, NO floating text\"\n\n"
+                    else:
+                        prompt += f"SCENE {batch_start + 1}: [duration] seconds\nLYRICS FOR THIS SCENE (mood reference only): \"{scene2_lyrics}\"\nCOLOR PALETTE: [distinct palette for this scene]\n"
+                        prompt += "Mood/symbolism only - NO visible lyric text. Use lighting, color, and symbolism to convey the lyrics' feeling. [detailed image prompt]\n\n"
                 else:
                     prompt += f"SCENE {batch_start + 1}: [duration] seconds\n[NO LYRICS - do NOT embed any lyrics text]\nCOLOR PALETTE: [distinct palette for this scene]\n[detailed image prompt - mood and atmosphere only, NO lyric text, keep scene text-free]\n\n"
         else:
@@ -14200,6 +14287,13 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
         if not matches:
             return 0
         return max(int(m) for m in matches)
+
+    def _get_all_scene_numbers_from_text(self, content: str) -> set:
+        """Extract all scene numbers mentioned in the content."""
+        if not content:
+            return set()
+        matches = re.findall(r'SCENE\s+(\d+)', content, flags=re.IGNORECASE)
+        return set(int(m) for m in matches)
     
     def ensure_complete_storyboard_response(self, initial_content: str, song_name: str, full_song_name: str,
                                             lyrics: str, merged_style: str, storyboard_theme: str, persona_scene_percent: int, storyboard_setup_count: int, persona_name: str,
@@ -14230,7 +14324,7 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
                 song_duration, seconds_per_video, batch_start, batch_end, total_scenes
             )
             
-            batch_result = self.azure_ai(batch_prompt, system_message=system_message, max_tokens=max_tokens, temperature=1)
+            batch_result = self.azure_ai(batch_prompt, system_message=system_message, profile='text', max_tokens=max_tokens, temperature=1)
             if not batch_result['success']:
                 error_msg = f'Failed to generate scenes {batch_start}-{batch_end}: {batch_result["error"]}'
                 self.log_debug('ERROR', error_msg)
@@ -14271,8 +14365,13 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
             self.log_debug('ERROR', error_msg)
             messagebox.showerror('Error', error_msg)
             return None
-        
+
         combined_content = '\n\n'.join(aggregated_contents)
+        expected_scenes = set(range(1, total_scenes + 1))
+        found_scenes = self._get_all_scene_numbers_from_text(combined_content)
+        missing_scenes = expected_scenes - found_scenes
+        if missing_scenes:
+            self.log_debug('WARNING', f'Scene gap detected: missing scene(s) {sorted(missing_scenes)}. Some scenes may not parse correctly.')
         self.log_debug('INFO', f'All {total_scenes} scenes collected successfully.')
         return combined_content
 
@@ -14587,16 +14686,20 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
             self.log_debug('WARNING', 'No storyboard_response_*.json files found.')
             messagebox.showwarning('Warning', f'No storyboard response files found in:\n{song_path}')
             return
-        # Sort by timestamp in filename (YYYYMMDD_HHMMSS), newest first
-        def sort_key(p):
-            try:
-                base = os.path.basename(p)
-                ts = base.replace('storyboard_response_', '').replace('.json', '')
-                return (ts, p)
-            except Exception:
-                return ('', p)
-        files_sorted = sorted(files, key=sort_key, reverse=True)
-        latest_path = files_sorted[0]
+        # Filter to valid format storyboard_response_YYYYMMDD_HHMMSS.json and sort by timestamp
+        valid_pattern = re.compile(r'storyboard_response_(\d{8}_\d{6})\.json$')
+        valid_files = []
+        for p in files:
+            base = os.path.basename(p)
+            m = valid_pattern.match(base)
+            if m:
+                valid_files.append((m.group(1), p))
+        if not valid_files:
+            self.log_debug('WARNING', 'No valid storyboard_response_YYYYMMDD_HHMMSS.json files found.')
+            messagebox.showwarning('Warning', f'No valid storyboard response files (expected format: storyboard_response_YYYYMMDD_HHMMSS.json) in:\n{song_path}')
+            return
+        valid_files.sort(key=lambda x: x[0], reverse=True)
+        latest_path = valid_files[0][1]
         try:
             with open(latest_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
@@ -14683,6 +14786,32 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
         except Exception as exc:
             self.log_debug('WARNING', f'Failed to save storyboard prompt: {exc}')
 
+    def _get_scenes_from_tree(self, items: list) -> list:
+        """Extract (scene_num, prompt, lyrics) from storyboard treeview items.
+
+        Args:
+            items: List of treeview item ids (e.g. from selection or get_children)
+
+        Returns:
+            List of (scene_num, prompt, lyrics) tuples for items with non-empty prompts
+        """
+        scenes = []
+        for item in items:
+            values = self.storyboard_tree.item(item, 'values')
+            if len(values) >= 5:
+                scene_num = values[0]
+                lyrics = values[3] if len(values) > 3 else ''
+                prompt = values[4]
+            elif len(values) >= 3:
+                scene_num = values[0]
+                prompt = values[2]
+                lyrics = ''
+            else:
+                continue
+            if prompt:
+                scenes.append((scene_num, prompt, lyrics))
+        return scenes
+
     def generate_storyboard_image_selected(self):
         """Generate images for the selected storyboard scenes (supports multiple selection)."""
         if not hasattr(self, 'storyboard_tree'):
@@ -14693,24 +14822,7 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
             messagebox.showwarning('Warning', 'Please select one or more scenes to generate images for.')
             return
         
-        # Get all selected scenes
-        scenes_to_generate = []
-        for item in selection:
-            values = self.storyboard_tree.item(item, 'values')
-            if len(values) >= 5:
-                scene_num = values[0]
-                lyrics = values[3] if len(values) > 3 else ''  # Lyrics in 4th column
-                prompt = values[4]  # Prompt is now 5th column
-                if prompt:
-                    scenes_to_generate.append((scene_num, prompt, lyrics))
-            elif len(values) >= 3:
-                # Fallback for old format (no lyrics column)
-                scene_num = values[0]
-                prompt = values[2]
-                lyrics = ''
-                if prompt:
-                    scenes_to_generate.append((scene_num, prompt, lyrics))
-        
+        scenes_to_generate = self._get_scenes_from_tree(selection)
         if not scenes_to_generate:
             messagebox.showwarning('Warning', 'No valid scenes found in selection.')
             return
@@ -14763,25 +14875,8 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
         response = messagebox.askyesno('Generate All Images', f'Generate images for all {len(items)} scenes? This may take a while.')
         if not response:
             return
-        
-        # Get all scenes to generate
-        scenes_to_generate = []
-        for item in items:
-            values = self.storyboard_tree.item(item, 'values')
-            if len(values) >= 5:
-                scene_num = values[0]
-                lyrics = values[3] if len(values) > 3 else ''  # Lyrics in 4th column
-                prompt = values[4]  # Prompt is now 5th column
-                if prompt:
-                    scenes_to_generate.append((scene_num, prompt, lyrics))
-            elif len(values) >= 3:
-                # Fallback for old format (no lyrics column)
-                scene_num = values[0]
-                prompt = values[2]
-                lyrics = ''
-                if prompt:
-                    scenes_to_generate.append((scene_num, prompt, lyrics))
-        
+
+        scenes_to_generate = self._get_scenes_from_tree(items)
         if not scenes_to_generate:
             messagebox.showwarning('Warning', 'No valid scenes found.')
             return
@@ -15044,6 +15139,13 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
                     stored_prompt_type = scene.get('generated_prompt_type', 'image')
                     
                     if stored_prompt:
+                        # For no-character scenes: sanitize lyric-embedding instructions (avoid text in video/image)
+                        no_char_markers = ('[no characters]', 'no characters', 'no persona present', 'no human figures',
+                                          'no persona', 'no people', 'no artist', '[no persona]', 'without any human',
+                                          'purely environmental', 'purely abstract', 'no human presence')
+                        if any(m in stored_prompt.lower() for m in no_char_markers):
+                            stored_prompt = self._sanitize_no_character_scene_prompt_for_video(stored_prompt)
+                            self.log_debug('INFO', f'Sanitized stored prompt for no-character scene {scene_num}')
                         # In multi-scene mode, we can use stored 'video' prompts for 'image' requests
                         # by stripping the multi-scene formatting
                         if is_multiscene and prompt_type == 'image':
@@ -15066,11 +15168,17 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
         cache_key = f"{scene_num}|{self._get_song_persona_preset_key()}{cache_suffix}"
         if cache_key in self.scene_final_prompts:
             cached_prompt = self.scene_final_prompts[cache_key]
+            # For no-character scenes: sanitize lyric-embedding instructions
+            no_char_markers = ('[no characters]', 'no characters', 'no persona present', 'no human figures',
+                              'no persona', 'no people', 'no artist', '[no persona]', 'without any human',
+                              'purely environmental', 'purely abstract', 'no human presence')
+            if any(m in cached_prompt.lower() for m in no_char_markers):
+                cached_prompt = self._sanitize_no_character_scene_prompt_for_video(cached_prompt)
             # For IMAGE generation in multi-scene mode, strip formatting before returning
             if is_multiscene and prompt_type == 'image':
                 return self._strip_multiscene_formatting_for_image(cached_prompt)
             return cached_prompt
-        
+
         # Third, build a new prompt if base_prompt is available
         if base_prompt:
             return self.build_scene_image_prompt(scene_num, base_prompt, lyrics, prompt_type)
@@ -15395,9 +15503,10 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
             'no persona', 'no people', 'no artist', '[no persona]', 'without any human',
             'purely environmental', 'purely abstract', 'no human presence'
         ]
-        if any(marker in prompt_lower for marker in no_character_markers):
+        scene_has_no_characters = any(marker in prompt_lower for marker in no_character_markers)
+        if scene_has_no_characters:
             persona_in_scene = False
-        elif self.current_persona:
+        if not scene_has_no_characters and self.current_persona:
             persona_name = self.current_persona.get('name', '').lower()
             visual_aesthetic = self.current_persona.get('visual_aesthetic', '').lower()
             base_image_prompt = self.current_persona.get('base_image_prompt', '').lower()
@@ -15534,7 +15643,16 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
                     prompt += "\n\nIMPORTANT: The character in this scene must fully incorporate ALL visual characteristics from the persona's Visual Aesthetic and Base Image Prompt descriptions above."
 
         if lyrics_text and '[NO LYRICS]' not in lyrics_text.upper():
-            if embed_lyrics_enabled:
+            if scene_has_no_characters:
+                # Strip any lyric-embedding phrases from base prompt (AI may have added them)
+                prompt = self.sanitize_prompt_no_lyrics(prompt)
+                # No characters = no one to sing; reflect mood only, never embed lyric text
+                prompt += (
+                    "\n\nLyrics for mood only (keep scene text-free): "
+                    f"\"{lyrics_text}\". Use the feeling of these words to shape lighting, color, and symbolism, but render NO visible text anywhere. "
+                    "Do NOT embed, carve, or display the lyric words in the environment."
+                )
+            elif embed_lyrics_enabled:
                 prompt += (
                     "\n\nLYRICS INTEGRATION (environment only, no overlays): "
                     f"\"{lyrics_text}\". Embed the words physically into the scene using materials like neon, etched metal, floor seams, glass reflections, or carved wood. "
@@ -15545,8 +15663,8 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
                     "\n\nLyrics for mood only (keep scene text-free): "
                     f"\"{lyrics_text}\". Use the feeling of these words to shape lighting, color, and symbolism, but render no visible text."
                 )
-        # Optional keyword embedding
-        if keyword and '[NO LYRICS]' not in lyrics_text.upper():
+        # Optional keyword embedding (skip for no-character scenes - keep purely environmental)
+        if keyword and '[NO LYRICS]' not in (lyrics_text or '').upper() and not scene_has_no_characters:
             prompt += (
                 f"\n\nOPTIONAL KEYWORD: \"{keyword}\". Only embed this word as diegetic text (signage, hologram, graffiti, screen UI) IF it naturally fits the scene and does not conflict with aesthetics. "
                 "If it feels forced or breaks immersion, omit it and keep the scene text-free."
@@ -15560,8 +15678,8 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
                 f'\n\nCHARACTER SPEAKS/SINGS (lip-sync): "{lyrics_text}" '
                 'The character must mouth these exact words. Do NOT use the story theme as dialogue.'
             )
-        # Add exact word-level timing for any VIDEO prompt with lyrics (persona or story character)
-        if prompt_type == 'video' and lyrics_text and '[NO LYRICS]' not in lyrics_text.upper():
+        # Add exact word-level timing only when there is a character to lip-sync (no timing for purely environmental scenes)
+        if prompt_type == 'video' and lyrics_text and '[NO LYRICS]' not in lyrics_text.upper() and not scene_has_no_characters:
             try:
                 seconds_per_video = int(self.storyboard_seconds_var.get() or '6') if hasattr(self, 'storyboard_seconds_var') else 6
                 scene_start_seconds = 0.0
@@ -15588,8 +15706,8 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
             except Exception as e:
                 self.log_debug('WARNING', f'Failed to add lyrics timing to scene prompt: {e}')
 
-        # For VIDEO + multi-scene: inject character descriptions into sub-scenes
-        if prompt_type == 'video' and is_multiscene and re.search(r'\[\d+s[-–]\d+s\]', prompt):
+        # For VIDEO + multi-scene: inject character descriptions into sub-scenes (skip for no-character scenes)
+        if prompt_type == 'video' and is_multiscene and not scene_has_no_characters and re.search(r'\[\d+s[-–]\d+s\]', prompt):
             character_registry = {}
             metadata = self.current_song.get('storyboard_metadata', {}) if self.current_song else {}
             for cid, info in (metadata.get('characters') or {}).items():
