@@ -2680,6 +2680,7 @@ def load_song_config(song_path: str) -> dict:
         'album_cover': '',
         'video_loop': '',
         'storyboard': [],
+        'storyboard_metadata': {},
         'storyboard_seconds_per_video': 6,
         'storyboard_image_size': '3:2 (1536x1024)',
         'album_cover_size': '1:1 (1024x1024)',
@@ -2691,6 +2692,7 @@ def load_song_config(song_path: str) -> dict:
         'overlay_lyrics_on_image': False,
         'embed_lyrics_in_prompt': True,
         'embed_keywords_in_prompt': False,
+        'include_lyrics_in_export': False,
         'persona_scene_percent': 40,
         'storyboard_setup_count': 6,
         'persona_image_preset': 'default'
@@ -6495,6 +6497,7 @@ TECHNICAL REQUIREMENTS:
         ttk.Button(button_frame, text='Generate Storyboard', command=self.generate_storyboard).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text='Generate All Prompts', command=self.generate_all_prompts).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text='Export Generated Prompts', command=self.export_generated_prompts).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text='Reprocess Latest Response', command=self.reprocess_latest_storyboard_response).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text='Reset Storyboard', command=self.reset_storyboard).pack(side=tk.LEFT, padx=5)
         self.include_lyrics_in_export_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(button_frame, text='Include Lyrics in Export', variable=self.include_lyrics_in_export_var).pack(side=tk.LEFT, padx=5)
@@ -8334,8 +8337,8 @@ TECHNICAL REQUIREMENTS:
             self.embed_lyrics_var.set(bool(self.current_song.get('embed_lyrics_in_prompt', True)))
         if hasattr(self, 'embed_keywords_var'):
             self.embed_keywords_var.set(bool(self.current_song.get('embed_keywords_in_prompt', False)))
-        if hasattr(self, 'embed_keywords_var'):
-            self.embed_keywords_var.set(bool(self.current_song.get('embed_keywords_in_prompt', False)))
+        if hasattr(self, 'include_lyrics_in_export_var'):
+            self.include_lyrics_in_export_var.set(bool(self.current_song.get('include_lyrics_in_export', False)))
         
         # Load album cover and video loop settings
         if hasattr(self, 'album_cover_size_var'):
@@ -8422,6 +8425,8 @@ TECHNICAL REQUIREMENTS:
             self.embed_lyrics_var.set(True)
         if hasattr(self, 'embed_keywords_var'):
             self.embed_keywords_var.set(False)
+        if hasattr(self, 'include_lyrics_in_export_var'):
+            self.include_lyrics_in_export_var.set(False)
         if hasattr(self, 'spotify_category_var'):
             self.spotify_category_var.set('')
         if hasattr(self, 'spotify_category_secondary_var'):
@@ -8899,6 +8904,7 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
             'spotify_link': self.spotify_link_var.get().strip() if hasattr(self, 'spotify_link_var') else '',
             'apple_music_link': self.apple_link_var.get().strip() if hasattr(self, 'apple_link_var') else '',
             'storyboard': self.get_storyboard_data() if hasattr(self, 'storyboard_tree') else [],
+            'storyboard_metadata': self.current_song.get('storyboard_metadata', {}) if self.current_song else {},
             'storyboard_seconds_per_video': int(self.storyboard_seconds_var.get() or '6') if hasattr(self, 'storyboard_seconds_var') else 6,
             'storyboard_image_size': self.storyboard_image_size_var.get() if hasattr(self, 'storyboard_image_size_var') else '3:2 (1536x1024)',
             'album_cover_size': self.album_cover_size_var.get() if hasattr(self, 'album_cover_size_var') else '1:1 (1024x1024)',
@@ -8912,6 +8918,7 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
             'overlay_lyrics_on_image': bool(self.overlay_lyrics_var.get()) if hasattr(self, 'overlay_lyrics_var') else False,
             'embed_lyrics_in_prompt': bool(self.embed_lyrics_var.get()) if hasattr(self, 'embed_lyrics_var') else True,
             'embed_keywords_in_prompt': bool(self.embed_keywords_var.get()) if hasattr(self, 'embed_keywords_var') else False,
+            'include_lyrics_in_export': bool(self.include_lyrics_in_export_var.get()) if hasattr(self, 'include_lyrics_in_export_var') else False,
             'storyboard_setup_count': int(self.storyboard_setup_count_var.get() or 6) if hasattr(self, 'storyboard_setup_count_var') else 6,
             'persona_image_preset': self.song_persona_preset_var.get().strip() if hasattr(self, 'song_persona_preset_var') and self.song_persona_preset_var.get() else self.current_persona.get('current_image_preset', 'default') if self.current_persona else 'default',
             'spotify_category': self.spotify_category_var.get().strip() if hasattr(self, 'spotify_category_var') else '',
@@ -12368,9 +12375,10 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
         if not response:
             return
         
-        # Clear the storyboard in the current song config
+        # Clear the storyboard and metadata in the current song config
         self.current_song['storyboard'] = []
-        
+        self.current_song['storyboard_metadata'] = {}
+
         # Clear the treeview
         if hasattr(self, 'storyboard_tree'):
             for item in self.storyboard_tree.get_children():
@@ -13129,16 +13137,46 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
         return sanitized.strip()
 
     def sanitize_prompt_no_lyrics(self, prompt_text: str) -> str:
-        """Remove any lines mentioning lyrics when scene has no lyrics."""
+        """Remove lyric-embedding phrases when scene has no lyrics (time does not match).
+        Only lyrics whose timing matches the scene should appear in the prompt."""
         if not prompt_text:
             return prompt_text
-        lines = prompt_text.splitlines()
+        result = prompt_text
+        # Remove lyric-embedding sentences (lyrics text "X" is embedded / lyric words appear / lyric phrase readable)
+        result = re.sub(
+            r'[^.]*[Ll]yrics? text\s+"[^"]*"\s+is embedded[^.]*\.',
+            ' ', result
+        )
+        result = re.sub(
+            r'[^.]*[Ll]yrics? text\s+\'[^\']*\'[^.]*embedded[^.]*\.',
+            ' ', result
+        )
+        result = re.sub(
+            r'[^.]*[Ww]ith the lyrics text\s+["\'][^"\']*["\']\s+embedded[^.]*\.',
+            ' ', result
+        )
+        result = re.sub(
+            r'[^.]*[Ll]yric words appear [^.]*\.',
+            ' ', result
+        )
+        result = re.sub(
+            r'[^.]*[Ll]yric phrase readable only as[^.]*\.',
+            ' ', result
+        )
+        # Remove LYRICS FOR THIS SCENE lines
+        result = re.sub(r'\s*LYRICS FOR THIS SCENE:\s*["\'][^"\']*["\']\s*\n?', '\n', result, flags=re.IGNORECASE)
+        # Remove lines that start with "lyrics" (legacy)
+        lines = result.splitlines()
         kept = []
         for line in lines:
-            if re.search(r'^\s*lyrics\b', line, flags=re.IGNORECASE):
+            if re.search(r'^\s*lyrics\s*:', line, flags=re.IGNORECASE):
                 continue
             kept.append(line)
-        return '\n'.join(kept).strip()
+        result = '\n'.join(kept)
+        # Collapse multiple spaces/newlines
+        result = re.sub(r'\n{3,}', '\n\n', result)
+        result = re.sub(r' {2,}', ' ', result)
+        return result.strip()
 
     def is_non_lyric_marker(self, text: str) -> bool:
         """Return True if the text is a structural/non-lyric marker (e.g., instrumental intro)."""
@@ -13191,8 +13229,34 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
             return ' '.join(matching_lyrics)
         return ''
 
-    def apply_storyboard_theme_prefix(self, prompt_text: str) -> str:
-        """Prepend the storyboard theme to a prompt if provided."""
+    def _get_environmental_theme_prefix(self, theme_text: str) -> str:
+        """Produce a character-free theme prefix for [NO CHARACTERS] scenes.
+        Avoids naming persona/story characters so prompts paired with environmental
+        reference images do not confuse the model into adding figures."""
+        if not theme_text or not theme_text.strip():
+            return "ENVIRONMENTAL SHOT - No human figures. Maintain visual mood and palette.\n"
+        # Strip character names and narrative; keep mood/atmosphere keywords
+        t = theme_text.strip()
+        # Remove common character references (persona, story characters)
+        persona_name = ''
+        if self.current_persona:
+            persona_name = self.current_persona.get('name', '').strip()
+        for name in [persona_name, 'Melon Usk', 'Elon Musk', 'Papa Dust', 'Papa Dusk']:
+            if name:
+                t = re.sub(re.escape(name), '', t, flags=re.IGNORECASE)
+        # Remove pronoun-heavy narrative (he/him/his, they, etc. referring to characters)
+        t = re.sub(r'\b(he|him|his|they|them|their)\s+(?:finds?|is|was|tries?|run)\b', '', t, flags=re.IGNORECASE)
+        t = re.sub(r'\ba figure looking like\b[^.]*\.?', '', t, flags=re.IGNORECASE)
+        # Condense: take meaningful phrases, limit length
+        stop = ('the', 'and', 'for', 'out', 'but', 'his', 'him', 'has', 'not', 'from')
+        words = [w for w in re.split(r'[\s,]+', t) if len(w) > 2 and w.lower() not in stop]
+        mood = ' '.join(words[:25]).strip() if words else 'dark dystopian atmosphere'
+        return f"ENVIRONMENTAL SHOT - No human figures. Visual mood: {mood}\n"
+
+    def apply_storyboard_theme_prefix(self, prompt_text: str, use_environmental_for_no_characters: bool = True) -> str:
+        """Prepend the storyboard theme to a prompt if provided.
+        When prompt has [NO CHARACTERS], uses a character-free prefix to avoid
+        confusing the model when pairing with environmental reference images."""
         if not prompt_text:
             return prompt_text
         theme_text = ''
@@ -13200,6 +13264,28 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
             theme_text = self.storyboard_theme_text.get('1.0', tk.END).strip()
         if theme_text:
             cleaned_prompt = prompt_text.strip()
+            prompt_lower = cleaned_prompt.lower()
+            no_char_markers = ['[no characters]', 'no characters', 'no persona present', 'no human figures']
+            if use_environmental_for_no_characters and any(m in prompt_lower for m in no_char_markers):
+                prefix = self._get_environmental_theme_prefix(theme_text)
+                if cleaned_prompt.lower().startswith('environmental shot'):
+                    return cleaned_prompt
+                # Replace theme at start (avoid stripping scene descriptions like "A dystopian megacity...")
+                if cleaned_prompt.lower().startswith(theme_text.lower()):
+                    cleaned_prompt = cleaned_prompt[len(theme_text):].lstrip()
+                # Remove "GLOBAL STORY THEME (prepend): ..." line if present
+                cleaned_prompt = re.sub(
+                    r'\n?GLOBAL STORY THEME\s*\(prepend\)\s*:[^\n]*(?:\n|$)',
+                    '\n', cleaned_prompt, flags=re.IGNORECASE
+                ).strip()
+                # Remove standalone theme shorthand line (e.g. "Papa Dusk is hunting down Melon Usk...")
+                theme_start = re.escape(theme_text[:40].strip()) if len(theme_text) > 20 else ''
+                if theme_start:
+                    cleaned_prompt = re.sub(
+                        r'^' + theme_start + r'[^\n]*\n?',
+                        '', cleaned_prompt, count=1, flags=re.IGNORECASE
+                    ).strip()
+                return f"{prefix}{cleaned_prompt}"
             if not cleaned_prompt.lower().startswith(theme_text.lower()):
                 return f"{theme_text}\n{cleaned_prompt}"
             return cleaned_prompt
@@ -13496,11 +13582,11 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
             if scene_lyrics_info:
                 if embed_lyrics:
                     lyrics_rule = """
-   - Each scene MUST visualize its corresponding lyrics from LYRICS_TIMING
-   - Embed lyrics INTO the environment (carved in walls, neon signs, formed by patterns)
-   - NEVER use text overlays, subtitles, or floating text
-   - If a scene has no lyrics entry for its time range, DO NOT add any "Lyrics ..." text or placeholders; keep that scene text-free.
-     [NO LYRICS] marker should be used to indicate that the scene has no lyrics."""
+   - Each scene MUST use ONLY the lyrics from LYRICS_TIMING that match that scene's time range
+   - For scenes marked [NO LYRICS]: do NOT embed any lyric text; keep the scene text-free (mood/atmosphere only)
+   - For scenes WITH lyrics: embed those lyrics INTO the environment (carved in walls, neon signs, formed by patterns)
+   - NEVER use lyrics from a different scene's time range
+   - NEVER use text overlays, subtitles, or floating text"""
                 else:
                     lyrics_rule = """
    - Each scene should reflect the mood/meaning of its lyrics from LYRICS_TIMING
@@ -13610,6 +13696,7 @@ Each video segment ({seconds_per_video}s) contains {subscenes_per_video} sub-sce
 Use DIRECT CAMERA CUTS between sub-scenes (NO smooth transitions, NO fades, NO morphing).
 Each sub-scene must be visually distinct but thematically connected.
 The persona/character must appear consistently across sub-scenes when present.
+When a character appears in a sub-scene, use CHARACTER: persona or CHARACTER: [story_character_id] (e.g. mysterious_figure) - full appearance descriptions go in the STORYBOARD_METADATA block at the end.
 
 IMPORTANT FOR IMAGE GENERATION:
 - When generating an IMAGE (not video) from these prompts, use ONLY the FIRST sub-scene [0s-{scene_duration}s]
@@ -13650,7 +13737,19 @@ SCENE 2: {seconds_per_video} seconds
 - Generate ALL {num_scenes} scenes without stopping
 - If response limit reached, continue in batches (1-14, 15-28, etc.)
 - No questions, no options, no explanations - just scenes
+- At the END of your response, after all scenes, output a <STORYBOARD_METADATA> block (see format below)
 </EXECUTION>
+
+<STORYBOARD_METADATA FORMAT>
+After all scenes, append exactly this block:
+<STORYBOARD_METADATA>
+CHARACTERS:
+- persona: [Artist/Persona name] - [full appearance: clothing, features, colors, styling]
+- [story_character_id]: [label] - [full appearance for each story character you introduced]
+SETUPS: (optional)
+- [setup_id]: palette, location for each distinct visual setup used
+</STORYBOARD_METADATA>
+</STORYBOARD_METADATA FORMAT>
 
 Begin with SCENE 1:""".format(num_scenes=num_scenes)
             
@@ -13684,6 +13783,7 @@ ABSOLUTE RULES:
    - Use DIRECT CAMERA CUTS between sub-scenes (NO smooth transitions, NO fades, NO morphing)
    - Each sub-scene must have a different camera angle, composition, or framing
    - The persona/character must appear consistently across sub-scenes when present
+   - When a character appears in a sub-scene, use CHARACTER: persona or CHARACTER: [story_character_id] so descriptions can be looked up - full descriptions go in STORYBOARD_METADATA
    - Sub-scenes should feel dynamic and match the music energy
 """
             system_message += """
@@ -13904,19 +14004,19 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
         scene_lyrics_info = ""
         scene_lyrics_dict = {}  # Store lyrics for each scene number in this batch
         if lyric_segments and song_duration > 0:
-            scene_lyrics_info = "\n\nLYRICS TIMING FOR THIS BATCH:\n"
+            scene_lyrics_info = "\n\nLYRICS TIMING FOR THIS BATCH (use ONLY lyrics that match each scene's time):\n"
             current_time = (batch_start - 1) * seconds_per_video
             for scene_idx in range(batch_start, batch_end + 1):
                 scene_start_time = current_time
                 scene_end_time = min(current_time + seconds_per_video, song_duration)
                 scene_lyrics = self.get_lyrics_for_scene(scene_start_time, scene_end_time, lyric_segments)
+                scene_lyrics_info += f"Scene {scene_idx} ({scene_start_time:.1f}s - {scene_end_time:.1f}s): {scene_lyrics if scene_lyrics else '[NO LYRICS]'}\n"
                 if scene_lyrics:
-                    scene_lyrics_info += f"Scene {scene_idx} ({scene_start_time:.1f}s - {scene_end_time:.1f}s): {scene_lyrics}\n"
                     scene_lyrics_dict[scene_idx] = scene_lyrics
                 current_time = scene_end_time
                 if current_time >= song_duration:
                     break
-            scene_lyrics_info += "\n"
+            scene_lyrics_info += "\nCRITICAL: For scenes marked [NO LYRICS], do NOT embed any lyric text. Keep those scenes text-free.\n"
             prompt += scene_lyrics_info
         
         prompt += f"STORYBOARD THEME: '{full_song_name if full_song_name else song_name}'\n"
@@ -13964,7 +14064,7 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
                 prompt += "   - If lyrics cannot be naturally integrated into the environment, focus on visual representation of the lyrics' meaning instead\n"
                 prompt += f"3. Format the image prompt to include: [visual description] + \"with the lyrics text '{scene1_lyrics}' embedded INTO THE ENVIRONMENT ONLY (e.g., carved into walls, glowing in neon signs, written on objects, formed by patterns, integrated into textures) - NO text overlays, NO bottom bars, NO subtitles, NO floating text\"\n\n"
             else:
-                prompt += f"SCENE {batch_start}: [duration] seconds\nCOLOR PALETTE: [distinct palette for this scene]\n[detailed image prompt that visually represents and incorporates the lyrics for Scene {batch_start}'s time period - directly reflect the mood, imagery, and content of those specific lyrics]\n\n"
+                prompt += f"SCENE {batch_start}: [duration] seconds\n[NO LYRICS - do NOT embed any lyrics text]\nCOLOR PALETTE: [distinct palette for this scene]\n[detailed image prompt - mood and atmosphere only, NO lyric text, keep scene text-free]\n\n"
             
             if batch_start < batch_end:
                 if scene2_lyrics:
@@ -13979,7 +14079,7 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
                     prompt += "   - If lyrics cannot be naturally integrated into the environment, focus on visual representation of the lyrics' meaning instead\n"
                     prompt += f"4. Format the image prompt to include: [visual description] + \"with the lyrics text '{scene2_lyrics}' embedded INTO THE ENVIRONMENT ONLY (e.g., carved into walls, glowing in neon signs, written on objects, formed by patterns, integrated into textures) - NO text overlays, NO bottom bars, NO subtitles, NO floating text\"\n\n"
                 else:
-                    prompt += f"SCENE {batch_start + 1}: [duration] seconds\nCOLOR PALETTE: [distinct palette for this scene]\n[detailed image prompt that visually represents and incorporates the lyrics for Scene {batch_start + 1}'s time period - directly reflect the mood, imagery, and content of those specific lyrics]\n\n"
+                    prompt += f"SCENE {batch_start + 1}: [duration] seconds\n[NO LYRICS - do NOT embed any lyrics text]\nCOLOR PALETTE: [distinct palette for this scene]\n[detailed image prompt - mood and atmosphere only, NO lyric text, keep scene text-free]\n\n"
         else:
             prompt += f"SCENE {batch_start}: [duration] seconds\nCOLOR PALETTE: [distinct palette for this scene]\n[detailed image prompt]\n\n"
             if batch_start < batch_end:
@@ -13994,6 +14094,7 @@ Each video segment ({seconds_per_video}s) contains {subscenes_per_video} sub-sce
 Use DIRECT CAMERA CUTS between sub-scenes (NO smooth transitions, NO fades, NO morphing).
 Each sub-scene must be visually distinct but thematically connected.
 The persona/character must appear consistently across sub-scenes when present.
+When a character appears in a sub-scene, use CHARACTER: persona or CHARACTER: [story_character_id] - full descriptions go in STORYBOARD_METADATA at end.
 
 CRITICAL: Format each scene with sub-scene timestamps like this:
 [0s-{scene_duration}s] Sub-scene 1: [describe this {scene_duration}s segment with distinct camera angle/composition]
@@ -14002,9 +14103,10 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
             if subscenes_per_video > 2:
                 prompt += f"[{scene_duration*2}s-{scene_duration*3}s] Sub-scene 3: [another distinct composition]\n"
             prompt += "\nEach sub-scene MUST have a different camera angle, composition, or framing.\n"
-        
+            prompt += "\nAt the END of your response, append <STORYBOARD_METADATA> with CHARACTERS (persona + any story characters in this batch) and optionally SETUPS.\n"
+
         return prompt
-    
+
     def _get_max_scene_number_from_text(self, content: str) -> int:
         """Extract the highest scene number mentioned in the content."""
         if not content:
@@ -14088,7 +14190,115 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
         combined_content = '\n\n'.join(aggregated_contents)
         self.log_debug('INFO', f'All {total_scenes} scenes collected successfully.')
         return combined_content
-    
+
+    def _parse_storyboard_metadata(self, content: str) -> tuple[dict, str]:
+        """Extract STORYBOARD_METADATA block from AI response and return (metadata_dict, content_without_block).
+
+        The metadata block format:
+        <STORYBOARD_METADATA>
+        CHARACTERS:
+        - id: label - description
+        SETUPS: (optional)
+        - id: palette, location
+        </STORYBOARD_METADATA>
+
+        Returns:
+            Tuple of (metadata dict with characters and setups, content with block removed)
+        """
+        metadata = {'characters': {}, 'setups': {}}
+        content_cleaned = content
+        last_end = 0
+
+        # Find and extract all metadata blocks (batch responses may have multiple)
+        start_marker = '<STORYBOARD_METADATA>'
+        end_marker = '</STORYBOARD_METADATA>'
+        while True:
+            start_idx = content.find(start_marker, last_end)
+            end_idx = content.find(end_marker, start_idx) if start_idx >= 0 else -1
+
+            if start_idx < 0 or end_idx <= start_idx:
+                break
+
+            last_end = end_idx + len(end_marker)
+            block = content[start_idx + len(start_marker):end_idx].strip()
+            self.log_debug('INFO', 'Found STORYBOARD_METADATA block, parsing...')
+
+            # Parse CHARACTERS section
+            chars_match = re.search(r'CHARACTERS?\s*:(.*?)(?=SETUPS?\s*:|$)', block, re.DOTALL | re.IGNORECASE)
+            if chars_match:
+                chars_text = chars_match.group(1).strip()
+                for line in chars_text.split('\n'):
+                    line = line.strip()
+                    if not line or line.startswith('#'):
+                        continue
+                    # Match formats: "id: label - description", "id: label (description)", or "id: label – description"
+                    line = re.sub(r'^-\s*', '', line)
+                    part_match = re.match(r'([a-zA-Z0-9_]+)\s*:\s*(.+?)\s+[-–]\s+(.+)', line, re.DOTALL)
+                    if not part_match:
+                        # Parenthetical: "story_character_1: Melon Usk (tech magnate antagonist, ...)"
+                        part_match = re.match(r'([a-zA-Z0-9_]+)\s*:\s*(.+?)\s*\(([^)]+)\)\s*$', line, re.DOTALL)
+                        if part_match:
+                            label = part_match.group(2).strip()
+                            desc = part_match.group(3).strip()
+                            cid = part_match.group(1).strip().lower().replace(' ', '_')
+                            metadata['characters'][cid] = {
+                                'id': cid,
+                                'label': label,
+                                'description': desc,
+                                'source': 'persona' if cid == 'persona' else 'story'
+                            }
+                            part_match = None  # skip normal handling
+                    if part_match:
+                        cid = part_match.group(1).strip().lower().replace(' ', '_')
+                        label = part_match.group(2).strip()
+                        desc = part_match.group(3).strip()
+                        metadata['characters'][cid] = {
+                            'id': cid,
+                            'label': label,
+                            'description': desc,
+                            'source': 'persona' if cid == 'persona' else 'story'
+                        }
+                    elif ':' in line and re.search(r'\s[-–]\s', line):
+                        # Fallback: split on first " - " or " – " for description
+                        parts = re.split(r'\s+[-–]\s+', line, maxsplit=1)
+                        if len(parts) == 2:
+                            left = parts[0].strip()
+                            desc = parts[1].strip()
+                            if ':' in left:
+                                id_part, label = left.split(':', 1)
+                                cid = id_part.strip().lower().replace(' ', '_')
+                                metadata['characters'][cid] = {
+                                    'id': cid,
+                                    'label': label.strip(),
+                                    'description': desc,
+                                    'source': 'persona' if cid == 'persona' else 'story'
+                                }
+
+            # Parse SETUPS section (optional)
+            setups_match = re.search(r'SETUPS?\s*:(.*?)$', block, re.DOTALL | re.IGNORECASE)
+            if setups_match:
+                setups_text = setups_match.group(1).strip()
+                for line in setups_text.split('\n'):
+                    line = line.strip()
+                    if not line or line.startswith('#'):
+                        continue
+                    line = re.sub(r'^-\s*', '', line)
+                    if ':' in line:
+                        sid, rest = line.split(':', 1)
+                        sid = sid.strip().lower().replace(' ', '_')
+                        rest = rest.strip()
+                        metadata['setups'][sid] = {'description': rest}
+
+        # Remove all metadata blocks from content for scene parsing
+        content_cleaned = re.sub(
+            r'<STORYBOARD_METADATA>.*?</STORYBOARD_METADATA>',
+            '',
+            content,
+            flags=re.DOTALL
+        ).strip()
+
+        return metadata, content_cleaned
+
     def parse_storyboard_response(self, content: str, default_duration: int):
         """Parse the AI response and populate storyboard treeview.
         
@@ -14102,6 +14312,29 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
         
         # Clear cached prompts for a fresh parse
         self.scene_final_prompts = {}
+
+        # Extract STORYBOARD_METADATA block first (characters, setups) and remove from content
+        metadata, content = self._parse_storyboard_metadata(content)
+
+        # Merge persona description from current persona (always prefer our persona data when available)
+        if self.current_persona:
+            persona_name = self.current_persona.get('name', 'Artist').strip()
+            base_image_prompt = self.current_persona.get('base_image_prompt', '').strip()
+            visual_aesthetic = self.current_persona.get('visual_aesthetic', '').strip()
+            persona_desc = base_image_prompt
+            if visual_aesthetic:
+                persona_desc = f"{persona_desc} {visual_aesthetic}".strip() if persona_desc else visual_aesthetic
+            if persona_desc:
+                metadata.setdefault('characters', {})['persona'] = {
+                    'id': 'persona',
+                    'label': persona_name,
+                    'description': persona_desc,
+                    'source': 'persona'
+                }
+
+        if metadata.get('characters') or metadata.get('setups'):
+            self.current_song['storyboard_metadata'] = metadata
+            self.log_debug('INFO', f'Stored storyboard_metadata: {len(metadata.get("characters", {}))} characters, {len(metadata.get("setups", {}))} setups')
 
         self.log_debug('INFO', f'Parsing storyboard response (length: {len(content)} chars, default_duration: {default_duration}s)')
         self.log_debug('DEBUG', f'Response preview (first 500 chars): {content[:500]}')
@@ -14255,6 +14488,90 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
             self.log_debug('INFO', f'Storyboard raw response saved to {filename}')
         except Exception as exc:
             self.log_debug('WARNING', f'Failed to save storyboard raw response: {exc}')
+
+    def reprocess_latest_storyboard_response(self):
+        """Load the latest storyboard_response_*.json in the song dir, parse it, update tree and config."""
+        song_path = getattr(self, 'current_song_path', '')
+        if not song_path:
+            self.log_debug('WARNING', 'Cannot reprocess - song path is not set.')
+            messagebox.showwarning('Warning', 'No song selected. Select a song first.')
+            return
+        pattern = os.path.join(song_path, 'storyboard_response_*.json')
+        files = glob.glob(pattern)
+        if not files:
+            self.log_debug('WARNING', 'No storyboard_response_*.json files found.')
+            messagebox.showwarning('Warning', f'No storyboard response files found in:\n{song_path}')
+            return
+        # Sort by timestamp in filename (YYYYMMDD_HHMMSS), newest first
+        def sort_key(p):
+            try:
+                base = os.path.basename(p)
+                ts = base.replace('storyboard_response_', '').replace('.json', '')
+                return (ts, p)
+            except Exception:
+                return ('', p)
+        files_sorted = sorted(files, key=sort_key, reverse=True)
+        latest_path = files_sorted[0]
+        try:
+            with open(latest_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+        except Exception as e:
+            self.log_debug('WARNING', f'Failed to load {latest_path}: {e}')
+            messagebox.showerror('Error', f'Failed to load response file:\n{e}')
+            return
+        raw_response = data.get('raw_response', '')
+        seconds_per_video = int(data.get('seconds_per_video', 6))
+        if not raw_response:
+            messagebox.showwarning('Warning', f'File has no raw_response:\n{os.path.basename(latest_path)}')
+            return
+        if hasattr(self, 'storyboard_seconds_var'):
+            self.storyboard_seconds_var.set(str(seconds_per_video))
+        self.parse_storyboard_response(raw_response, seconds_per_video)
+        self.save_song()
+        self.log_debug('INFO', f'Reprocessed storyboard from {os.path.basename(latest_path)}')
+        messagebox.showinfo('Success', f'Reprocessed latest response:\n{os.path.basename(latest_path)}\nSaved to config.')
+
+    def reproduce_storyboard_response_json(self):
+        """Reconstruct and save storyboard_response_*.json from current storyboard data in config/tree.
+        Produces the same JSON structure as save_storyboard_raw_response for reproducibility/debugging."""
+        song_path = getattr(self, 'current_song_path', '')
+        if not song_path:
+            self.log_debug('WARNING', 'Cannot reproduce storyboard response - song path is not set.')
+            messagebox.showwarning('Warning', 'No song selected. Select a song first.')
+            return
+        storyboard = []
+        if hasattr(self, 'storyboard_tree') and self.storyboard_tree.get_children():
+            storyboard = self.get_storyboard_data()
+        elif self.current_song and self.current_song.get('storyboard'):
+            storyboard = self.current_song.get('storyboard', [])
+        if not storyboard:
+            self.log_debug('WARNING', 'No storyboard data to reproduce.')
+            messagebox.showwarning('Warning', 'No storyboard scenes found. Generate a storyboard first.')
+            return
+        # Determine seconds_per_video from first scene duration or config
+        seconds_per_video = 6
+        first_dur = storyboard[0].get('duration', '')
+        if first_dur:
+            m = re.search(r'(\d+)', str(first_dur))
+            if m:
+                seconds_per_video = int(m.group(1))
+        if self.current_song and 'storyboard_seconds_per_video' in self.current_song:
+            seconds_per_video = int(self.current_song.get('storyboard_seconds_per_video', 6))
+        if hasattr(self, 'storyboard_seconds_var') and self.storyboard_seconds_var.get():
+            try:
+                seconds_per_video = int(self.storyboard_seconds_var.get())
+            except ValueError:
+                pass
+        # Build raw_response in same format as AI response: "SCENE N: X seconds  \n<prompt>\n\n"
+        parts = []
+        for scene in storyboard:
+            scene_num = scene.get('scene', len(parts) + 1)
+            prompt = scene.get('prompt', '').strip()
+            parts.append(f"SCENE {scene_num}: {seconds_per_video} seconds  \n{prompt}")
+        raw_response = '\n\n'.join(parts)
+        metadata = {'mode': 'reproduced', 'num_scenes': len(storyboard), 'seconds_per_video': seconds_per_video}
+        self.save_storyboard_raw_response(raw_response, seconds_per_video, metadata)
+        messagebox.showinfo('Success', f'Storyboard response JSON reproduced ({len(storyboard)} scenes).')
 
     def save_storyboard_prompt(self, prompt_text: str, seconds_per_video: int, metadata=None):
         """Save the full storyboard prompt to a text file for debugging."""
@@ -14851,7 +15168,79 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
         cleaned_prompt = "\n".join(cleaned_parts)
         self.log_debug('INFO', f'Stripped multi-scene formatting for image generation')
         return cleaned_prompt
-    
+
+    def _inject_character_descriptions_into_subscenes(self, prompt: str, character_registry: dict) -> str:
+        """Inject character descriptions into sub-scenes that feature characters but lack descriptions.
+
+        For video generation with multi-scene, each sub-scene needs explicit character
+        descriptions when they appear, since they may not be on the reference image.
+
+        Args:
+            prompt: Prompt text with sub-scene structure [Xs-Ys] Sub-scene N: ...
+            character_registry: Dict mapping character id to {label, description} or id to description string
+
+        Returns:
+            Prompt with CHARACTER: [label] - [description] prepended to sub-scenes that need it
+        """
+        if not character_registry:
+            return prompt
+
+        subscene_pattern = re.compile(
+            r'\[\d+s[-–]\d+s\]\s*(?:Sub-scene\s*\d+:?)?\s*',
+            re.IGNORECASE
+        )
+        matches = list(subscene_pattern.finditer(prompt))
+        if not matches:
+            return prompt
+
+        no_char_markers = [
+            '[no characters]', 'no characters', 'no persona present', 'no human figures',
+            'purely environmental', 'purely abstract', 'no human presence'
+        ]
+
+        def find_character_for_block(block: str):
+            block_lower = block.lower()
+            if any(m in block_lower for m in no_char_markers):
+                return None
+            if 'character:' in block_lower and (' - ' in block or len(block) > 60):
+                return None
+            for cid, info in character_registry.items():
+                entry = info if isinstance(info, dict) else {'label': cid, 'description': str(info)}
+                label = entry.get('label', cid)
+                desc = entry.get('description', '')
+                if not desc or len(desc) < 10:
+                    continue
+                if cid in block_lower or (label and label.lower() in block_lower):
+                    return (label, desc)
+            return None
+
+        # Do not cross scene boundaries: content for a sub-scene must not include
+        # text from the next SCENE N: block (theme/character names there cause false matches)
+        scene_boundary_pattern = re.compile(r'\n\s*SCENE\s+\d+\s*:', re.IGNORECASE)
+
+        result_parts = [prompt[:matches[0].start()]]
+        for i, m in enumerate(matches):
+            result_parts.append(prompt[m.start():m.end()])
+            end_next = matches[i + 1].start() if i + 1 < len(matches) else len(prompt)
+            # Cap content at next scene boundary to avoid matching characters from next scene's theme
+            scene_bound = scene_boundary_pattern.search(prompt, m.end())
+            content_end = min(end_next, scene_bound.start()) if scene_bound and scene_bound.start() < end_next else end_next
+            # Also cap at first double-newline: sub-scene text is one line; appended blocks (CRITICAL REQUIREMENT,
+            # Persona Base Image Prompt, etc.) contain character names and cause false injection
+            para_break = prompt.find('\n\n', m.end())
+            if para_break >= 0 and para_break < content_end:
+                content_end = para_break
+            content = prompt[m.end():content_end]
+            found = find_character_for_block(content)
+            if found:
+                label, desc = found
+                injected = f"CHARACTER ({label}): {desc}. "
+                if not content.strip().lower().startswith('character'):
+                    content = injected + content.strip()
+            result_parts.append(content)
+
+        return ''.join(result_parts)
+
     def build_scene_image_prompt(self, scene_num: str, base_prompt: str, lyrics: str = None, prompt_type: str = 'image') -> str:
         """Build the final prompt that gets sent to the image or video model.
         
@@ -14891,6 +15280,9 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
         prompt = self.sanitize_lyrics_for_prompt(base_prompt)
         prompt = self.apply_storyboard_theme_prefix(prompt)
         lyrics_text = self.sanitize_lyrics_for_prompt(lyrics) if lyrics else ''
+        # Strip lyric-embedding phrases when scene has no lyrics (time does not match)
+        if not lyrics_text or lyrics_text.strip().upper() == '[NO LYRICS]':
+            prompt = self.sanitize_prompt_no_lyrics(prompt)
         embed_lyrics_enabled = bool(self.embed_lyrics_var.get()) if hasattr(self, 'embed_lyrics_var') else True
         embed_keywords_enabled = bool(self.embed_keywords_var.get()) if hasattr(self, 'embed_keywords_var') else False
         keyword = ''
@@ -14923,42 +15315,61 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
             visual_aesthetic = self.current_persona.get('visual_aesthetic', '').lower()
             base_image_prompt = self.current_persona.get('base_image_prompt', '').lower()
 
-            # Direct name or role cues
-            if persona_name and persona_name in prompt_lower:
+            # Explicit CHARACTER: persona takes precedence (AI marks persona presence)
+            if 'character: persona' in prompt_lower or 'character : persona' in prompt_lower:
                 persona_in_scene = True
-            elif any(keyword in prompt_lower for keyword in ['character', 'persona', 'singer', 'artist', 'performer', 'person', 'figure', 'protagonist', 'main character', 'vocalist', 'musician']):
-                persona_in_scene = True
-            elif visual_aesthetic or base_image_prompt:
-                try:
-                    self.config(cursor='wait')
-                    self.update()
-                    analysis_prompt = (
-                        "Analyze this music video scene prompt and determine if it should feature the main artist/performer character.\n\n"
-                        f"Scene Prompt: {prompt}\n\n"
-                        f"Artist/Persona Name: {self.current_persona.get('name', '')}\n"
-                    )
-                    if visual_aesthetic:
-                        analysis_prompt += f"Persona Visual Aesthetic: {self.current_persona.get('visual_aesthetic', '')}\n"
-                    if base_image_prompt:
-                        analysis_prompt += f"Persona Base Image Description: {self.current_persona.get('base_image_prompt', '')}\n"
-                    analysis_prompt += (
-                        "\nRespond with ONLY 'YES' if the persona should be featured, or 'NO' if not."
-                    )
-                    analysis_result = self.azure_ai(
-                        analysis_prompt,
-                        system_message="You are a music video analysis assistant. Respond with only YES or NO.",
-                        profile='text'
-                    )
-                    if analysis_result['success']:
-                        analysis_response = analysis_result['content'].strip().upper()
-                        if 'YES' in analysis_response:
-                            persona_in_scene = True
-                    else:
-                        persona_in_scene = False
-                except Exception as e:
-                    self.log_debug('WARNING', f'Persona detection failed for scene {scene_num}: {e}')
-                finally:
-                    self.config(cursor='')
+            else:
+                # If only story characters (not persona) are marked, do NOT add persona
+                metadata = self.current_song.get('storyboard_metadata', {}) if self.current_song else {}
+                story_char_ids = [cid for cid, info in (metadata.get('characters') or {}).items()
+                                 if isinstance(info, dict) and info.get('source') == 'story']
+                has_story_char_only = False
+                for sid in story_char_ids:
+                    if f'character: {sid}' in prompt_lower or f'character : {sid}' in prompt_lower:
+                        has_story_char_only = True
+                        break
+                if not has_story_char_only:
+                    # Fallback: detect CHARACTER: X where X is not "persona" (works without metadata)
+                    char_matches = re.findall(r'character\s*:\s*([a-zA-Z0-9_]+)', prompt_lower)
+                    if char_matches and all(cid != 'persona' for cid in char_matches):
+                        has_story_char_only = True
+                if has_story_char_only:
+                    persona_in_scene = False
+                elif persona_name and persona_name in prompt_lower:
+                    persona_in_scene = True
+                elif any(keyword in prompt_lower for keyword in ['character', 'persona', 'singer', 'artist', 'performer', 'person', 'figure', 'protagonist', 'main character', 'vocalist', 'musician']):
+                    persona_in_scene = True
+                elif visual_aesthetic or base_image_prompt:
+                    try:
+                        self.config(cursor='wait')
+                        self.update()
+                        analysis_prompt = (
+                            "Analyze this music video scene prompt and determine if it should feature the main artist/performer character.\n\n"
+                            f"Scene Prompt: {prompt}\n\n"
+                            f"Artist/Persona Name: {self.current_persona.get('name', '')}\n"
+                        )
+                        if visual_aesthetic:
+                            analysis_prompt += f"Persona Visual Aesthetic: {self.current_persona.get('visual_aesthetic', '')}\n"
+                        if base_image_prompt:
+                            analysis_prompt += f"Persona Base Image Description: {self.current_persona.get('base_image_prompt', '')}\n"
+                        analysis_prompt += (
+                            "\nRespond with ONLY 'YES' if the persona should be featured, or 'NO' if not."
+                        )
+                        analysis_result = self.azure_ai(
+                            analysis_prompt,
+                            system_message="You are a music video analysis assistant. Respond with only YES or NO.",
+                            profile='text'
+                        )
+                        if analysis_result['success']:
+                            analysis_response = analysis_result['content'].strip().upper()
+                            if 'YES' in analysis_response:
+                                persona_in_scene = True
+                        else:
+                            persona_in_scene = False
+                    except Exception as e:
+                        self.log_debug('WARNING', f'Persona detection failed for scene {scene_num}: {e}')
+                    finally:
+                        self.config(cursor='')
 
         # If persona is present, enrich prompt with reference image analysis and persona visual characteristics
         if persona_in_scene and self.current_persona:
@@ -15056,9 +15467,27 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
         elif not lyrics_text:
             prompt += "\n\nNo lyrics for this scene; keep visuals text-free."
 
+        # For VIDEO + multi-scene: inject character descriptions into sub-scenes
+        if prompt_type == 'video' and is_multiscene and re.search(r'\[\d+s[-–]\d+s\]', prompt):
+            character_registry = {}
+            metadata = self.current_song.get('storyboard_metadata', {}) if self.current_song else {}
+            for cid, info in (metadata.get('characters') or {}).items():
+                if isinstance(info, dict) and info.get('description'):
+                    character_registry[cid] = info
+            if self.current_persona and 'persona' not in character_registry:
+                base_ip = self.current_persona.get('base_image_prompt', '').strip()
+                va = self.current_persona.get('visual_aesthetic', '').strip()
+                if base_ip or va:
+                    character_registry['persona'] = {
+                        'label': self.current_persona.get('name', 'Artist'),
+                        'description': f"{base_ip} {va}".strip()
+                    }
+            if character_registry:
+                prompt = self._inject_character_descriptions_into_subscenes(prompt, character_registry)
+
         # Cache the FULL prompt (with all multi-scene info intact) for saving/export
         self.scene_final_prompts[cache_key] = prompt
-        
+
         # For IMAGE generation in multi-scene mode, strip multi-scene formatting
         # AFTER caching so saved prompts retain full info, but generated images are single
         if is_multiscene and prompt_type == 'image':
@@ -15457,7 +15886,20 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
             messagebox.showwarning('Warning', 'No song selected. Please select a song first.')
             return
         
-        storyboard = self.current_song.get('storyboard', [])
+        # Reload storyboard from config.json on disk to use actual file state (avoids stale in-memory data)
+        storyboard = []
+        config_file = os.path.join(self.current_song_path, 'config.json')
+        if os.path.exists(config_file):
+            try:
+                with open(config_file, 'r', encoding='utf-8') as f:
+                    disk_config = json.load(f)
+                    storyboard = disk_config.get('storyboard', [])
+                if storyboard:
+                    self.current_song['storyboard'] = storyboard
+            except Exception as e:
+                self.log_debug('WARNING', f'Could not reload config from disk: {e}')
+        if not storyboard:
+            storyboard = self.current_song.get('storyboard', [])
         if not storyboard:
             messagebox.showwarning('Warning', 'No storyboard scenes found. Please generate storyboard first.')
             return
@@ -15483,11 +15925,15 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
             base_prompt = scene.get('prompt', '')
             lyrics = scene.get('lyrics', '')
             
+            # Fallback for scenes with no base prompt: use lyrics or a generic placeholder
             if not base_prompt:
-                continue
+                base_prompt = (lyrics or '').strip()
+            if not base_prompt:
+                base_prompt = "Atmospheric scene matching the song's mood and narrative flow."
             
             try:
                 progress_dialog.update_progress(idx, f'Generating prompt for scene {scene_num} ({idx}/{len(storyboard)})...')
+                self.update()  # Flush UI so each scene is visible before slow build_scene_image_prompt runs
                 
                 # Build the final prompt (this includes persona detection, reference images, etc.)
                 # Use 'video' type to get the FULL prompt for saving (not stripped for single image)
