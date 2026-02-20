@@ -2692,7 +2692,7 @@ def load_song_config(song_path: str) -> dict:
         'overlay_lyrics_on_image': False,
         'embed_lyrics_in_prompt': True,
         'embed_keywords_in_prompt': False,
-        'include_lyrics_in_export': False,
+        'include_lyrics_in_export': True,
         'persona_scene_percent': 40,
         'storyboard_setup_count': 6,
         'persona_image_preset': 'default'
@@ -6499,7 +6499,7 @@ TECHNICAL REQUIREMENTS:
         ttk.Button(button_frame, text='Export Generated Prompts', command=self.export_generated_prompts).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text='Reprocess Latest Response', command=self.reprocess_latest_storyboard_response).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text='Reset Storyboard', command=self.reset_storyboard).pack(side=tk.LEFT, padx=5)
-        self.include_lyrics_in_export_var = tk.BooleanVar(value=False)
+        self.include_lyrics_in_export_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(button_frame, text='Include Lyrics in Export', variable=self.include_lyrics_in_export_var).pack(side=tk.LEFT, padx=5)
 
         # Lyrics handling options (moved to storyboard)
@@ -8338,7 +8338,7 @@ TECHNICAL REQUIREMENTS:
         if hasattr(self, 'embed_keywords_var'):
             self.embed_keywords_var.set(bool(self.current_song.get('embed_keywords_in_prompt', False)))
         if hasattr(self, 'include_lyrics_in_export_var'):
-            self.include_lyrics_in_export_var.set(bool(self.current_song.get('include_lyrics_in_export', False)))
+            self.include_lyrics_in_export_var.set(bool(self.current_song.get('include_lyrics_in_export', True)))
         
         # Load album cover and video loop settings
         if hasattr(self, 'album_cover_size_var'):
@@ -8426,7 +8426,7 @@ TECHNICAL REQUIREMENTS:
         if hasattr(self, 'embed_keywords_var'):
             self.embed_keywords_var.set(False)
         if hasattr(self, 'include_lyrics_in_export_var'):
-            self.include_lyrics_in_export_var.set(False)
+            self.include_lyrics_in_export_var.set(True)
         if hasattr(self, 'spotify_category_var'):
             self.spotify_category_var.set('')
         if hasattr(self, 'spotify_category_secondary_var'):
@@ -13253,10 +13253,29 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
         mood = ' '.join(words[:25]).strip() if words else 'dark dystopian atmosphere'
         return f"ENVIRONMENTAL SHOT - No human figures. Visual mood: {mood}\n"
 
-    def apply_storyboard_theme_prefix(self, prompt_text: str, use_environmental_for_no_characters: bool = True) -> str:
+    def _is_persona_scene_quick(self, prompt_text: str) -> bool:
+        """Quick check if prompt describes a persona scene (for theme handling).
+        Avoids full AI analysis; used to condense theme for persona scenes."""
+        if not prompt_text or not self.current_persona:
+            return False
+        pl = prompt_text.strip().lower()
+        no_char = ['[no characters]', 'no characters', 'no persona present', 'no human figures',
+                   'no persona', 'no people', 'no artist', '[no persona]']
+        if any(m in pl for m in no_char):
+            return False
+        if 'character: persona' in pl or 'character : persona' in pl:
+            return True
+        pname = self.current_persona.get('name', '').lower()
+        if pname and pname in pl:
+            return True
+        return False
+
+    def apply_storyboard_theme_prefix(self, prompt_text: str, use_environmental_for_no_characters: bool = True, persona_scene: bool = False) -> str:
         """Prepend the storyboard theme to a prompt if provided.
         When prompt has [NO CHARACTERS], uses a character-free prefix to avoid
-        confusing the model when pairing with environmental reference images."""
+        confusing the model when pairing with environmental reference images.
+        When persona_scene=True, uses condensed theme at end to avoid video model
+        inferring same dialogue from repeated full theme."""
         if not prompt_text:
             return prompt_text
         theme_text = ''
@@ -13286,6 +13305,22 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
                         '', cleaned_prompt, count=1, flags=re.IGNORECASE
                     ).strip()
                 return f"{prefix}{cleaned_prompt}"
+            if persona_scene:
+                # For persona scenes: strip full theme from start, use condensed at end
+                # so video model does not infer same dialogue from repeated narrative
+                if cleaned_prompt.lower().startswith(theme_text.lower()):
+                    cleaned_prompt = cleaned_prompt[len(theme_text):].lstrip()
+                theme_start = re.escape(theme_text[:50].strip()) if len(theme_text) > 30 else ''
+                if theme_start:
+                    cleaned_prompt = re.sub(
+                        r'^' + theme_start + r'[^\n]*(?:\n|$)',
+                        '', cleaned_prompt, count=1, flags=re.IGNORECASE
+                    ).strip()
+                condensed = self._get_environmental_theme_prefix(theme_text).replace(
+                    'ENVIRONMENTAL SHOT - No human figures. Visual mood: ', ''
+                ).strip()
+                instruction = 'Do NOT use the story theme as character dialogue. Character speaks/sings only the scene lyrics. '
+                return f"{instruction}{cleaned_prompt}\n\nContext: {condensed}"
             if not cleaned_prompt.lower().startswith(theme_text.lower()):
                 return f"{theme_text}\n{cleaned_prompt}"
             return cleaned_prompt
@@ -13625,6 +13660,8 @@ Use ONLY when persona appears (~{persona_scene_percent}% of scenes). Keep refere
 Visual: {visual_aesthetic if visual_aesthetic else 'N/A'}
 Look: {base_image_prompt if base_image_prompt else 'N/A'}
 Vibe: {vibe if vibe else 'N/A'}
+DIALOGUE FOR VIDEO: When persona appears AND the scene has lyrics in LYRICS_TIMING, you MUST add "DIALOGUE: [exact scene lyrics]" so video generation can lip-sync. Use ONLY the lyrics for that scene's time range - never lyrics from other scenes.
+When persona has lyrics: avoid "silent", "mute", "no dialogue", "not speaking" - use "singing", "lips moving", "performing", "mouthing the words".
 </PERSONA_REFERENCE>
 
 <LYRICS>
@@ -13662,6 +13699,7 @@ Vibe: {vibe if vibe else 'N/A'}
 6. PERSONA VARIETY: When persona appears, change everything:
    - Different pose, expression, camera angle, lighting, setting each time
    - Brief mention only - focus on scene, not persona details
+   - For persona scenes WITH lyrics: include "DIALOGUE: [exact lyrics for this scene]" - required for video lip-sync. Do NOT use "silent", "mute", or "no dialogue" when lyrics exist; use "singing", "lips moving", or "performing"
 
 7. LYRICS INTEGRATION:"""
             prompt += lyrics_rule
@@ -13697,6 +13735,7 @@ Use DIRECT CAMERA CUTS between sub-scenes (NO smooth transitions, NO fades, NO m
 Each sub-scene must be visually distinct but thematically connected.
 The persona/character must appear consistently across sub-scenes when present.
 When a character appears in a sub-scene, use CHARACTER: persona or CHARACTER: [story_character_id] (e.g. mysterious_figure) - full appearance descriptions go in the STORYBOARD_METADATA block at the end.
+When persona appears and scene has lyrics, add: DIALOGUE: [exact lyrics for this scene from LYRICS_TIMING].
 
 IMPORTANT FOR IMAGE GENERATION:
 - When generating an IMAGE (not video) from these prompts, use ONLY the FIRST sub-scene [0s-{scene_duration}s]
@@ -13774,6 +13813,8 @@ ABSOLUTE RULES:
             system_message += f"{next_rule_num}. Target persona presence: about {persona_scene_percent}% of scenes (non-consecutive). Maintain variety.\n"
             next_rule_num += 1
             system_message += f"{next_rule_num}. When persona appears, avoid default centering. Embed them in the environment and pick the best composition (rule of thirds, foreground/background, over-shoulder, partial silhouette, small-in-frame, or cropped). Center only if it clearly strengthens the shot.\n"
+            next_rule_num += 1
+            system_message += f"{next_rule_num}. When persona appears with lyrics: NEVER use 'silent', 'mute', 'no dialogue', or 'not speaking'. Use 'singing', 'lips moving', 'performing', or 'mouthing the words' instead.\n"
             next_rule_num += 1
             
             # Add multi-scene rules to system message if enabled
@@ -15278,7 +15319,9 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
             return self._build_multiscene_reference_image_prompt(cache_key)
 
         prompt = self.sanitize_lyrics_for_prompt(base_prompt)
-        prompt = self.apply_storyboard_theme_prefix(prompt)
+        # Detect persona before theme so we can use condensed theme for persona scenes
+        persona_in_scene_early = self._is_persona_scene_quick(prompt)
+        prompt = self.apply_storyboard_theme_prefix(prompt, persona_scene=persona_in_scene_early)
         lyrics_text = self.sanitize_lyrics_for_prompt(lyrics) if lyrics else ''
         # Strip lyric-embedding phrases when scene has no lyrics (time does not match)
         if not lyrics_text or lyrics_text.strip().upper() == '[NO LYRICS]':
@@ -15466,6 +15509,13 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
             )
         elif not lyrics_text:
             prompt += "\n\nNo lyrics for this scene; keep visuals text-free."
+
+        # For VIDEO prompts with persona and lyrics: add explicit lip-sync instruction
+        if prompt_type == 'video' and persona_in_scene and lyrics_text and '[NO LYRICS]' not in lyrics_text.upper():
+            prompt += (
+                f'\n\nCHARACTER SPEAKS/SINGS (lip-sync): "{lyrics_text}" '
+                'The character must mouth these exact words. Do NOT use the story theme as dialogue.'
+            )
 
         # For VIDEO + multi-scene: inject character descriptions into sub-scenes
         if prompt_type == 'video' and is_multiscene and re.search(r'\[\d+s[-–]\d+s\]', prompt):
@@ -15756,30 +15806,33 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
     
     def _extract_timed_lyrics_for_scene(self, plain_lyrics: str, extracted_lyrics: str, scene_start_seconds: float, scene_end_seconds: float) -> str:
         """Extract timed lyrics from extracted_lyrics that fall within the scene time range.
-        
+
+        Supports two formats:
+        - Double-equals: 0:32=00:42=hit (start=end=word)
+        - Single-equals: 0:43=You (timestamp=word, from transcription)
+
         Args:
             plain_lyrics: Plain text lyrics from the scene (for reference, not used for matching)
-            extracted_lyrics: Full extracted lyrics with timestamps (e.g., "0:32=00:42=hit")
+            extracted_lyrics: Full extracted lyrics with timestamps
             scene_start_seconds: Scene start time in seconds
             scene_end_seconds: Scene end time in seconds
-            
+
         Returns:
-            Timed lyrics string in format "0:32=00:42=hit" that fall within scene bounds
+            Timed lyrics string (format preserved) that fall within scene bounds
         """
         if not extracted_lyrics:
             return ''
-        
-        # Parse extracted_lyrics into timed entries
+
         lines = extracted_lyrics.strip().split('\n')
         double_equals_pattern = re.compile(r'^(\d+):(\d+)=(\d+):(\d+)=(.+)$')
-        
+        single_equals_pattern = re.compile(r'^(\d+):(\d+)=(.+)$')
         matched_entries = []
-        
-        for line in lines:
+
+        for i, line in enumerate(lines):
             line = line.strip()
             if not line:
                 continue
-            
+
             match = double_equals_pattern.match(line)
             if match:
                 start_minutes = int(match.group(1))
@@ -15787,17 +15840,43 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
                 end_minutes = int(match.group(3))
                 end_seconds = int(match.group(4))
                 word = match.group(5).strip()
-                
                 absolute_start = start_minutes * 60 + start_seconds
                 absolute_end = end_minutes * 60 + end_seconds
-                
-                # Include lyrics that overlap with the scene time range
-                # (start before scene ends and end after scene starts)
                 if absolute_start < scene_end_seconds and absolute_end > scene_start_seconds:
                     matched_entries.append(line)
-        
-        result = '\n'.join(matched_entries)
-        return result
+                continue
+
+            single_match = single_equals_pattern.match(line)
+            if single_match:
+                start_minutes = int(single_match.group(1))
+                start_seconds = int(single_match.group(2))
+                word = single_match.group(3).strip()
+                absolute_start = start_minutes * 60 + start_seconds
+                if absolute_start >= scene_end_seconds:
+                    continue
+                if absolute_start < scene_start_seconds:
+                    continue
+                # Infer end: next line's start, or start+0.5s
+                next_start = None
+                for j in range(i + 1, len(lines)):
+                    next_line = lines[j].strip()
+                    if not next_line:
+                        continue
+                    nm = single_equals_pattern.match(next_line)
+                    if nm:
+                        next_start = int(nm.group(1)) * 60 + int(nm.group(2))
+                        break
+                    dm = double_equals_pattern.match(next_line)
+                    if dm:
+                        next_start = int(dm.group(1)) * 60 + int(dm.group(2))
+                        break
+                absolute_end = next_start if next_start is not None else absolute_start + 0.5
+                end_min, end_sec = int(absolute_end // 60), int(absolute_end % 60)
+                out_line = f"{start_minutes}:{start_seconds:02d}={end_min}:{end_sec:02d}={word}"
+                matched_entries.append(out_line)
+                prev_absolute_start = absolute_start
+
+        return '\n'.join(matched_entries)
     
     def _parse_timestamp_to_seconds(self, timestamp: str) -> float:
         """Parse timestamp string (MM:SS format) to seconds.
