@@ -6720,6 +6720,13 @@ TECHNICAL REQUIREMENTS:
             return
         
         try:
+            seconds_per_video = int(self.storyboard_seconds_var.get() or '6') if hasattr(self, 'storyboard_seconds_var') else 6
+            is_multiscene = self.storyboard_multiscene_var.get() if hasattr(self, 'storyboard_multiscene_var') else False
+            # Clear cache so we get fresh prompt with word-level timing
+            cache_suffix = f"|video" if is_multiscene else ""
+            cache_key = f"{scene_num}|{self._get_song_persona_preset_key()}{cache_suffix}"
+            if cache_key in self.scene_final_prompts:
+                del self.scene_final_prompts[cache_key]
             # Get the FULL prompt for saving (not stripped)
             full_prompt = self.get_full_scene_prompt_for_saving(str(scene_num), base_prompt, lyrics)
             
@@ -6727,13 +6734,34 @@ TECHNICAL REQUIREMENTS:
                 messagebox.showwarning('Warning', 'Could not generate full prompt for the selected scene.')
                 return
             
+            # Add word-level timing if missing (same logic as export_generated_prompts)
+            include_lyrics = self.include_lyrics_in_export_var.get() if hasattr(self, 'include_lyrics_in_export_var') else False
+            if lyrics and include_lyrics:
+                storyboard = self.current_song.get('storyboard', []) if self.current_song else []
+                scene_start_seconds = 0.0
+                scene_num_int = int(scene_num) if str(scene_num).isdigit() else 0
+                for s in storyboard:
+                    if (s.get('scene') == scene_num_int or str(s.get('scene')) == str(scene_num)):
+                        scene_start_seconds = self._parse_timestamp_to_seconds(s.get('timestamp', '0:00'))
+                        break
+                else:
+                    scene_start_seconds = max(0.0, (scene_num_int - 1) * seconds_per_video) if scene_num_int else 0.0
+                scene_end_seconds = scene_start_seconds + seconds_per_video
+                lyrics_with_timestamps = lyrics
+                extracted_lyrics = self.current_song.get('extracted_lyrics', '') if self.current_song else ''
+                if extracted_lyrics and not re.search(r'\d+:\d+=\d+:\d+=', lyrics):
+                    lyrics_with_timestamps = self._extract_timed_lyrics_for_scene(lyrics, extracted_lyrics, scene_start_seconds, scene_end_seconds)
+                processed_lyrics = self._process_lyrics_for_lip_sync(lyrics_with_timestamps, scene_start_seconds, seconds_per_video)
+                already_has_timing = ('Words and timeindex' in full_prompt or 'Words and time index' in full_prompt or
+                                     re.search(r'\n\d+:\d+=.+\n\d+:\d+=', full_prompt))
+                if processed_lyrics and not already_has_timing:
+                    full_prompt += "\n\nIMPORTANT: You shall synchronize the lyrics from the time index in the video so that lips sync works."
+                    full_prompt += "\nThis overrides other commands in this prompt, here are Words and timeindex:"
+                    full_prompt += "\n\n" + processed_lyrics
+            
             # Create safe filename
             safe_scene = str(scene_num).replace(':', '_').replace('/', '_').replace('\\', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace("'", '_').replace('<', '_').replace('>', '_').replace('|', '_')
             json_filename = os.path.join(self.current_song_path, f'storyboard_scene_{safe_scene}.json')
-            
-            # Get seconds per video for calculating scene duration
-            seconds_per_video = int(self.storyboard_seconds_var.get() or '6') if hasattr(self, 'storyboard_seconds_var') else 6
-            is_multiscene = self.storyboard_multiscene_var.get() if hasattr(self, 'storyboard_multiscene_var') else False
             
             # Build the export data
             export_data = {
@@ -6949,7 +6977,6 @@ TECHNICAL REQUIREMENTS:
                     new['lyrics'] = regenerated[scene_num].get('lyrics', new.get('lyrics', ''))
                     new['duration'] = regenerated[scene_num].get('duration', new.get('duration', ''))
                     new['timestamp'] = regenerated[scene_num].get('timestamp', new.get('timestamp', ''))
-                    # Note: generated_prompt and other properties are preserved via .copy()
                     updated.append(new)
                     updated_scene_nums.add(scene_num)
                 else:
@@ -6970,6 +6997,23 @@ TECHNICAL REQUIREMENTS:
                     updated.append(new_scene)
             
             self.current_song['storyboard'] = updated
+            
+            # Rebuild generated_prompt for each regenerated scene (adds timing, persona, etc.)
+            is_multiscene = self.storyboard_multiscene_var.get() if hasattr(self, 'storyboard_multiscene_var') else False
+            for scene_num, rdata in regenerated.items():
+                base_prompt = rdata.get('prompt', '')
+                lyrics = rdata.get('lyrics', '')
+                if base_prompt:
+                    cache_suffix = f"|video" if is_multiscene else ""
+                    cache_key = f"{scene_num}|{self._get_song_persona_preset_key()}{cache_suffix}"
+                    if cache_key in self.scene_final_prompts:
+                        del self.scene_final_prompts[cache_key]
+                    try:
+                        final_prompt = self.build_scene_image_prompt(str(scene_num), base_prompt, lyrics, 'video')
+                        self._save_storyboard_generated_prompt(str(scene_num), final_prompt, 'video')
+                        self.log_debug('INFO', f'Rebuilt generated_prompt for scene {scene_num} (with lyrics timing)')
+                    except Exception as e:
+                        self.log_debug('WARNING', f'Could not rebuild generated_prompt for scene {scene_num}: {e}')
         
         self.log_debug('INFO', f'Regenerated {len(regenerated)} scene(s) successfully.')
 
@@ -15510,12 +15554,39 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
         elif not lyrics_text:
             prompt += "\n\nNo lyrics for this scene; keep visuals text-free."
 
-        # For VIDEO prompts with persona and lyrics: add explicit lip-sync instruction
+        # For VIDEO prompts with persona and lyrics: add explicit lip-sync instruction + exact timing
         if prompt_type == 'video' and persona_in_scene and lyrics_text and '[NO LYRICS]' not in lyrics_text.upper():
             prompt += (
                 f'\n\nCHARACTER SPEAKS/SINGS (lip-sync): "{lyrics_text}" '
                 'The character must mouth these exact words. Do NOT use the story theme as dialogue.'
             )
+        # Add exact word-level timing for any VIDEO prompt with lyrics (persona or story character)
+        if prompt_type == 'video' and lyrics_text and '[NO LYRICS]' not in lyrics_text.upper():
+            try:
+                seconds_per_video = int(self.storyboard_seconds_var.get() or '6') if hasattr(self, 'storyboard_seconds_var') else 6
+                scene_start_seconds = 0.0
+                storyboard = self.current_song.get('storyboard', []) if self.current_song else []
+                for s in storyboard:
+                    sv = s.get('scene')
+                    if sv is not None and (sv == scene_num_int or str(sv) == str(scene_num)):
+                        scene_start_seconds = self._parse_timestamp_to_seconds(s.get('timestamp', '0:00'))
+                        break
+                else:
+                    # Fallback: compute from scene number
+                    scene_start_seconds = max(0.0, (scene_num_int - 1) * seconds_per_video) if scene_num_int else 0.0
+                scene_end_seconds = scene_start_seconds + seconds_per_video
+                extracted_lyrics = self.current_song.get('extracted_lyrics', '') if self.current_song else ''
+                lyrics_with_timestamps = lyrics_text
+                if extracted_lyrics and not re.search(r'\d+:\d+=\d+:\d+=', lyrics_text):
+                    lyrics_with_timestamps = self._extract_timed_lyrics_for_scene(lyrics_text, extracted_lyrics, scene_start_seconds, scene_end_seconds)
+                if lyrics_with_timestamps:
+                    # Convert to scene-relative times (0:00-0:06) so the AI syncs within the 6s clip
+                    processed_lyrics = self._process_lyrics_for_lip_sync(lyrics_with_timestamps, scene_start_seconds, seconds_per_video)
+                    if processed_lyrics:
+                        prompt += "\n\nIMPORTANT: Synchronize lyrics by time index for lip-sync. Words and timeindex (relative to scene start 0-6s):"
+                        prompt += "\n\n" + processed_lyrics
+            except Exception as e:
+                self.log_debug('WARNING', f'Failed to add lyrics timing to scene prompt: {e}')
 
         # For VIDEO + multi-scene: inject character descriptions into sub-scenes
         if prompt_type == 'video' and is_multiscene and re.search(r'\[\d+s[-–]\d+s\]', prompt):
@@ -15698,11 +15769,8 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
                 include_lyrics = self.include_lyrics_in_export_var.get() if hasattr(self, 'include_lyrics_in_export_var') else False
                 self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - include_lyrics checkbox: {include_lyrics}')
                 
-                # Check if lyrics exist and generated_prompt starts with "REFERENCE CHARACTER"
-                prompt_starts_with_ref = generated_prompt.strip().startswith('REFERENCE CHARACTER')
-                self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - prompt starts with REFERENCE CHARACTER: {prompt_starts_with_ref}')
-                
-                if lyrics and prompt_starts_with_ref and include_lyrics:
+                # Add exact lyrics timing for any scene with lyrics when include_lyrics is on
+                if lyrics and include_lyrics:
                     # Parse scene start time from timestamp
                     scene_timestamp = scene.get('timestamp', '0:00')
                     scene_start_seconds = self._parse_timestamp_to_seconds(scene_timestamp)
@@ -15722,24 +15790,28 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
                             self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - No extracted_lyrics available, cannot convert plain text to timed format')
                             lyrics_with_timestamps = ''
                     
-                    # Process lyrics: convert time indices from absolute to relative (starting from 0)
+                    # Convert to scene-relative times (0:00-0:06) for lip-sync within the 6s clip
                     processed_lyrics = self._process_lyrics_for_lip_sync(lyrics_with_timestamps, scene_start_seconds, seconds_per_video)
                     self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - processed_lyrics length: {len(processed_lyrics) if processed_lyrics else 0} chars')
                     
-                    if processed_lyrics:
+                    # Skip if prompt already contains timing block (e.g. from build_scene_image_prompt)
+                    already_has_timing = ('Words and timeindex' in final_prompt or
+                                         'Words and time index' in final_prompt or
+                                         re.search(r'\n\d+:\d+=.+\n\d+:\d+=', final_prompt))
+                    if processed_lyrics and not already_has_timing:
                         final_prompt += "\n\nIMPORTANT: You shall synchronize the lyrics from the time index in the video so that lips sync works."
                         final_prompt += "\nThis overrides other commands in this prompt, here are Words and timeindex:"
                         final_prompt += "\n\n" + processed_lyrics
                         self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - Added processed lyrics to prompt')
+                    elif already_has_timing:
+                        self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - Skipping (prompt already contains timing block)')
                     else:
                         self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - No processed lyrics to add')
                 else:
                     if not include_lyrics:
-                        self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - Skipping lyrics processing (include_lyrics checkbox disabled)')
+                        self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - Skipping lyrics timing (include_lyrics checkbox disabled)')
                     elif not lyrics:
-                        self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - Skipping lyrics processing (no lyrics)')
-                    elif not prompt_starts_with_ref:
-                        self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - Skipping lyrics processing (prompt does not start with REFERENCE CHARACTER)')
+                        self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - Skipping lyrics timing (no lyrics)')
                 
                 # Create JSON structure with prompt type information
                 prompt_type = scene.get('generated_prompt_type', 'image')
@@ -15959,6 +16031,33 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
         result = '\n'.join(processed_lines)
         return result
 
+    def _format_lyrics_extracted_style(self, lyrics_with_timestamps: str) -> str:
+        """Format timed lyrics in extracted_lyrics style: timestamp=word (absolute times).
+        
+        The video AI needs per-word timing like extracted_lyrics (e.g. 0:43=You, 0:44=built).
+        Input is double-equals format (start=end=word); output is single-equals (timestamp=word).
+        
+        Args:
+            lyrics_with_timestamps: Timed lyrics in 0:32=00:42=word format
+            
+        Returns:
+            Lyrics in extracted_lyrics format: M:SS=word per line
+        """
+        if not lyrics_with_timestamps:
+            return ''
+        lines = lyrics_with_timestamps.strip().split('\n')
+        double_equals_pattern = re.compile(r'^(\d+):(\d+)=(\d+):(\d+)=(.+)$')
+        out = []
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            m = double_equals_pattern.match(line)
+            if m:
+                start_min, start_sec, word = int(m.group(1)), int(m.group(2)), m.group(5).strip()
+                out.append(f"{start_min}:{start_sec:02d}={word}")
+        return '\n'.join(out)
+
     def generate_all_prompts(self):
         """Generate prompts for all storyboard scenes and save them to config.json."""
         if not self.current_song_path or not self.current_song:
@@ -15987,6 +16086,9 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
             f'Generate prompts for all {len(storyboard)} scenes? This may take a while.')
         if not response:
             return
+        
+        # Clear prompt cache so prompts are rebuilt with current logic (e.g. lyrics timing)
+        self.scene_final_prompts = {}
         
         # Create progress dialog
         progress_dialog = ProgressDialog(self, len(storyboard), 'Generating Storyboard Prompts')
