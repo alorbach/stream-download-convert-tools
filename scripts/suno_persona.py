@@ -11605,7 +11605,7 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
             storyboard_context = "\n\nExisting Storyboard Scenes (for context):\n"
             for scene in sample_scenes:
                 scene_num = scene.get('scene', '')
-                scene_prompt = scene.get('prompt', '') or scene.get('generated_prompt', '')
+                scene_prompt = scene.get('prompt', '') or scene.get('generated_prompt_image', '') or scene.get('generated_prompt_video', '') or scene.get('generated_prompt', '')
                 if scene_prompt:
                     # Truncate long prompts to keep context manageable
                     truncated_prompt = scene_prompt[:200] + "..." if len(scene_prompt) > 200 else scene_prompt
@@ -12734,9 +12734,25 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
         else:
             return self._extract_lyrics_with_openai(audio_path)
     
+    def _get_speech_locale_for_song(self) -> str:
+        """Resolve Azure Speech locale from song/album language. Returns e.g. 'en-US' or 'de-DE'."""
+        lang = None
+        if self.current_song:
+            album_id = self.current_song.get('album_id', '')
+            if album_id and self.albums and album_id in self.albums:
+                lang = self.albums[album_id].get('language', '') or None
+        if not lang and self.current_album:
+            lang = self.current_album.get('language', '') or None
+        if not lang and hasattr(self, 'album_lang_var'):
+            lang = self.album_lang_var.get() or None
+        lang = (lang or 'EN').upper()[:2]
+        locale_map = {'EN': 'en-US', 'DE': 'de-DE'}
+        return locale_map.get(lang, 'en-US')
+    
     def _extract_lyrics_with_speech_services(self, audio_path: str) -> str:
         """Extract lyrics using Azure Speech Services API."""
-        self.log_debug('INFO', 'Using Azure Speech Services for transcription...')
+        locale = self._get_speech_locale_for_song()
+        self.log_debug('INFO', f'Using Azure Speech Services for transcription (locale={locale})...')
         
         speech_profile = self.ai_config.get('profiles', {}).get('speech', {})
         self.log_debug('DEBUG', f'Speech profile endpoint: {speech_profile.get("endpoint", "NOT SET")}')
@@ -12750,7 +12766,7 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
                 self.ai_config,
                 audio_path,
                 profile='speech',
-                language='en-US'
+                language=locale
             )
             
             if result['success']:
@@ -12838,12 +12854,13 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
     
     def _extract_lyrics_with_openai(self, audio_path: str) -> str:
         """Extract lyrics using Azure OpenAI (Whisper/gpt-4o-transcribe)."""
-        # Log configuration for debugging
+        lang = self._get_speech_locale_for_song().split('-')[0]
+        self.log_debug('INFO', f'Transcribing with language={lang} (from song/album)')
         transcribe_profile = self.ai_config.get('profiles', {}).get('transcribe', {})
         self.log_debug('DEBUG', f'Transcribe profile endpoint: {transcribe_profile.get("endpoint", "NOT SET")}')
         self.log_debug('DEBUG', f'Transcribe profile deployment: {transcribe_profile.get("deployment", "NOT SET")}')
         self.log_debug('DEBUG', f'Transcribe profile API version: {transcribe_profile.get("api_version", "NOT SET")}')
-        self.log_debug('DEBUG', f'Transcription request: file="{audio_path}", response_format="verbose_json" (preferred), profile="transcribe"')
+        self.log_debug('DEBUG', f'Transcription request: file="{audio_path}", language="{lang}", response_format="verbose_json" (preferred), profile="transcribe"')
         
         # Guidance prompt for transcription (helps retain lyrical structure and punctuation)
         transcription_prompt = (
@@ -12867,10 +12884,10 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
         self.update()
         
         try:
-            # Call Azure Whisper API for transcription
             result = self.azure_transcription(
-                audio_path, 
-                profile='transcribe', 
+                audio_path,
+                profile='transcribe',
+                language=lang,
                 response_format='verbose_json',
                 prompt=transcription_prompt
             )
@@ -13432,6 +13449,22 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
             if any(kw in prompt for kw in persona_char_keywords):
                 return True
         return False
+
+    def _build_setup_context_from_metadata(self) -> str:
+        """Build a brief setup palette/location context from storyboard_metadata for prompt injection.
+        Returns empty string if no setups defined. Used to guide visual consistency across scenes."""
+        metadata = (self.current_song or {}).get('storyboard_metadata', {})
+        setups = metadata.get('setups') or {}
+        if not setups:
+            return ''
+        parts = []
+        for sid, info in setups.items():
+            desc = info.get('description', '') if isinstance(info, dict) else str(info)
+            if desc:
+                parts.append(f"{sid}: {desc}")
+        if not parts:
+            return ''
+        return "SETUP PALETTES (use for visual consistency; match palette when scene fits):\n" + "; ".join(parts) + "\n\n"
 
     def apply_storyboard_theme_prefix(self, prompt_text: str, use_environmental_for_no_characters: bool = True, persona_scene: bool = False) -> str:
         """Prepend the storyboard theme to a prompt if provided.
@@ -15174,10 +15207,10 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
             return False
 
     def get_scene_final_prompt(self, scene_num: str, base_prompt: str = None, lyrics: str = None, prompt_type: str = 'image') -> str:
-        """Get the final prompt for a scene, checking saved generated_prompt first.
+        """Get the final prompt for a scene, checking saved generated_prompt_image/generated_prompt_video first.
         
         This checks in order:
-        1. Saved generated_prompt from config.json (if available)
+        1. Saved generated_prompt_image or generated_prompt_video from config.json (if available)
         2. In-memory cache (scene_final_prompts)
         3. Builds a new prompt if neither exists
         
@@ -15185,61 +15218,41 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
             scene_num: Scene number
             base_prompt: Base prompt text (optional, will be retrieved from scene if not provided)
             lyrics: Lyrics text (optional, will be retrieved from scene if not provided)
-            prompt_type: Type of prompt - 'image' or 'video'. When multi-scene is enabled:
-                - 'image': For the first scene, only include reference image description (no scene info)
-                - 'video': Include both reference image description AND scene information
+            prompt_type: Type of prompt - 'image' or 'video'
         
         Returns:
             Final prompt string ready for image/video generation
         """
-        # Check if multi-scene mode is enabled
         is_multiscene = self.storyboard_multiscene_var.get() if hasattr(self, 'storyboard_multiscene_var') else False
         scene_num_int = int(scene_num) if str(scene_num).isdigit() else None
 
-        # For multi-scene scene 1 image: never use stored prompt - we must always generate
-        # the persona reference when any scene has persona (stored prompt may be video-type
-        # environmental content which would produce wrong reference image)
+        # For multi-scene scene 1 image: always build fresh (persona reference)
         skip_stored_for_multiscene_scene1 = is_multiscene and scene_num_int == 1 and prompt_type == 'image'
 
-        # First, check if there's a saved generated_prompt in config.json
-        # Note: For multi-scene mode, we may need to regenerate based on prompt_type
+        # Field name for stored prompt
+        stored_field = 'generated_prompt_image' if prompt_type == 'image' else 'generated_prompt_video'
+
+        # First, check if there's a saved prompt in config.json
         if self.current_song and not skip_stored_for_multiscene_scene1:
             storyboard = self.current_song.get('storyboard', [])
-            # Find the scene in the storyboard
             for scene in storyboard:
                 scene_value = scene.get('scene')
-                # Handle both int and string scene numbers
                 if (scene_num_int is not None and scene_value == scene_num_int) or str(scene_value) == str(scene_num):
-                    # For multi-scene mode with different prompt types, check if stored prompt matches the type
-                    stored_prompt = scene.get('generated_prompt', '')
-                    stored_prompt_type = scene.get('generated_prompt_type', 'image')
-                    
+                    stored_prompt = scene.get(stored_field, '')
                     if stored_prompt:
-                        # For no-character scenes: sanitize lyric-embedding instructions (avoid text in video/image)
                         no_char_markers = ('[no characters]', 'no characters', 'no persona present', 'no human figures',
                                           'no persona', 'no people', 'no artist', '[no persona]', 'without any human',
                                           'purely environmental', 'purely abstract', 'no human presence')
                         if any(m in stored_prompt.lower() for m in no_char_markers):
                             stored_prompt = self._sanitize_no_character_scene_prompt_for_video(stored_prompt)
-                            self.log_debug('INFO', f'Sanitized stored prompt for no-character scene {scene_num}')
-                        # In multi-scene mode, we can use stored 'video' prompts for 'image' requests
-                        # by stripping the multi-scene formatting (except scene 1 which we skip above)
-                        if is_multiscene and prompt_type == 'image':
-                            # Strip multi-scene formatting for single image generation
-                            self.log_debug('INFO', f'Using saved generated_prompt for scene {scene_num}, stripping for image generation')
-                            return self._strip_multiscene_formatting_for_image(stored_prompt)
-                        elif not is_multiscene or stored_prompt_type == prompt_type:
-                            self.log_debug('INFO', f'Using saved generated_prompt for scene {scene_num} (type: {stored_prompt_type})')
-                            return stored_prompt
-                    
-                    # If no stored prompt but we found the scene, use its base prompt and lyrics
+                        self.log_debug('INFO', f'Using saved {stored_field} for scene {scene_num}')
+                        return stored_prompt
                     if base_prompt is None:
                         base_prompt = scene.get('prompt', '')
                     if lyrics is None:
                         lyrics = scene.get('lyrics', '')
                     break
 
-        # When skip_stored_for_multiscene_scene1: still need base_prompt/lyrics from scene for build
         if skip_stored_for_multiscene_scene1 and self.current_song and (base_prompt is None or lyrics is None):
             storyboard = self.current_song.get('storyboard', [])
             for scene in storyboard:
@@ -15250,29 +15263,27 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
                     if lyrics is None:
                         lyrics = scene.get('lyrics', '')
                     break
-        
-        # Second, check in-memory cache (with prompt_type suffix for multi-scene mode)
-        # Skip cache for multi-scene scene 1 image - always build fresh to ensure persona reference
-        cache_suffix = f"|{prompt_type}" if is_multiscene else ""
-        cache_key = f"{scene_num}|{self._get_song_persona_preset_key()}{cache_suffix}"
-        if not skip_stored_for_multiscene_scene1 and cache_key in self.scene_final_prompts:
-            cached_prompt = self.scene_final_prompts[cache_key]
-            # For no-character scenes: sanitize lyric-embedding instructions
-            no_char_markers = ('[no characters]', 'no characters', 'no persona present', 'no human figures',
-                              'no persona', 'no people', 'no artist', '[no persona]', 'without any human',
-                              'purely environmental', 'purely abstract', 'no human presence')
-            if any(m in cached_prompt.lower() for m in no_char_markers):
-                cached_prompt = self._sanitize_no_character_scene_prompt_for_video(cached_prompt)
-            # For IMAGE generation in multi-scene mode, strip formatting before returning
-            if is_multiscene and prompt_type == 'image':
-                return self._strip_multiscene_formatting_for_image(cached_prompt)
-            return cached_prompt
 
-        # Third, build a new prompt if base_prompt is available
+        # Second, check in-memory cache (unified: base_key -> {'image': str, 'video': str})
+        base_cache_key = f"{scene_num}|{self._get_song_persona_preset_key()}"
+        if not skip_stored_for_multiscene_scene1 and base_cache_key in self.scene_final_prompts:
+            cached = self.scene_final_prompts[base_cache_key]
+            if isinstance(cached, dict):
+                cached_prompt = cached.get(prompt_type, '')
+            else:
+                cached_prompt = cached if isinstance(cached, str) else ''
+            if cached_prompt:
+                no_char_markers = ('[no characters]', 'no characters', 'no persona present', 'no human figures',
+                                  'no persona', 'no people', 'no artist', '[no persona]', 'without any human',
+                                  'purely environmental', 'purely abstract', 'no human presence')
+                if prompt_type == 'video' and any(m in cached_prompt.lower() for m in no_char_markers):
+                    cached_prompt = self._sanitize_no_character_scene_prompt_for_video(cached_prompt)
+                return cached_prompt
+
+        # Third, build a new prompt
         if base_prompt:
             return self.build_scene_image_prompt(scene_num, base_prompt, lyrics, prompt_type)
-        
-        # Fallback: return empty string if nothing is available
+
         return ''
     
     def _build_multiscene_reference_image_prompt(self, cache_key: str) -> str:
@@ -15367,65 +15378,38 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
         self.log_debug('INFO', 'Built multi-scene reference image prompt (single image only)')
         return prompt
     
-    def _strip_multiscene_formatting_for_image(self, prompt: str) -> str:
-        """Strip multi-scene formatting from a prompt for single image generation.
+    def _extract_first_subscene_for_single_image(self, prompt: str) -> str:
+        """Extract first sub-scene from a prompt with [0s-2s] structure for single image generation.
         
-        When multi-scene mode generates prompts with sub-scenes like:
-        [0s-2s] Sub-scene 1: description
-        [2s-4s] Sub-scene 2: description
-        
-        This extracts only the FIRST sub-scene content and adds instructions
-        to generate a single image (not a collage/triptych).
+        Builds a single-image prompt without video structure. No MULTI-SCENE VIDEO,
+        HARD CUT, or multi-panel content - only the first sub-scene.
         
         Args:
-            prompt: The original prompt with potential multi-scene formatting
+            prompt: Prompt with [0s-2s], [2s-4s], [4s-6s] sub-scene structure
         
         Returns:
-            Cleaned prompt suitable for single image generation
+            Single-image prompt suitable for image generation
         """
-        import re
-        
-        # Check if prompt contains multi-scene formatting patterns
-        # Match both regular hyphen (-) and en-dash (–) since AI may generate either
         subscene_pattern = r'\[(\d+)s[-–](\d+)s\]\s*(?:Sub-scene\s*\d+:?)?\s*'
-        
+
         if not re.search(subscene_pattern, prompt):
-            # No multi-scene formatting detected, return as-is but add single image instruction
             single_image_prefix = (
                 "IMPORTANT: Generate exactly ONE single image. "
                 "Do NOT create multiple panels, triptych, collage, or split-screen layouts.\n\n"
             )
             return single_image_prefix + prompt
-        
-        # Extract the first sub-scene content
-        # Split by sub-scene markers and get the first meaningful content
-        parts = re.split(subscene_pattern, prompt)
-        
-        # parts will be: [prefix, start1, end1, content1, start2, end2, content2, ...]
-        # We want the prefix + first content
+
         first_subscene_content = ""
-        prefix_content = parts[0].strip() if parts else ""
-        
-        # Find the first sub-scene content (after the timing markers)
-        # Pattern groups: (start_time, end_time) then content follows
+        prefix_content = (re.split(subscene_pattern, prompt)[0] or "").strip()
         matches = list(re.finditer(subscene_pattern, prompt))
         if matches:
-            first_match = matches[0]
-            # Get content after first match until next match or end
-            start_idx = first_match.end()
-            if len(matches) > 1:
-                end_idx = matches[1].start()
-            else:
-                end_idx = len(prompt)
+            start_idx = matches[0].end()
+            end_idx = matches[1].start() if len(matches) > 1 else len(prompt)
             first_subscene_content = prompt[start_idx:end_idx].strip()
-        
-        # Also remove any remaining sub-scene markers from prefix
+
         prefix_content = re.sub(subscene_pattern, '', prefix_content).strip()
-        
-        # Remove duration indicators like "6 seconds total"
         prefix_content = re.sub(r'\d+\s*seconds?\s*total', '', prefix_content, flags=re.IGNORECASE).strip()
-        
-        # Build the cleaned prompt
+
         cleaned_parts = [
             "CRITICAL: Generate exactly ONE SINGLE IMAGE.",
             "Do NOT create:",
@@ -15438,18 +15422,15 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
             "Create ONE focused, unified image composition.",
             ""
         ]
-        
         if prefix_content:
             cleaned_parts.append(prefix_content)
-        
         if first_subscene_content:
             cleaned_parts.append("")
             cleaned_parts.append("SCENE CONTENT:")
             cleaned_parts.append(first_subscene_content)
-        
-        cleaned_prompt = "\n".join(cleaned_parts)
-        self.log_debug('INFO', f'Stripped multi-scene formatting for image generation')
-        return cleaned_prompt
+
+        self.log_debug('INFO', 'Extracted first sub-scene for single image prompt')
+        return "\n".join(cleaned_parts)
 
     def _inject_character_descriptions_into_subscenes(self, prompt: str, character_registry: dict) -> str:
         """Inject character descriptions into sub-scenes that feature characters but lack descriptions.
@@ -15472,19 +15453,35 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
             re.IGNORECASE
         )
         matches = list(subscene_pattern.finditer(prompt))
-        if not matches:
-            return prompt
-
         no_char_markers = [
             '[no characters]', 'no characters', 'no persona present', 'no human figures',
             'purely environmental', 'purely abstract', 'no human presence'
         ]
 
+        # Fallback: when prompt has no [Xs-Ys] sub-scene structure, prepend primary character
+        # description so single-shot persona/character scenes get needed context
+        if not matches:
+            prompt_start = (prompt[:300] or '').lower()
+            if any(m in prompt_start for m in no_char_markers):
+                return prompt
+            if 'character:' in prompt_start and ' - ' in prompt[:300]:
+                return prompt
+            primary = character_registry.get('persona') or next(iter(character_registry.values()), None)
+            if not primary:
+                return prompt
+            entry = primary if isinstance(primary, dict) else {'label': 'Artist', 'description': str(primary)}
+            label = entry.get('label', 'Artist')
+            desc = entry.get('description', '')
+            if not desc or len(desc) < 10:
+                return prompt
+            return f"CHARACTER ({label}): {desc}. " + prompt.strip()
+
         def find_character_for_block(block: str):
             block_lower = block.lower()
             if any(m in block_lower for m in no_char_markers):
                 return None
-            if 'character:' in block_lower and (' - ' in block or len(block) > 60):
+            # Skip injection only when block already has full description (id - description format)
+            if 'character:' in block_lower and ' - ' in block:
                 return None
             for cid, info in character_registry.items():
                 entry = info if isinstance(info, dict) else {'label': cid, 'description': str(info)}
@@ -15523,49 +15520,35 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
 
         return ''.join(result_parts)
 
-    def build_scene_image_prompt(self, scene_num: str, base_prompt: str, lyrics: str = None, prompt_type: str = 'image') -> str:
-        """Build the final prompt that gets sent to the image or video model.
-        
-        This applies persona detection and reference image analysis to ensure the
-        copied prompt matches exactly what is sent to the model.
-        
-        Args:
-            scene_num: Scene number
-            base_prompt: Base prompt text
-            lyrics: Lyrics text (optional)
-            prompt_type: Type of prompt - 'image' or 'video'. When multi-scene is enabled:
-                - 'image': For the first scene, only include reference image description (no scene info)
-                - 'video': Include both reference image description AND scene information
-        
-        Returns:
-            Final prompt string ready for image/video generation
-        """
-        # Check if multi-scene mode is enabled
-        is_multiscene = self.storyboard_multiscene_var.get() if hasattr(self, 'storyboard_multiscene_var') else False
-        
-        # For multi-scene mode with image prompts on scene 1, use a different cache key
-        cache_suffix = f"|{prompt_type}" if is_multiscene else ""
-        cache_key = f"{scene_num}|{self._get_song_persona_preset_key()}{cache_suffix}"
-        if cache_key in self.scene_final_prompts:
-            cached_prompt = self.scene_final_prompts[cache_key]
-            # For IMAGE generation in multi-scene mode, strip formatting before returning
-            if is_multiscene and prompt_type == 'image':
-                return self._strip_multiscene_formatting_for_image(cached_prompt)
-            return cached_prompt
+    def build_scene_prompts_both(self, scene_num: str, base_prompt: str, lyrics: str = None) -> dict:
+        """Build IMAGE and VIDEO prompts in a single pass with shared AI work (persona detection, vision).
 
-        # EARLY EXIT for multi-scene IMAGE prompt on scene 1
-        # When any scene has persona/character, scene 1 must be persona reference for video generator
+        Runs persona detection and reference image analysis once, then derives both prompt types
+        without additional API calls.
+
+        Returns:
+            {'image': str, 'video': str}
+        """
+        is_multiscene = self.storyboard_multiscene_var.get() if hasattr(self, 'storyboard_multiscene_var') else False
         scene_num_int = int(scene_num) if str(scene_num).isdigit() else 0
-        if (is_multiscene and scene_num_int == 1 and prompt_type == 'image' and
-                self.current_persona and self._storyboard_has_any_persona_or_character()):
-            return self._build_multiscene_reference_image_prompt(cache_key)
+        base_key = f"{scene_num}|{self._get_song_persona_preset_key()}"
+
+        # Check unified cache (both prompts stored under one key)
+        if base_key in self.scene_final_prompts:
+            cached = self.scene_final_prompts[base_key]
+            if isinstance(cached, dict):
+                return {'image': cached.get('image', ''), 'video': cached.get('video', '')}
+
+        # Multi-scene scene 1 image: persona reference - we still need full logic for video
+        multiscene_scene1_image_special = (
+            is_multiscene and scene_num_int == 1 and self.current_persona
+            and self._storyboard_has_any_persona_or_character()
+        )
 
         prompt = self.sanitize_lyrics_for_prompt(base_prompt)
-        # Detect persona before theme so we can use condensed theme for persona scenes
         persona_in_scene_early = self._is_persona_scene_quick(prompt)
         prompt = self.apply_storyboard_theme_prefix(prompt, persona_scene=persona_in_scene_early)
         lyrics_text = self.sanitize_lyrics_for_prompt(lyrics) if lyrics else ''
-        # Strip lyric-embedding phrases when scene has no lyrics (time does not match)
         if not lyrics_text or lyrics_text.strip().upper() == '[NO LYRICS]':
             prompt = self.sanitize_prompt_no_lyrics(prompt)
         embed_lyrics_enabled = bool(self.embed_lyrics_var.get()) if hasattr(self, 'embed_lyrics_var') else True
@@ -15574,24 +15557,27 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
         if embed_keywords_enabled:
             keyword = self._extract_major_keyword(f"{lyrics_text} {prompt}")
 
-        # If current scene is similar to the previous one, include a reference description from the previous scene's image
-        reference_note = self._prepare_previous_scene_reference(int(scene_num) if str(scene_num).isdigit() else scene_num, prompt)
+        reference_note = self._prepare_previous_scene_reference(
+            int(scene_num) if str(scene_num).isdigit() else scene_num, prompt
+        )
         if str(scene_num).isdigit() and int(scene_num) == 1:
             cover_note = self._prepare_album_cover_reference()
             if cover_note:
                 reference_note = f"{cover_note}\n\n{reference_note}" if reference_note else cover_note
-
         if reference_note:
             prompt = f"{reference_note}\n\n{prompt}"
 
+        setup_context = self._build_setup_context_from_metadata()
+        if setup_context:
+            prompt = setup_context + prompt
+
         persona_in_scene = False
         prompt_lower = prompt.lower()
-
-        # Explicit "no characters" markers take precedence
         no_character_markers = [
-            '[no characters]', 'no characters', 'no persona present', 'no human figures',
-            'no persona', 'no people', 'no artist', '[no persona]', 'without any human',
-            'purely environmental', 'purely abstract', 'no human presence'
+            '[no characters]', '[no persona]', 'no characters', 'no persona present',
+            'no human figures', 'no persona', 'no people', 'no artist', 'without any human',
+            'purely environmental', 'purely abstract', 'no human presence',
+            'characters: none', 'environmental shot - no human'
         ]
         scene_has_no_characters = any(marker in prompt_lower for marker in no_character_markers)
         if scene_has_no_characters:
@@ -15599,13 +15585,11 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
         if not scene_has_no_characters and self.current_persona:
             persona_name = self.current_persona.get('name', '').lower()
             visual_aesthetic = self.current_persona.get('visual_aesthetic', '').lower()
-            base_image_prompt = self.current_persona.get('base_image_prompt', '').lower()
+            base_image_prompt_cfg = self.current_persona.get('base_image_prompt', '').lower()
 
-            # Explicit CHARACTER: persona takes precedence (AI marks persona presence)
             if 'character: persona' in prompt_lower or 'character : persona' in prompt_lower:
                 persona_in_scene = True
             else:
-                # If only story characters (not persona) are marked, do NOT add persona
                 metadata = self.current_song.get('storyboard_metadata', {}) if self.current_song else {}
                 story_char_ids = [cid for cid, info in (metadata.get('characters') or {}).items()
                                  if isinstance(info, dict) and info.get('source') == 'story']
@@ -15615,7 +15599,6 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
                         has_story_char_only = True
                         break
                 if not has_story_char_only:
-                    # Fallback: detect CHARACTER: X where X is not "persona" (works without metadata)
                     char_matches = re.findall(r'character\s*:\s*([a-zA-Z0-9_]+)', prompt_lower)
                     if char_matches and all(cid != 'persona' for cid in char_matches):
                         has_story_char_only = True
@@ -15623,9 +15606,9 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
                     persona_in_scene = False
                 elif persona_name and persona_name in prompt_lower:
                     persona_in_scene = True
-                elif any(keyword in prompt_lower for keyword in ['character', 'persona', 'singer', 'artist', 'performer', 'person', 'figure', 'protagonist', 'main character', 'vocalist', 'musician']):
+                elif any(kw in prompt_lower for kw in ['character', 'persona', 'singer', 'artist', 'performer', 'person', 'figure', 'protagonist', 'main character', 'vocalist', 'musician']):
                     persona_in_scene = True
-                elif visual_aesthetic or base_image_prompt:
+                elif visual_aesthetic or base_image_prompt_cfg:
                     try:
                         self.config(cursor='wait')
                         self.update()
@@ -15636,11 +15619,9 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
                         )
                         if visual_aesthetic:
                             analysis_prompt += f"Persona Visual Aesthetic: {self.current_persona.get('visual_aesthetic', '')}\n"
-                        if base_image_prompt:
+                        if base_image_prompt_cfg:
                             analysis_prompt += f"Persona Base Image Description: {self.current_persona.get('base_image_prompt', '')}\n"
-                        analysis_prompt += (
-                            "\nRespond with ONLY 'YES' if the persona should be featured, or 'NO' if not."
-                        )
+                        analysis_prompt += "\nRespond with ONLY 'YES' if the persona should be featured, or 'NO' if not."
                         analysis_result = self.azure_ai(
                             analysis_prompt,
                             system_message="You are a music video analysis assistant. Respond with only YES or NO.",
@@ -15648,8 +15629,7 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
                         )
                         if analysis_result['success']:
                             analysis_response = analysis_result['content'].strip().upper()
-                            if 'YES' in analysis_response:
-                                persona_in_scene = True
+                            persona_in_scene = 'YES' in analysis_response
                         else:
                             persona_in_scene = False
                     except Exception as e:
@@ -15657,11 +15637,10 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
                     finally:
                         self.config(cursor='')
 
-        # If persona is present, enrich prompt with reference image analysis and persona visual characteristics
         if persona_in_scene and self.current_persona:
             visual_aesthetic = self.current_persona.get('visual_aesthetic', '').strip()
             base_image_prompt = self.current_persona.get('base_image_prompt', '').strip()
-            
+
             if self.current_persona_path:
                 preset_key = self._get_song_persona_preset_key()
                 base_path = self.get_persona_image_base_path(preset_key)
@@ -15674,7 +15653,6 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
                         new_width = original_img.width // 2
                         new_height = original_img.height // 2
                         downscaled_img = original_img.resize((new_width, new_height), Image.Resampling.LANCZOS)
-
                         temp_dir = os.path.join(self.current_song_path if self.current_song_path else os.path.dirname(front_image_path), 'temp')
                         os.makedirs(temp_dir, exist_ok=True)
                         reference_image_path = os.path.join(temp_dir, f'{safe_name}-Front-downscaled.png')
@@ -15697,7 +15675,6 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
                         vision_result = self.azure_vision([reference_image_path], vision_prompt, system_message=vision_system, profile='text')
                         if vision_result['success']:
                             character_description = vision_result['content'].strip()
-                            # Include both reference character description and scene information
                             prompt = (
                                 f"REFERENCE CHARACTER DESCRIPTION (from Front Persona Image - MUST MATCH EXACTLY):\n{character_description}\n\n"
                                 f"{prompt}\n\n"
@@ -15707,8 +15684,7 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
                             )
                         else:
                             prompt += "\n\nIMPORTANT: Use the Front Persona Image as reference. The scene must feature this exact character with matching appearance, styling, and visual characteristics."
-                        
-                        # Add persona visual characteristics from base_image_prompt and visual_aesthetic
+
                         persona_visual_parts = []
                         if visual_aesthetic:
                             persona_visual_parts.append(f"Persona Visual Aesthetic: {visual_aesthetic}")
@@ -15722,7 +15698,6 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
                     finally:
                         self.config(cursor='')
             else:
-                # No reference image path, but persona is in scene - add visual characteristics directly
                 persona_visual_parts = []
                 if visual_aesthetic:
                     persona_visual_parts.append(f"Persona Visual Aesthetic: {visual_aesthetic}")
@@ -15734,9 +15709,7 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
 
         if lyrics_text and '[NO LYRICS]' not in lyrics_text.upper():
             if scene_has_no_characters:
-                # Strip any lyric-embedding phrases from base prompt (AI may have added them)
                 prompt = self.sanitize_prompt_no_lyrics(prompt)
-                # No characters = no one to sing; reflect mood only, never embed lyric text
                 prompt += (
                     "\n\nLyrics for mood only (keep scene text-free): "
                     f"\"{lyrics_text}\". Use the feeling of these words to shape lighting, color, and symbolism, but render NO visible text anywhere. "
@@ -15753,7 +15726,6 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
                     "\n\nLyrics for mood only (keep scene text-free): "
                     f"\"{lyrics_text}\". Use the feeling of these words to shape lighting, color, and symbolism, but render no visible text."
                 )
-        # Optional keyword embedding (skip for no-character scenes - keep purely environmental)
         if keyword and '[NO LYRICS]' not in (lyrics_text or '').upper() and not scene_has_no_characters:
             prompt += (
                 f"\n\nOPTIONAL KEYWORD: \"{keyword}\". Only embed this word as diegetic text (signage, hologram, graffiti, screen UI) IF it naturally fits the scene and does not conflict with aesthetics. "
@@ -15762,14 +15734,25 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
         elif not lyrics_text:
             prompt += "\n\nNo lyrics for this scene; keep visuals text-free."
 
-        # For VIDEO prompts with persona and lyrics: add explicit lip-sync instruction + exact timing
-        if prompt_type == 'video' and persona_in_scene and lyrics_text and '[NO LYRICS]' not in lyrics_text.upper():
-            prompt += (
+        enriched_prompt = prompt
+
+        # Derive VIDEO prompt (add lip-sync, timing, multi-scene, character injection)
+        video_prompt = enriched_prompt
+        has_lyrics = bool(lyrics_text) and '[NO LYRICS]' not in (lyrics_text or '').upper()
+        if persona_in_scene and has_lyrics:
+            video_prompt += (
                 f'\n\nCHARACTER SPEAKS/SINGS (lip-sync): "{lyrics_text}" '
                 'The character must mouth these exact words. Do NOT use the story theme as dialogue.'
             )
-        # Add exact word-level timing only when there is a character to lip-sync (no timing for purely environmental scenes)
-        if prompt_type == 'video' and lyrics_text and '[NO LYRICS]' not in lyrics_text.upper() and not scene_has_no_characters:
+        elif not scene_has_no_characters and not has_lyrics:
+            video_prompt += (
+                "\n\nCRITICAL - NO DIALOGUE IN THIS SCENE: "
+                "This scene has NO lyrics. ALL characters, personas, and humans MUST be completely SILENT. "
+                "DO NOT speak, DO NOT talk, DO NOT sing, DO NOT mouth any words. "
+                "Lips closed, no dialogue, no voice, no singing, no speech. "
+                "Characters may react visually only - no verbal communication whatsoever."
+            )
+        if lyrics_text and '[NO LYRICS]' not in lyrics_text.upper() and not scene_has_no_characters:
             try:
                 seconds_per_video = int(self.storyboard_seconds_var.get() or '6') if hasattr(self, 'storyboard_seconds_var') else 6
                 scene_start_seconds = 0.0
@@ -15780,7 +15763,6 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
                         scene_start_seconds = self._parse_timestamp_to_seconds(s.get('timestamp', '0:00'))
                         break
                 else:
-                    # Fallback: compute from scene number
                     scene_start_seconds = max(0.0, (scene_num_int - 1) * seconds_per_video) if scene_num_int else 0.0
                 scene_end_seconds = scene_start_seconds + seconds_per_video
                 extracted_lyrics = self.current_song.get('extracted_lyrics', '') if self.current_song else ''
@@ -15788,16 +15770,26 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
                 if extracted_lyrics and not re.search(r'\d+:\d+=\d+:\d+=', lyrics_text):
                     lyrics_with_timestamps = self._extract_timed_lyrics_for_scene(lyrics_text, extracted_lyrics, scene_start_seconds, scene_end_seconds)
                 if lyrics_with_timestamps:
-                    # Convert to scene-relative times (0:00-0:06) so the AI syncs within the 6s clip
                     processed_lyrics = self._process_lyrics_for_lip_sync(lyrics_with_timestamps, scene_start_seconds, seconds_per_video)
                     if processed_lyrics:
-                        prompt += "\n\nIMPORTANT: Synchronize lyrics by time index for lip-sync. Words and timeindex (relative to scene start 0-6s):"
-                        prompt += "\n\n" + processed_lyrics
+                        video_prompt += "\n\nIMPORTANT: Synchronize lyrics by time index for lip-sync. Words and timeindex (relative to scene start 0-6s):"
+                        video_prompt += "\n\n" + processed_lyrics
             except Exception as e:
                 self.log_debug('WARNING', f'Failed to add lyrics timing to scene prompt: {e}')
 
-        # For VIDEO + multi-scene: inject character descriptions into sub-scenes (skip for no-character scenes)
-        if prompt_type == 'video' and is_multiscene and not scene_has_no_characters and re.search(r'\[\d+s[-–]\d+s\]', prompt):
+        if is_multiscene and scene_has_no_characters and re.search(r'\[\d+s[-–]\d+s\]', video_prompt):
+            seconds_val = int(self.storyboard_seconds_var.get() or '6') if hasattr(self, 'storyboard_seconds_var') else 6
+            scene_dur = int(self.storyboard_scene_duration_var.get() or '2') if hasattr(self, 'storyboard_scene_duration_var') else 2
+            cut1 = scene_dur
+            cut2 = scene_dur * 2
+            instruction = (
+                f"MULTI-SCENE VIDEO: Create a {seconds_val}-second video with 3 DISTINCT shots. "
+                f"HARD CUT at {cut1} seconds. HARD CUT at {cut2} seconds. "
+                "Each [Xs-Ys] block describes a DIFFERENT shot - the video MUST show 3 different visuals/camera angles, not one continuous shot.\n\n"
+            )
+            video_prompt = instruction + video_prompt
+
+        if is_multiscene and not scene_has_no_characters:
             character_registry = {}
             metadata = self.current_song.get('storyboard_metadata', {}) if self.current_song else {}
             for cid, info in (metadata.get('characters') or {}).items():
@@ -15812,17 +15804,28 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
                         'description': f"{base_ip} {va}".strip()
                     }
             if character_registry:
-                prompt = self._inject_character_descriptions_into_subscenes(prompt, character_registry)
+                video_prompt = self._inject_character_descriptions_into_subscenes(video_prompt, character_registry)
 
-        # Cache the FULL prompt (with all multi-scene info intact) for saving/export
-        self.scene_final_prompts[cache_key] = prompt
+        # Derive IMAGE prompt
+        if multiscene_scene1_image_special:
+            image_prompt = self._build_multiscene_reference_image_prompt(base_key)
+        else:
+            image_prompt = enriched_prompt
+            if re.search(r'\[\d+s[-–]\d+s\]', image_prompt):
+                image_prompt = self._extract_first_subscene_for_single_image(image_prompt)
 
-        # For IMAGE generation in multi-scene mode, strip multi-scene formatting
-        # AFTER caching so saved prompts retain full info, but generated images are single
-        if is_multiscene and prompt_type == 'image':
-            prompt = self._strip_multiscene_formatting_for_image(prompt)
-        
-        return prompt
+        result = {'image': image_prompt, 'video': video_prompt}
+        self.scene_final_prompts[base_key] = result
+        return result
+
+    def build_scene_image_prompt(self, scene_num: str, base_prompt: str, lyrics: str = None, prompt_type: str = 'image') -> str:
+        """Build the final prompt that gets sent to the image or video model.
+
+        Thin wrapper over build_scene_prompts_both. Both prompts are built in one pass
+        with shared AI work; returns the requested type.
+        """
+        both = self.build_scene_prompts_both(scene_num, base_prompt, lyrics)
+        return both.get(prompt_type, '')
     
     def get_full_scene_prompt_for_saving(self, scene_num: str, base_prompt: str = None, lyrics: str = None) -> str:
         """Get the FULL scene prompt for saving/exporting, without any stripping.
@@ -15839,15 +15842,14 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
         Returns:
             Full prompt string with all multi-scene information intact
         """
-        is_multiscene = self.storyboard_multiscene_var.get() if hasattr(self, 'storyboard_multiscene_var') else False
-        cache_suffix = f"|video" if is_multiscene else ""  # Use 'video' type to get full prompt
-        cache_key = f"{scene_num}|{self._get_song_persona_preset_key()}{cache_suffix}"
-        
-        # Check if we have a cached full prompt
-        if cache_key in self.scene_final_prompts:
-            return self.scene_final_prompts[cache_key]
-        
-        # Build the full prompt using 'video' type (which doesn't strip)
+        base_cache_key = f"{scene_num}|{self._get_song_persona_preset_key()}"
+        if base_cache_key in self.scene_final_prompts:
+            cached = self.scene_final_prompts[base_cache_key]
+            if isinstance(cached, dict):
+                return cached.get('video', '') or self.build_scene_image_prompt(scene_num, base_prompt, lyrics, 'video')
+            if isinstance(cached, str):
+                return cached
+
         return self.build_scene_image_prompt(scene_num, base_prompt, lyrics, 'video')
     
     def _save_storyboard_generated_prompt(self, scene_num: str, generated_prompt: str, prompt_type: str = 'image'):
@@ -15855,8 +15857,8 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
         
         Args:
             scene_num: Scene number
-            generated_prompt: The final prompt that was used for image generation
-            prompt_type: Type of prompt - 'image' or 'video' (for multi-scene mode tracking)
+            generated_prompt: The final prompt that was used for image or video generation
+            prompt_type: Type of prompt - 'image' or 'video'
         """
         if not self.current_song_path or not self.current_song:
             return
@@ -15875,10 +15877,13 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
                 scene_value = scene.get('scene')
                 # Handle both int and string scene numbers
                 if (scene_num_int is not None and scene_value == scene_num_int) or str(scene_value) == str(scene_num):
-                    # Update or add the generated_prompt field and its type
-                    scene['generated_prompt'] = generated_prompt
-                    scene['generated_prompt_type'] = prompt_type
-                    self.log_debug('INFO', f'Saved generated prompt for scene {scene_num} (type: {prompt_type}) to config.json')
+                    # Save to the appropriate field (generated_prompt_image or generated_prompt_video)
+                    field = 'generated_prompt_image' if prompt_type == 'image' else 'generated_prompt_video'
+                    scene[field] = generated_prompt
+                    # Remove legacy fields if present
+                    scene.pop('generated_prompt', None)
+                    scene.pop('generated_prompt_type', None)
+                    self.log_debug('INFO', f'Saved {field} for scene {scene_num} to config.json')
                     
                     # Build config with updated storyboard (preserve other fields from current_song)
                     config_to_save = dict(self.current_song)
@@ -15897,34 +15902,35 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
 
     def get_multiscene_prompts_for_scene(self, scene_num: str, base_prompt: str = None, lyrics: str = None) -> dict:
         """Get both image and video prompts for a scene when multi-scene mode is enabled.
-        
-        This is useful for the first scene where:
-        - IMAGE prompt: Only reference image description (for generating the reference image)
-        - VIDEO prompt: Reference image + scene information (for video generation with context)
-        
-        Args:
-            scene_num: Scene number
-            base_prompt: Base prompt text (optional, will be retrieved from scene if not provided)
-            lyrics: Lyrics text (optional, will be retrieved from scene if not provided)
-        
+
+        Uses build_scene_prompts_both for a single pass when both are needed.
+
         Returns:
             Dictionary with 'image_prompt' and 'video_prompt' keys
         """
+        if (base_prompt is None or lyrics is None) and self.current_song:
+            storyboard = self.current_song.get('storyboard', [])
+            scene_num_int = int(scene_num) if str(scene_num).isdigit() else None
+            for scene in storyboard:
+                sv = scene.get('scene')
+                if (scene_num_int is not None and sv == scene_num_int) or str(sv) == str(scene_num):
+                    if base_prompt is None:
+                        base_prompt = scene.get('prompt', '')
+                    if lyrics is None:
+                        lyrics = scene.get('lyrics', '')
+                    break
         is_multiscene = self.storyboard_multiscene_var.get() if hasattr(self, 'storyboard_multiscene_var') else False
-        
+        both = self.build_scene_prompts_both(scene_num, base_prompt or '', lyrics)
+
+        image_prompt = both.get('image', '')
+        video_prompt = both.get('video', '')
+
         if not is_multiscene:
-            # If not in multi-scene mode, both prompts are the same
-            prompt = self.get_scene_final_prompt(scene_num, base_prompt, lyrics, 'image')
             return {
-                'image_prompt': prompt,
-                'video_prompt': prompt,
+                'image_prompt': image_prompt,
+                'video_prompt': image_prompt,  # Same when not multi-scene
                 'is_multiscene': False
             }
-        
-        # In multi-scene mode, generate both types
-        image_prompt = self.get_scene_final_prompt(scene_num, base_prompt, lyrics, 'image')
-        video_prompt = self.get_scene_final_prompt(scene_num, base_prompt, lyrics, 'video')
-        
         return {
             'image_prompt': image_prompt,
             'video_prompt': video_prompt,
@@ -15932,16 +15938,20 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
         }
 
     def export_generated_prompts(self):
-        """Export generated prompts to JSON files for each scene that has a generated_prompt."""
+        """Export generated prompts to JSON files for each scene. User chooses IMAGE or VIDEO prompt type."""
         self.log_debug('DEBUG', '=== export_generated_prompts: Starting export ===')
-        
+
         if not self.current_song_path or not self.current_song:
             self.log_debug('DEBUG', 'export_generated_prompts: No song selected')
             messagebox.showwarning('Warning', 'No song selected. Please select a song first.')
             return
-        
+
+        # Always export VIDEO prompts (images are generated directly via suno_persona.py)
+        export_prompt_type = 'video'
+        self.log_debug('DEBUG', 'export_generated_prompts: Export type: VIDEO (always)')
+
         self.log_debug('DEBUG', f'export_generated_prompts: Song path: {self.current_song_path}')
-        
+
         storyboard = self.current_song.get('storyboard', [])
         self.log_debug('DEBUG', f'export_generated_prompts: Found {len(storyboard)} scenes in storyboard')
         
@@ -15958,15 +15968,21 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
         seconds_per_video = int(self.storyboard_seconds_var.get() or '6') if hasattr(self, 'storyboard_seconds_var') else 6
         self.log_debug('DEBUG', f'export_generated_prompts: Seconds per video: {seconds_per_video}')
         
+        stored_field = 'generated_prompt_image' if export_prompt_type == 'image' else 'generated_prompt_video'
+
         for idx, scene in enumerate(storyboard, 1):
             scene_num = scene.get('scene')
-            generated_prompt = scene.get('generated_prompt', '')
-            
+            stored_prompt = scene.get(stored_field, '')
+
             self.log_debug('DEBUG', f'export_generated_prompts: Processing scene {scene_num} ({idx}/{len(storyboard)})')
-            self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - has generated_prompt: {bool(generated_prompt)}')
-            
-            if not generated_prompt:
-                self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - Skipping (no generated_prompt)')
+            self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - has {stored_field}: {bool(stored_prompt)}')
+
+            # Get or build prompt
+            final_prompt = stored_prompt or self.get_scene_final_prompt(
+                str(scene_num), scene.get('prompt', ''), scene.get('lyrics', ''), export_prompt_type
+            )
+            if not final_prompt:
+                self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - Skipping (no prompt)')
                 skipped_count += 1
                 continue
             
@@ -15974,11 +15990,10 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
                 safe_scene = str(scene_num).replace(':', '_').replace('/', '_').replace('\\', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace("'", '_').replace('<', '_').replace('>', '_').replace('|', '_')
                 json_filename = os.path.join(self.current_song_path, f'storyboard_scene_{safe_scene}.json')
                 self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - JSON filename: {json_filename}')
-                self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - generated_prompt length: {len(generated_prompt)} chars')
+                self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - prompt length: {len(final_prompt)} chars')
                 
-                # Build the prompt with lyrics if applicable
-                final_prompt = generated_prompt
                 lyrics = scene.get('lyrics', '')
+                processed_lyrics = ''
                 self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - has lyrics: {bool(lyrics)}, lyrics length: {len(lyrics) if lyrics else 0} chars')
                 
                 # Check if lyrics should be included (checkbox enabled)
@@ -16009,60 +16024,51 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
                     # Convert to scene-relative times (0:00-0:06) for lip-sync within the 6s clip
                     processed_lyrics = self._process_lyrics_for_lip_sync(lyrics_with_timestamps, scene_start_seconds, seconds_per_video)
                     self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - processed_lyrics length: {len(processed_lyrics) if processed_lyrics else 0} chars')
-                    
-                    # Skip if prompt already contains timing block (e.g. from build_scene_image_prompt)
-                    already_has_timing = ('Words and timeindex' in final_prompt or
-                                         'Words and time index' in final_prompt or
-                                         re.search(r'\n\d+:\d+=.+\n\d+:\d+=', final_prompt))
-                    if processed_lyrics and not already_has_timing:
-                        final_prompt += "\n\nIMPORTANT: You shall synchronize the lyrics from the time index in the video so that lips sync works."
-                        final_prompt += "\nThis overrides other commands in this prompt, here are Words and timeindex:"
-                        final_prompt += "\n\n" + processed_lyrics
-                        self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - Added processed lyrics to prompt')
-                    elif already_has_timing:
-                        self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - Skipping (prompt already contains timing block)')
-                    else:
-                        self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - No processed lyrics to add')
                 else:
                     if not include_lyrics:
                         self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - Skipping lyrics timing (include_lyrics checkbox disabled)')
                     elif not lyrics:
                         self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - Skipping lyrics timing (no lyrics)')
                 
-                # Create JSON structure with prompt type information
-                prompt_type = scene.get('generated_prompt_type', 'image')
+                # Add lyrics timing only for VIDEO prompts
+                if export_prompt_type == 'video' and processed_lyrics:
+                    has_timing = ('Words and timeindex' in final_prompt or 'Words and time index' in final_prompt or
+                                  re.search(r'\n\d+:\d+=.+\n\d+:\d+=', final_prompt))
+                    if not has_timing:
+                        final_prompt += "\n\nIMPORTANT: You shall synchronize the lyrics from the time index in the video so that lips sync works."
+                        final_prompt += "\nThis overrides other commands in this prompt, here are Words and timeindex:"
+                        final_prompt += "\n\n" + processed_lyrics
+
+                # Ensure VIDEO prompts for persona/character scenes without lyrics include explicit NO DIALOGUE block
+                if export_prompt_type == 'video' and not lyrics:
+                    lyrics_clean = (lyrics or '').strip().upper()
+                    if not lyrics_clean or lyrics_clean == '[NO LYRICS]':
+                        no_char = [
+                            '[no characters]', 'no characters', 'no persona present', 'no human figures',
+                            'purely environmental', 'purely abstract', '[no persona]', 'environmental shot - no human'
+                        ]
+                        prompt_lower = final_prompt.lower()
+                        if not any(m in prompt_lower for m in no_char):
+                            if 'CRITICAL - NO DIALOGUE' not in final_prompt and 'completely SILENT' not in final_prompt:
+                                final_prompt += (
+                                    "\n\nCRITICAL - NO DIALOGUE IN THIS SCENE: "
+                                    "This scene has NO lyrics. ALL characters, personas, and humans MUST be completely SILENT. "
+                                    "DO NOT speak, DO NOT talk, DO NOT sing, DO NOT mouth any words. "
+                                    "Lips closed, no dialogue, no voice, no singing, no speech. "
+                                    "Characters may react visually only - no verbal communication whatsoever."
+                                )
+                                self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - Added NO DIALOGUE block (persona scene, no lyrics)')
+
                 is_multiscene = self.storyboard_multiscene_var.get() if hasattr(self, 'storyboard_multiscene_var') else False
-                
+                usage_note = 'IMAGE PROMPT: Use this prompt for image generation.' if export_prompt_type == 'image' else 'VIDEO PROMPT: Use this prompt for video generation.'
                 export_data = {
                     'generated_prompt': final_prompt,
-                    'prompt_type': prompt_type,
-                    'is_multiscene': is_multiscene
+                    'prompt_type': export_prompt_type,
+                    'is_multiscene': is_multiscene,
+                    'usage_note': usage_note
                 }
-                
-                # For multi-scene mode, add additional context about how to use the prompt
-                if is_multiscene:
-                    scene_num_int = int(scene_num) if str(scene_num).isdigit() else 0
-                    if scene_num_int == 1 and prompt_type == 'image':
-                        export_data['usage_note'] = 'IMAGE PROMPT: Use this prompt for generating the reference image only (no scene information included)'
-                        
-                        # For scene 1 in multi-scene mode, also export a separate video prompt
-                        # that includes both reference image AND scene information
-                        video_prompt = self.build_scene_image_prompt(str(scene_num), scene.get('prompt', ''), lyrics, 'video')
-                        if video_prompt:
-                            video_json_filename = os.path.join(self.current_song_path, f'storyboard_scene_{safe_scene}_video.json')
-                            video_export_data = {
-                                'generated_prompt': video_prompt,
-                                'prompt_type': 'video',
-                                'is_multiscene': True,
-                                'usage_note': 'VIDEO PROMPT: Use this prompt for video generation (includes reference image + scene information)'
-                            }
-                            with open(video_json_filename, 'w', encoding='utf-8') as vf:
-                                json.dump(video_export_data, vf, indent=2, ensure_ascii=False)
-                            self.log_debug('INFO', f'Also exported video prompt for scene {scene_num} to {video_json_filename}')
-                    else:
-                        export_data['usage_note'] = 'VIDEO PROMPT: Use this prompt for video generation (includes reference image + scene information)'
-                
-                self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - Final prompt length: {len(final_prompt)} chars, type: {prompt_type}')
+
+                self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - Final prompt length: {len(final_prompt)} chars, type: {export_prompt_type}')
                 
                 # Write JSON file
                 with open(json_filename, 'w', encoding='utf-8') as f:
@@ -16090,7 +16096,7 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
             else:
                 messagebox.showinfo('Success', f'Exported {exported_count} scene(s) successfully.')
         else:
-            messagebox.showwarning('Warning', f'No scenes with generated_prompt found to export. (Skipped {skipped_count} scenes without generated_prompt)')
+            messagebox.showwarning('Warning', f'No scenes with {stored_field} found to export. (Skipped {skipped_count} scenes without prompt)')
     
     def _extract_timed_lyrics_for_scene(self, plain_lyrics: str, extracted_lyrics: str, scene_start_seconds: float, scene_end_seconds: float) -> str:
         """Extract timed lyrics from extracted_lyrics that fall within the scene time range.
@@ -16329,18 +16335,21 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
                 base_prompt = "Atmospheric scene matching the song's mood and narrative flow."
             
             try:
-                progress_dialog.update_progress(idx, f'Generating prompt for scene {scene_num} ({idx}/{len(storyboard)})...')
-                self.update()  # Flush UI so each scene is visible before slow build_scene_image_prompt runs
-                
-                # Build the final prompt (this includes persona detection, reference images, etc.)
-                # Use 'video' type to get the FULL prompt for saving (not stripped for single image)
-                final_prompt = self.build_scene_image_prompt(str(scene_num), base_prompt, lyrics, 'video')
-                
-                # Save the FULL generated prompt to config.json
-                self._save_storyboard_generated_prompt(str(scene_num), final_prompt, 'video')
-                
+                progress_dialog.update_progress(idx, f'Generating prompts for scene {scene_num} ({idx}/{len(storyboard)})...')
+                self.update()  # Flush UI so each scene is visible before slow build_scene_prompts_both runs
+
+                # Build both prompts in one pass (1x AI work per scene)
+                both = self.build_scene_prompts_both(str(scene_num), base_prompt, lyrics)
+                image_prompt = both.get('image', '')
+                video_prompt = both.get('video', '')
+
+                if image_prompt:
+                    self._save_storyboard_generated_prompt(str(scene_num), image_prompt, 'image')
+                if video_prompt:
+                    self._save_storyboard_generated_prompt(str(scene_num), video_prompt, 'video')
+
                 generated_count += 1
-                self.log_debug('INFO', f'Generated and saved prompt for scene {scene_num}')
+                self.log_debug('INFO', f'Generated and saved image+video prompts for scene {scene_num}')
                 
             except Exception as e:
                 error_msg = f'Error generating prompt for scene {scene_num}: {e}'
