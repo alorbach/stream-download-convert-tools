@@ -816,6 +816,42 @@ def sanitize_image_prompt(prompt: str) -> str:
     return sanitized
 
 
+def sanitize_video_prompt(prompt: str, style: str = 'Realism') -> str:
+    """Sanitize video prompt based on Video Style to avoid surreal/morphing artifacts.
+    Realism: full replacements. Surrealism: passthrough. Artistic/Dreamlike/Cinematic: light."""
+    if not prompt:
+        return prompt
+    s = (style or 'Realism').strip()
+    if s == 'Surrealism':
+        return prompt
+    # Full replacements for Realism
+    full_replacements = {
+        'dissolve into': 'fade into',
+        'dissolving into': 'fading into',
+        'dissolves into': 'fades into',
+        'melts into': 'blends into',
+        'melt into': 'blend into',
+        'like lines of fate': '',
+        'like extinguished stars': '',
+        'empty frame holds': 'static shot, empty composition',
+        'cut on beat': 'hard cut',
+    }
+    # Light replacements for Artistic, Dreamlike, Cinematic (only incomplete/problematic)
+    light_replacements = {
+        'empty frame holds': 'static shot, empty composition',
+    }
+    if s == 'Realism':
+        replacements = full_replacements
+    else:
+        replacements = light_replacements
+    sanitized = prompt
+    for old, new in sorted(replacements.items(), key=lambda x: -len(x[0])):
+        if old:
+            sanitized = sanitized.replace(old, new if new else ' ')
+    sanitized = re.sub(r' +', ' ', sanitized)
+    return sanitized
+
+
 def call_azure_image(config: dict, prompt: str, size: str = '1024x1024', profile: str = 'image_gen', quality: str = 'medium', output_format: str = 'png', output_compression: int = 100) -> dict:
     """Call Azure OpenAI Images API to generate an image from a prompt.
     
@@ -6491,6 +6527,15 @@ TECHNICAL REQUIREMENTS:
         ttk.Label(controls_frame, text='sec', font=('TkDefaultFont', 8)).pack(side=tk.LEFT)
         create_tooltip(storyboard_scene_dur_spin, 'Duration of each sub-scene within a video segment (1-10 seconds)')
 
+        ttk.Label(controls_frame, text='Video Style:', font=('TkDefaultFont', 9, 'bold')).pack(side=tk.LEFT, padx=(10, 5))
+        VIDEO_STYLE_CHOICES = ['Realism', 'Surrealism', 'Artistic', 'Dreamlike', 'Cinematic']
+        self.storyboard_video_style_var = tk.StringVar(value='Realism')
+        storyboard_video_style_combo = ttk.Combobox(controls_frame, textvariable=self.storyboard_video_style_var,
+            values=VIDEO_STYLE_CHOICES, state='readonly', width=12)
+        storyboard_video_style_combo.pack(side=tk.LEFT, padx=5)
+        create_tooltip(storyboard_video_style_combo,
+            'Controls prompt style for AI video: Realism=filmable/concrete; Surrealism=abstract/morphing; Artistic/Dreamlike/Cinematic=gradations between')
+
         # Button row for Generate Storyboard and Export Generated Prompts
         button_frame = ttk.Frame(main_frame)
         button_frame.pack(fill=tk.X, pady=(0, 10))
@@ -6898,10 +6943,20 @@ TECHNICAL REQUIREMENTS:
         )
         selected_scene_nums = sorted({int(self.storyboard_tree.item(i, 'values')[0]) for i in selection})
         
+        video_style = (self.storyboard_video_style_var.get() or 'Realism').strip() if hasattr(self, 'storyboard_video_style_var') else 'Realism'
+        style_note = (
+            ' NEVER: dissolve, melt, morph, "like [abstract]". USE: fade, step into, static shot, hard cut.' if video_style == 'Realism' else
+            ' USE: dissolve, morph, blend. NEVER: vague "something emerges". Write explicit surreal transitions.' if video_style == 'Surrealism' else
+            ' PREFER: fade/transition. Use "dissolve" only when intentional. NEVER: empty frame holds, order emerges.' if video_style == 'Artistic' else
+            ' USE: soft dissolve, subtle morph. NEVER: jarring abstract (order emerges, empty frame holds).' if video_style == 'Dreamlike' else
+            ' USE: filmic terms. NEVER: empty frame holds, order emerges, uncontrolled morphing.' if video_style == 'Cinematic' else
+            ""
+        )
         system_message = (
             "You are a professional music video storyboard director. "
             "Regenerate ONLY the requested scenes. Output format for each: "
             "\"SCENE X: [duration] seconds\\n[prompt]\". No extra scenes, no questions."
+            + style_note
         )
         
         regenerated = {}
@@ -8415,6 +8470,8 @@ TECHNICAL REQUIREMENTS:
             self.storyboard_multiscene_var.set(self.current_song.get('storyboard_multiscene', False))
         if hasattr(self, 'storyboard_scene_duration_var'):
             self.storyboard_scene_duration_var.set(str(self.current_song.get('storyboard_scene_duration', 2)))
+        if hasattr(self, 'storyboard_video_style_var'):
+            self.storyboard_video_style_var.set(self.current_song.get('storyboard_video_style', 'Realism'))
         
         # Load Spotify Category
         if hasattr(self, 'spotify_category_var'):
@@ -8465,6 +8522,8 @@ TECHNICAL REQUIREMENTS:
             self.storyboard_multiscene_var.set(False)
         if hasattr(self, 'storyboard_scene_duration_var'):
             self.storyboard_scene_duration_var.set('2')
+        if hasattr(self, 'storyboard_video_style_var'):
+            self.storyboard_video_style_var.set('Realism')
         if hasattr(self, 'overlay_lyrics_var'):
             self.overlay_lyrics_var.set(False)
         if hasattr(self, 'embed_lyrics_var'):
@@ -8961,6 +9020,7 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
             'video_loop_multiscene': bool(self.video_loop_multiscene_var.get()) if hasattr(self, 'video_loop_multiscene_var') else False,
             'storyboard_multiscene': bool(self.storyboard_multiscene_var.get()) if hasattr(self, 'storyboard_multiscene_var') else False,
             'storyboard_scene_duration': int(self.storyboard_scene_duration_var.get() or 2) if hasattr(self, 'storyboard_scene_duration_var') else 2,
+            'storyboard_video_style': (self.storyboard_video_style_var.get() or 'Realism').strip() if hasattr(self, 'storyboard_video_style_var') else 'Realism',
             'overlay_lyrics_on_image': bool(self.overlay_lyrics_var.get()) if hasattr(self, 'overlay_lyrics_var') else False,
             'embed_lyrics_in_prompt': bool(self.embed_lyrics_var.get()) if hasattr(self, 'embed_lyrics_var') else True,
             'embed_keywords_in_prompt': bool(self.embed_keywords_var.get()) if hasattr(self, 'embed_keywords_var') else False,
@@ -12439,6 +12499,9 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
         # Clear the cached prompts
         self.scene_final_prompts = {}
         
+        if hasattr(self, 'storyboard_video_style_var'):
+            self.storyboard_video_style_var.set('Realism')
+        
         # Save the updated config
         if save_song_config(self.current_song_path, self.current_song):
             self.log_debug('INFO', 'Storyboard reset successfully')
@@ -13442,7 +13505,123 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
         stop = ('the', 'and', 'for', 'out', 'but', 'his', 'him', 'has', 'not', 'from')
         words = [w for w in re.split(r'[\s,]+', t) if len(w) > 2 and w.lower() not in stop]
         mood = ' '.join(words[:25]).strip() if words else 'dark dystopian atmosphere'
+        # Truncate incomplete trailing conjunctions (e.g. "collides with", "mood and")
+        incomplete_endings = (' with', ' and', ' or', ' but', ' for', ' to')
+        for ending in incomplete_endings:
+            if mood.lower().endswith(ending):
+                mood = mood[:-len(ending)].rstrip()
+                break
+        if not mood:
+            mood = 'dark dystopian atmosphere'
         return f"ENVIRONMENTAL SHOT - No human figures. Visual mood: {mood}\n"
+
+    def _get_video_style_instructions(self, style: str) -> str:
+        """Return the instruction block for the selected Video Style.
+        Used in storyboard generation to guide prompt language for AI video models.
+        Each style has NEVER USE, USE INSTEAD, and GOOD EXAMPLES for hardening."""
+        s = (style or 'Realism').strip()
+        if s == 'Realism':
+            return """
+VIDEO REALISM - CRITICAL for AI video generation:
+These prompts feed video models (Runway, Kling, etc.). To avoid surreal, melting, or morphing results:
+
+NEVER USE (causes surreal/morphing in video AI):
+- dissolve, dissolving, dissolves -> USE: fade, step into, walk into
+- melt, melts into -> USE: blend into, transition to
+- morph, swallow, consume (when objects merge) -> USE: fade, cut to, transition
+- "like [abstract]" (e.g. "like lines of fate", "like extinguished stars") -> omit or describe literally
+- empty frame holds, order emerges, cut on beat, no fractures now -> USE: static shot, hard cut, symmetry remains
+
+USE INSTEAD: fade, step into, blend, static shot, hard cut, concrete camera terms (pan, tilt, dolly, close-up)
+GOOD EXAMPLES: "Curtain opens.", "Light clicks off.", "Persona steps into street.", "Static wide of empty corridor."
+Complete all sentences - never truncate mid-phrase.
+"""
+        if s == 'Surrealism':
+            return """
+VIDEO SURREALISM - Dreamlike, abstract AI video:
+
+NEVER USE: incomplete sentences; vague "something emerges" (causes random glitches); accidental literal object-merging when you mean transition
+USE: dissolve, morph, blend, transform; explicit "figure dissolves into X"; controlled surreal transitions
+GOOD EXAMPLES: "Silhouette dissolves into corridor.", "Shapes morph between light and shadow.", "Reality bends at the edges."
+Complete sentences - write explicit surreal transitions, not vague abstraction.
+"""
+        if s == 'Artistic':
+            return """
+VIDEO ARTISTIC - Stylized but controlled:
+
+NEVER USE: harsh "dissolve" when "fade" gives more control; "like [abstract]" when it causes literal bizarre objects; empty frame holds, order emerges
+PREFER: fade/transition when uncertain; use "dissolve" only for intentional effect; cinematic framing
+GOOD EXAMPLES: "Light fades across the set.", "Persona steps through doorway.", "Soft transition to next frame."
+Complete sentences; concrete actions preferred for key beats.
+"""
+        if s == 'Dreamlike':
+            return """
+VIDEO DREAMLIKE - Soft, ethereal, gentle transitions:
+
+NEVER USE: jarring phrases (order emerges, empty frame holds); harsh cuts
+USE: soft dissolve, subtle morph, gentle transition, atmospheric
+GOOD EXAMPLES: "Figure fades into mist.", "Soft dissolve to next shot.", "Light drifts across the scene."
+Complete sentences preferred.
+"""
+        if s == 'Cinematic':
+            return """
+VIDEO CINEMATIC - Traditional film language:
+
+NEVER USE: empty frame holds, order emerges, extreme abstract; uncontrolled morphing
+USE: filmic terms (pan, tilt, dolly); moderate metaphor; stable compositions
+GOOD EXAMPLES: "Dolly forward as persona walks.", "Static wide, empty street.", "Hard cut to close-up."
+Complete all sentences.
+"""
+        return """
+VIDEO REALISM - For hyper-realistic AI video:
+NEVER USE: dissolve, melt, morph, "like [abstract]". USE: fade, step into, blend, static shot, hard cut. Complete sentences.
+"""
+
+    def _get_video_style_examples(self, style: str) -> str:
+        """Return BAD vs GOOD few-shot examples for the selected Video Style.
+        Used in storyboard batch prompt to reinforce correct sub-scene writing."""
+        s = (style or 'Realism').strip()
+        if s == 'Realism':
+            return """
+EXAMPLE - BAD (do NOT write like this):
+  [0s-2s] Companion dissolves into corridor. [2s-4s] Cables coil like lines of fate. [4s-6s] Empty frame holds.
+
+EXAMPLE - GOOD (write like this):
+  [0s-2s] Companion steps into corridor. [2s-4s] Cables coil on the floor. [4s-6s] Static shot, empty composition.
+"""
+        if s == 'Surrealism':
+            return """
+EXAMPLE - BAD (do NOT write like this):
+  [0s-2s] Something emerges. [2s-4s] Order from chaos. [4s-6s] Things merge.
+
+EXAMPLE - GOOD (write like this):
+  [0s-2s] Silhouette dissolves into shadow. [2s-4s] Light morphs into geometric forms. [4s-6s] Figure blends into corridor.
+"""
+        if s == 'Artistic':
+            return """
+EXAMPLE - BAD (do NOT write like this):
+  [0s-2s] Order emerges. [2s-4s] Empty frame holds. [4s-6s] Cables like fate.
+
+EXAMPLE - GOOD (write like this):
+  [0s-2s] Light fades across the set. [2s-4s] Persona steps through doorway. [4s-6s] Soft transition to next frame.
+"""
+        if s == 'Dreamlike':
+            return """
+EXAMPLE - BAD (do NOT write like this):
+  [0s-2s] Order emerges. [2s-4s] Empty frame holds. [4s-6s] Hard cut.
+
+EXAMPLE - GOOD (write like this):
+  [0s-2s] Figure fades into mist. [2s-4s] Soft dissolve to next shot. [4s-6s] Light drifts across the scene.
+"""
+        if s == 'Cinematic':
+            return """
+EXAMPLE - BAD (do NOT write like this):
+  [0s-2s] Empty frame holds. [2s-4s] Order emerges. [4s-6s] Things morph.
+
+EXAMPLE - GOOD (write like this):
+  [0s-2s] Dolly forward as persona walks. [2s-4s] Static wide, empty street. [4s-6s] Hard cut to close-up.
+"""
+        return ""
 
     def _is_persona_scene_quick(self, prompt_text: str) -> bool:
         """Quick check if prompt describes a persona scene (for theme handling).
@@ -14063,7 +14242,21 @@ ABSOLUTE RULES:
             next_rule_num += 1
             system_message += f"{next_rule_num}. When persona appears with lyrics: NEVER use 'silent', 'mute', 'no dialogue', or 'not speaking'. Use 'singing', 'lips moving', 'performing', or 'mouthing the words' instead.\n"
             next_rule_num += 1
-            
+            video_style = (self.storyboard_video_style_var.get() or 'Realism').strip() if hasattr(self, 'storyboard_video_style_var') else 'Realism'
+            if video_style == 'Realism':
+                system_message += f"{next_rule_num}. VIDEO REALISM: NEVER: dissolve, melt, morph, \"like [abstract]\". USE: fade, step into, static shot, hard cut.\n"
+            elif video_style == 'Surrealism':
+                system_message += f"{next_rule_num}. VIDEO SURREALISM: USE: dissolve, morph, blend. NEVER: vague \"something emerges\". Write explicit surreal transitions.\n"
+            elif video_style == 'Artistic':
+                system_message += f"{next_rule_num}. VIDEO ARTISTIC: PREFER: fade/transition. Use \"dissolve\" only when intentional. NEVER: empty frame holds, order emerges.\n"
+            elif video_style == 'Dreamlike':
+                system_message += f"{next_rule_num}. VIDEO DREAMLIKE: USE: soft dissolve, subtle morph. NEVER: jarring abstract (order emerges, empty frame holds).\n"
+            elif video_style == 'Cinematic':
+                system_message += f"{next_rule_num}. VIDEO CINEMATIC: USE: filmic terms. NEVER: empty frame holds, order emerges, uncontrolled morphing.\n"
+            else:
+                system_message += f"{next_rule_num}. VIDEO STYLE ({video_style}): Follow the prompt guidelines for this style.\n"
+            next_rule_num += 1
+
             # Add multi-scene rules to system message if enabled
             if is_multiscene and subscenes_per_video > 1:
                 system_message += f"""{next_rule_num}. MULTI-SCENE MODE: Each {seconds_per_video}s scene must contain {subscenes_per_video} sub-scenes of {scene_duration}s each.
@@ -14396,7 +14589,12 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
             if batch_start < batch_end:
                 prompt += f"SCENE {batch_start + 1}: [duration] seconds\nCOLOR PALETTE: [distinct palette for this scene]\n[detailed image prompt]\n\n"
         prompt += f"(Continue through SCENE {batch_end})\n"
-        
+
+        # Add Video Style instructions (Realism, Surrealism, Artistic, etc.)
+        video_style = (self.storyboard_video_style_var.get() or 'Realism').strip() if hasattr(self, 'storyboard_video_style_var') else 'Realism'
+        prompt += self._get_video_style_instructions(video_style)
+        prompt += self._get_video_style_examples(video_style)
+
         # Add multi-scene format instructions if enabled
         if is_multiscene and subscenes_per_video > 1:
             prompt += f"""
@@ -15853,6 +16051,9 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
                     }
             if character_registry:
                 video_prompt = self._inject_character_descriptions_into_subscenes(video_prompt, character_registry)
+
+        video_style = (self.storyboard_video_style_var.get() or 'Realism').strip() if hasattr(self, 'storyboard_video_style_var') else 'Realism'
+        video_prompt = sanitize_video_prompt(video_prompt, video_style)
 
         # Derive IMAGE prompt
         if multiscene_scene1_image_special:
