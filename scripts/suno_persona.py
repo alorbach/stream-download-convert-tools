@@ -6915,6 +6915,12 @@ TECHNICAL REQUIREMENTS:
         """Regenerate the selected storyboard scenes via AI to add variation."""
         if not hasattr(self, 'storyboard_tree'):
             return
+        if not self.current_persona:
+            messagebox.showwarning('Warning', 'Please select a persona first.')
+            return
+        if not self.current_song_path or not self.current_song:
+            messagebox.showwarning('Warning', 'Please select a song first.')
+            return
         selection = self.storyboard_tree.selection()
         if not selection:
             messagebox.showwarning('Warning', 'Please select at least one scene to regenerate.')
@@ -6956,10 +6962,32 @@ TECHNICAL REQUIREMENTS:
         vibe = self.current_persona.get('vibe', '') if self.current_persona else ''
         full_song_name = self.full_song_name_var.get().strip() if hasattr(self, 'full_song_name_var') else ''
         song_name = self.song_name_var.get().strip() if hasattr(self, 'song_name_var') else ''
-        total_scenes = max(
-            [int(self.storyboard_tree.item(i, 'values')[0]) for i in self.storyboard_tree.get_children()] or [len(self.current_song.get('storyboard', [])) if self.current_song else 0] or [0]
-        )
-        selected_scene_nums = sorted({int(self.storyboard_tree.item(i, 'values')[0]) for i in selection})
+        # Safely extract scene numbers from tree (guard against empty/invalid values)
+        scene_nums_from_tree = []
+        for i in self.storyboard_tree.get_children():
+            try:
+                vals = self.storyboard_tree.item(i, 'values')
+                if vals and len(vals) >= 1:
+                    sn = int(vals[0]) if str(vals[0]).isdigit() else None
+                    if sn is not None:
+                        scene_nums_from_tree.append(sn)
+            except (IndexError, ValueError, TypeError):
+                pass
+        total_scenes = max(scene_nums_from_tree or [len(self.current_song.get('storyboard', [])) if self.current_song else 0] or [0])
+        selected_scene_nums = []
+        for i in selection:
+            try:
+                vals = self.storyboard_tree.item(i, 'values')
+                if vals and len(vals) >= 1:
+                    sn = int(vals[0]) if str(vals[0]).isdigit() else None
+                    if sn is not None:
+                        selected_scene_nums.append(sn)
+            except (IndexError, ValueError, TypeError):
+                pass
+        selected_scene_nums = sorted(set(selected_scene_nums))
+        if not selected_scene_nums:
+            messagebox.showwarning('Warning', 'No valid scenes found in selection.')
+            return
         
         video_style = (self.storyboard_video_style_var.get() or 'Realism').strip() if hasattr(self, 'storyboard_video_style_var') else 'Realism'
         style_note = (
@@ -7067,7 +7095,16 @@ TECHNICAL REQUIREMENTS:
                         'prompt': sdata.get('prompt', '')
                     }
                     updated.append(new_scene)
-            
+            # Sort by scene number to preserve correct order (including newly added scenes)
+            def _scene_sort_key(s):
+                sn = s.get('scene')
+                if sn is None:
+                    return 9999
+                try:
+                    return int(sn)
+                except (TypeError, ValueError):
+                    return 9999
+            updated.sort(key=_scene_sort_key)
             self.current_song['storyboard'] = updated
             
             # Rebuild generated_prompt for each regenerated scene (adds timing, persona, etc.)
@@ -12478,7 +12515,9 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
         storyboard = self.current_song.get('storyboard', [])
         if isinstance(storyboard, list):
             for scene in storyboard:
-                scene_num = scene.get('scene', len(self.storyboard_tree.get_children()) + 1)
+                scene_num = scene.get('scene')
+                if scene_num is None:
+                    scene_num = len(self.storyboard_tree.get_children()) + 1
                 duration = scene.get('duration', '')
                 timestamp = scene.get('timestamp', '')
                 lyrics = scene.get('lyrics', '')
@@ -15501,19 +15540,19 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
         # Generate images for all scenes
         successful = 0
         failed = 0
-        for idx, (scene_num, prompt, lyrics) in enumerate(scenes_to_generate, 1):
-            if progress_dialog.is_cancelled():
-                self.log_debug('INFO', 'Image generation cancelled by user')
-                break
-            progress_dialog.update_progress(idx, f'Generating scene {scene_num} ({idx}/{len(scenes_to_generate)})...')
-            
-            if self.generate_storyboard_image(scene_num, prompt, show_success_message=False, lyrics=lyrics):
-                successful += 1
-            else:
-                failed += 1
-        
-        # Close progress dialog
-        progress_dialog.destroy()
+        try:
+            for idx, (scene_num, prompt, lyrics) in enumerate(scenes_to_generate, 1):
+                if progress_dialog.is_cancelled():
+                    self.log_debug('INFO', 'Image generation cancelled by user')
+                    break
+                progress_dialog.update_progress(idx, f'Generating scene {scene_num} ({idx}/{len(scenes_to_generate)})...')
+                
+                if self.generate_storyboard_image(scene_num, prompt, show_success_message=False, lyrics=lyrics):
+                    successful += 1
+                else:
+                    failed += 1
+        finally:
+            progress_dialog.destroy()
         
         # Show summary
         messagebox.showinfo('Generation Complete', f'Generated {successful} image(s) successfully.\n{failed} failed.' if failed > 0 else f'Generated {successful} image(s) successfully.')
