@@ -51,7 +51,7 @@ def enable_long_paths(path: str) -> str:
 # Try to import mutagen for MP3 duration and lyrics extraction
 try:
     from mutagen.mp3 import MP3
-    from mutagen.id3 import ID3NoHeaderError, USLT, SYLT
+    from mutagen.id3 import ID3, ID3NoHeaderError, USLT, SYLT
     MUTAGEN_AVAILABLE = True
 except ImportError:
     MUTAGEN_AVAILABLE = False
@@ -6466,7 +6466,7 @@ TECHNICAL REQUIREMENTS:
         self.extracted_lyrics_text.pack(fill=tk.BOTH, expand=True)
         
         # Info label
-        info_label = ttk.Label(main_frame, text='Lyrics are automatically extracted from MP3 when generating storyboard. Click "Extract Lyrics from MP3" to extract manually.', 
+        info_label = ttk.Label(main_frame, text='Lyrics are automatically extracted from MP3 when generating storyboard. Prefers (Vocals) variant when present. Click "Extract Lyrics from MP3" to extract manually.', 
                               font=('TkDefaultFont', 8), foreground='gray')
         info_label.pack(pady=(5, 0))
     
@@ -6799,7 +6799,11 @@ TECHNICAL REQUIREMENTS:
                 processed_lyrics = self._process_lyrics_for_lip_sync(lyrics_with_timestamps, scene_start_seconds, seconds_per_video)
                 already_has_timing = ('Words and timeindex' in full_prompt or 'Words and time index' in full_prompt or
                                      re.search(r'\n\d+\.\d+s-\d+\.\d+s:', full_prompt))
-                if processed_lyrics and not already_has_timing:
+                scene_has_no_characters = any(m in full_prompt.lower() for m in (
+                    '[no characters]', 'no characters', 'no persona present', 'no human figures',
+                    'purely environmental', 'purely abstract', '[no persona]', 'environmental shot - no human'
+                ))
+                if processed_lyrics and not already_has_timing and not scene_has_no_characters:
                     full_prompt += "\n\nIMPORTANT: Synchronize lyrics by time index for lip-sync. Each word has exact start and end time (relative to scene 0-6s):"
                     full_prompt += "\n\n" + processed_lyrics
             
@@ -8971,8 +8975,14 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
                 # Update extracted lyrics with corrected version
                 self.extracted_lyrics_text.delete('1.0', tk.END)
                 self.extracted_lyrics_text.insert('1.0', corrected_lyrics)
+                if self.current_song:
+                    self.current_song['extracted_lyrics'] = corrected_lyrics
+                    save_song_config(self.current_song_path, self.current_song)
                 self.log_debug('INFO', f'Merged corrected extracted lyrics ({words_changed} words changed)')
-                messagebox.showinfo('Success', f'Successfully merged corrected extracted lyrics.\n{words_changed} words were fixed.')
+                msg = f'Successfully merged corrected extracted lyrics.\n{words_changed} words were fixed.'
+                if self.current_song and self.current_song.get('storyboard'):
+                    msg += '\n\nConsider regenerating the storyboard for accurate scene-lyric alignment.'
+                messagebox.showinfo('Success', msg)
             else:
                 self.log_debug('INFO', 'User cancelled merging corrected extracted lyrics')
                 
@@ -12688,6 +12698,65 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
         
         return ''
     
+    def _get_embedded_lyrics_from_mp3(self, mp3_path: str) -> tuple:
+        """Extract embedded lyrics from MP3 ID3 tags (USLT/SYLT).
+        
+        Returns:
+            Tuple of (lyrics_with_timestamps, reference_text).
+            - lyrics_with_timestamps: str in 0:00=0:01=word format if SYLT has timestamps, else ''
+            - reference_text: str from USLT for alignment hint (when no SYLT or SYLT empty)
+        """
+        if not MUTAGEN_AVAILABLE or not mp3_path or not mp3_path.lower().endswith('.mp3'):
+            return ('', '')
+        try:
+            tags = ID3(mp3_path)
+        except Exception:
+            return ('', '')
+        
+        lyrics_timed = ''
+        reference_text = ''
+        
+        # Prefer SYLT (synced lyrics) when present and has timing
+        sylt_frames = tags.getall('SYLT')
+        for sylt in sylt_frames:
+            if hasattr(sylt, 'text') and sylt.text:
+                lines = []
+                # sylt.text is list of (text, time) - time in ms (format=2) or frames (format=1)
+                frame_format = getattr(sylt, 'format', 2)
+                for i, (text, time_val) in enumerate(sylt.text):
+                    if not (text and text.strip()):
+                        continue
+                    if frame_format == 2:
+                        # Milliseconds
+                        start_sec = time_val / 1000.0
+                    else:
+                        # MPEG frames: ~26.122ms per frame at 75 fps
+                        start_sec = time_val / 75.0
+                    end_sec = start_sec + 0.5  # Default 0.5s per word if no end
+                    if i + 1 < len(sylt.text):
+                        _, next_time = sylt.text[i + 1]
+                        if frame_format == 2:
+                            end_sec = next_time / 1000.0
+                        else:
+                            end_sec = next_time / 75.0
+                    ts_start = self._format_timestamp_mm_ss_mmm(start_sec)
+                    ts_end = self._format_timestamp_mm_ss_mmm(end_sec)
+                    lines.append(f'{ts_start}={ts_end}={text.strip()}')
+                if lines:
+                    lyrics_timed = '\n'.join(lines)
+                    self.log_debug('INFO', f'Using embedded SYLT lyrics from MP3 ({len(lines)} entries)')
+                    return (lyrics_timed, '')
+        
+        # Fallback: USLT as reference text for AI alignment (no timestamps)
+        uslt_frames = tags.getall('USLT')
+        for uslt in uslt_frames:
+            if hasattr(uslt, 'text') and uslt.text and uslt.text.strip():
+                reference_text = uslt.text.strip()
+                self.log_debug('INFO', f'Found embedded USLT lyrics for alignment reference ({len(reference_text)} chars)')
+                break
+        
+        return (lyrics_timed, reference_text)
+    
     def extract_lyrics_from_mp3(self, mp3_path: str) -> str:
         """Extract lyrics from MP3 or MP4 file using AI transcription.
         
@@ -12706,7 +12775,10 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
         vocals_mp4_path = base_path + ' (Vocals).mp4'
         if os.path.exists(vocals_mp3_path):
             self.log_debug('INFO', f'Using vocal file for lyrics extraction: {os.path.basename(vocals_mp3_path)}')
-            return self.extract_lyrics_with_ai(vocals_mp3_path)
+            lyrics_timed, ref_text = self._get_embedded_lyrics_from_mp3(vocals_mp3_path)
+            if lyrics_timed:
+                return lyrics_timed
+            return self.extract_lyrics_with_ai(vocals_mp3_path, lyrics_reference=ref_text)
         if os.path.exists(vocals_mp4_path):
             self.log_debug('INFO', f'Using vocal file for lyrics extraction: {os.path.basename(vocals_mp4_path)}')
             return self.extract_lyrics_with_ai(vocals_mp4_path)
@@ -12742,9 +12814,15 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
             # Only MP3 exists (or neither, but we checked mp3_path exists above)
             self.log_debug('INFO', 'Extracting lyrics from MP3 using AI transcription...')
         
+        # For MP3: try embedded USLT/SYLT first
+        if audio_path.lower().endswith('.mp3'):
+            lyrics_timed, ref_text = self._get_embedded_lyrics_from_mp3(audio_path)
+            if lyrics_timed:
+                return lyrics_timed
+            return self.extract_lyrics_with_ai(audio_path, lyrics_reference=ref_text)
         return self.extract_lyrics_with_ai(audio_path)
     
-    def extract_lyrics_with_ai(self, audio_path: str) -> str:
+    def extract_lyrics_with_ai(self, audio_path: str, lyrics_reference: str = '') -> str:
         """Extract lyrics from audio/video file using AI transcription.
         
         Supports multiple transcription backends:
@@ -12753,6 +12831,7 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
         
         Args:
             audio_path: Path to audio file (MP3, MP4, or other supported format)
+            lyrics_reference: Optional reference lyrics (e.g. from USLT) for alignment hint in transcription
         
         Returns:
             Lyrics string with timestamps in format [MM:SS.mmm] word
@@ -12824,7 +12903,7 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
         if use_speech_services:
             return self._extract_lyrics_with_speech_services(audio_path)
         else:
-            return self._extract_lyrics_with_openai(audio_path)
+            return self._extract_lyrics_with_openai(audio_path, lyrics_reference=lyrics_reference)
     
     def _get_speech_locale_for_song(self) -> str:
         """Resolve Azure Speech locale from song/album language. Returns e.g. 'en-US' or 'de-DE'."""
@@ -12953,7 +13032,7 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
         finally:
             self.config(cursor='')
     
-    def _extract_lyrics_with_openai(self, audio_path: str) -> str:
+    def _extract_lyrics_with_openai(self, audio_path: str, lyrics_reference: str = '') -> str:
         """Extract lyrics using Azure OpenAI (Whisper/gpt-4o-transcribe)."""
         lang = self._get_speech_locale_for_song().split('-')[0]
         self.log_debug('INFO', f'Transcribing with language={lang} (from song/album)')
@@ -12972,14 +13051,17 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
             "Do not group phrases together; assign a specific start time to every individual word."
             "Do not include any other text or formatting."
         )
-        # Optionally append the already-known lyrics to guide alignment
+        # Optionally append known lyrics to guide alignment (from Lyrics field, or embedded USLT)
+        known_lyrics = ''
         if hasattr(self, 'lyrics_text'):
             known_lyrics = self.lyrics_text.get('1.0', tk.END).strip()
-            if known_lyrics:
-                transcription_prompt += (
-                    "\n\nHere are the original suno song lyrics for alignment with what you detect from the song:\n"
-                    f"{known_lyrics}"
-                )
+        if not known_lyrics and lyrics_reference:
+            known_lyrics = lyrics_reference
+        if known_lyrics:
+            transcription_prompt += (
+                "\n\nHere are the original suno song lyrics for alignment with what you detect from the song:\n"
+                f"{known_lyrics}"
+            )
 
         self.config(cursor='wait')
         self.update()
@@ -13468,12 +13550,12 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
         return filtered
     
     def get_lyrics_for_scene(self, scene_start_time: float, scene_end_time: float, lyric_segments: list) -> str:
-        """Get lyrics whose start time falls within the scene window."""
+        """Get lyrics that overlap the scene window (start < scene_end AND end > scene_start)."""
         matching_lyrics = []
         
         for lyric_start, lyric_end, lyric_text in lyric_segments:
-            # Only include lyrics that start within the scene window
-            if scene_start_time <= lyric_start < scene_end_time:
+            # Include lyrics that overlap the scene (span boundaries or fall entirely within)
+            if lyric_start < scene_end_time and lyric_end > scene_start_time:
                 cleaned_text = self.clean_lyrics_text(lyric_text)
                 if cleaned_text and not self.is_non_lyric_marker(cleaned_text):
                     matching_lyrics.append(cleaned_text)
@@ -13979,6 +14061,16 @@ EXAMPLE - GOOD (write like this):
             if self.current_song:
                 lyrics = self.current_song.get('extracted_lyrics', '').strip()
 
+            # Stale-data guard: if user edited extracted_lyrics_text, use displayed version
+            if hasattr(self, 'extracted_lyrics_text'):
+                displayed = self.extracted_lyrics_text.get('1.0', tk.END).strip()
+                if displayed and displayed != lyrics:
+                    self.log_debug('INFO', 'Using displayed extracted lyrics (user edits) for LYRICS_TIMING')
+                    lyrics = displayed
+                    if self.current_song:
+                        self.current_song['extracted_lyrics'] = lyrics
+                        save_song_config(self.current_song_path, self.current_song)
+
             if not lyrics:
                 self.log_debug('INFO', 'Extracting lyrics from MP3 (only because none cached)...')
                 lyrics = self.get_extracted_lyrics(mp3_path, force_extract=True)
@@ -13994,6 +14086,38 @@ EXAMPLE - GOOD (write like this):
                 )
                 self.config(cursor='')
                 return
+
+            # Pre-storyboard: offer sync when original lyrics exist for better precision
+            original_lyrics = ''
+            if hasattr(self, 'lyrics_text'):
+                original_lyrics = self.lyrics_text.get('1.0', tk.END).strip()
+            if original_lyrics and hasattr(self, 'extracted_lyrics_text'):
+                sync_offered = messagebox.askyesno(
+                    'Sync Lyrics for Precision',
+                    'Original lyrics are available in the Lyrics field. Syncing extracted with original can fix wrong word detections and improve scene alignment.\n\n'
+                    'Sync extracted lyrics with original now before generating storyboard?',
+                    icon='question'
+                )
+                if sync_offered:
+                    self.sync_extracted_with_original_lyrics()
+                    lyrics = self.extracted_lyrics_text.get('1.0', tk.END).strip() if hasattr(self, 'extracted_lyrics_text') else lyrics
+                    if not lyrics:
+                        self.config(cursor='')
+                        return
+
+            # Validate timestamp format; warn if estimated
+            has_precise = bool(re.search(r'\d+:\d+(?:\.\d+)?=\d+:\d+(?:\.\d+)?=', lyrics)) or bool(re.search(r'\[\d+:\d+(?:[.:]\d+)*\]', lyrics))
+            if not has_precise and lyrics.strip():
+                proceed = messagebox.askyesno(
+                    'Lyrics Timestamps May Be Estimated',
+                    'Lyrics timestamps may be estimated rather than word-level precise. Scene-lyric alignment could be less accurate.\n\n'
+                    'Consider using "Sync with original Lyrics" or re-extracting with Azure Speech Services for better alignment.\n\n'
+                    'Continue with storyboard generation anyway?',
+                    icon='warning'
+                )
+                if not proceed:
+                    self.config(cursor='')
+                    return
             
             self.log_debug('INFO', f'Using extracted lyrics with timing data ({len(lyrics)} characters)')
             
@@ -14035,6 +14159,7 @@ EXAMPLE - GOOD (write like this):
                     if current_time >= song_duration:
                         break
                 scene_lyrics_info += "</LYRICS_TIMING>\n"
+                self.log_debug('DEBUG', f'LYRICS_TIMING block for storyboard prompt:\n{scene_lyrics_info}')
             
             embed_lyrics = bool(self.embed_lyrics_var.get()) if hasattr(self, 'embed_lyrics_var') else True
             if scene_lyrics_info:
@@ -14091,6 +14216,9 @@ When persona has lyrics: avoid "silent", "mute", "no dialogue", "not speaking" -
 <LYRICS>
 {scene_lyrics_block}
 </LYRICS>
+
+LYRIC EVENTS DRIVE SCENES: Each scene corresponds to a specific time range. Use LYRICS_TIMING to align visual events with lyric content. Important lyric lines should drive the visual narrative for their time window. Treat lyric events as anchors for scene content (mood, imagery, dialogue).
+
 <RULES priority="high-to-low">
 1. CONTINUOUS STORY NARRATIVE: Create a FLOWING, CONNECTED story across ALL scenes. This is not just individual lyric visualizations - it's ONE continuous narrative journey.
    - Each scene must build on the previous scene and set up the next scene
@@ -16279,8 +16407,12 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
                     elif not lyrics:
                         self.log_debug('DEBUG', f'export_generated_prompts: Scene {scene_num} - Skipping lyrics timing (no lyrics)')
                 
-                # Add lyrics timing only for VIDEO prompts
-                if export_prompt_type == 'video' and processed_lyrics:
+                # Add lyrics timing only for VIDEO prompts and only when scene has a character to lip-sync
+                scene_has_no_characters = any(m in final_prompt.lower() for m in (
+                    '[no characters]', 'no characters', 'no persona present', 'no human figures',
+                    'purely environmental', 'purely abstract', '[no persona]', 'environmental shot - no human'
+                ))
+                if export_prompt_type == 'video' and processed_lyrics and not scene_has_no_characters:
                     has_timing = ('Words and timeindex' in final_prompt or 'Words and time index' in final_prompt or
                                   re.search(r'\n\d+\.\d+s-\d+\.\d+s:', final_prompt))
                     if not has_timing:
