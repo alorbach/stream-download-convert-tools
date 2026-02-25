@@ -6753,10 +6753,9 @@ TECHNICAL REQUIREMENTS:
                     lyrics_with_timestamps = self._extract_timed_lyrics_for_scene(lyrics, extracted_lyrics, scene_start_seconds, scene_end_seconds)
                 processed_lyrics = self._process_lyrics_for_lip_sync(lyrics_with_timestamps, scene_start_seconds, seconds_per_video)
                 already_has_timing = ('Words and timeindex' in full_prompt or 'Words and time index' in full_prompt or
-                                     re.search(r'\n\d+:\d+=.+\n\d+:\d+=', full_prompt))
+                                     re.search(r'\n\d+\.\d+s-\d+\.\d+s:', full_prompt))
                 if processed_lyrics and not already_has_timing:
-                    full_prompt += "\n\nIMPORTANT: You shall synchronize the lyrics from the time index in the video so that lips sync works."
-                    full_prompt += "\nThis overrides other commands in this prompt, here are Words and timeindex:"
+                    full_prompt += "\n\nIMPORTANT: Synchronize lyrics by time index for lip-sync. Each word has exact start and end time (relative to scene 0-6s):"
                     full_prompt += "\n\n" + processed_lyrics
             
             # Create safe filename
@@ -8398,10 +8397,13 @@ TECHNICAL REQUIREMENTS:
         if hasattr(self, 'video_loop_multiscene_var'):
             self.video_loop_multiscene_var.set(self.current_song.get('video_loop_multiscene', False))
         
-        # Load extracted lyrics
+        # Load extracted lyrics (from config or lyrics_transcription.json if empty)
         if hasattr(self, 'extracted_lyrics_text'):
             self.extracted_lyrics_text.delete('1.0', tk.END)
-            self.extracted_lyrics_text.insert('1.0', self.current_song.get('extracted_lyrics', ''))
+            extracted = self.current_song.get('extracted_lyrics', '')
+            if not extracted and self.current_song_path:
+                extracted = self._load_extracted_lyrics_from_json(self.current_song_path)
+            self.extracted_lyrics_text.insert('1.0', extracted)
         
         # Load storyboard
         if hasattr(self, 'storyboard_seconds_var'):
@@ -12527,12 +12529,22 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
             scene_data['lyrics'] = lyrics
             scene_data['prompt'] = prompt
             
+            # Add lyrics_timing (word-level ms) when JSON source available for lip-sync
+            if lyrics and self.current_song_path:
+                scene_start = self._parse_timestamp_to_seconds(timestamp)
+                dur_match = re.search(r'(\d+)', str(duration))
+                scene_dur = int(dur_match.group(1)) if dur_match else 6
+                scene_end = scene_start + scene_dur
+                timing_list = self._get_lyrics_timing_list_for_scene(scene_start, scene_end)
+                if timing_list:
+                    scene_data['lyrics_timing'] = timing_list
+            
             storyboard.append(scene_data)
         
         return storyboard
 
     def format_timestamp(self, seconds_value: float) -> str:
-        """Format seconds as M:SS timestamp string."""
+        """Format seconds as M:SS timestamp string (for display e.g. scene start)."""
         if seconds_value is None:
             return '0:00'
         try:
@@ -12542,6 +12554,17 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
             return f"{minutes}:{seconds:02d}"
         except Exception:
             return '0:00'
+
+    def _format_timestamp_mm_ss_mmm(self, seconds_value: float) -> str:
+        """Format seconds as M:SS.mmm (always 3 decimal places for lip-sync)."""
+        try:
+            total = max(0, float(seconds_value))
+            minutes = int(total // 60)
+            secs = int(total % 60)
+            ms = min(999, int(round((total % 1) * 1000)))
+            return f"{minutes}:{secs:02d}.{ms:03d}"
+        except Exception:
+            return '0:00.000'
     
     def get_mp3_duration(self, mp3_path: str) -> float:
         """Get MP3 duration in seconds."""
@@ -12579,6 +12602,12 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
             if extracted_lyrics:
                 self.log_debug('INFO', 'Using cached extracted lyrics from config')
                 return extracted_lyrics
+            # If config empty, try lyrics_transcription.json (from earlier extraction)
+            if self.current_song_path:
+                extracted_lyrics = self._load_extracted_lyrics_from_json(self.current_song_path)
+                if extracted_lyrics:
+                    self.log_debug('INFO', 'Using extracted lyrics from lyrics_transcription.json')
+                    return extracted_lyrics
         
         # Extract from MP3
         if mp3_path and os.path.exists(mp3_path):
@@ -12786,15 +12815,18 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
                         start = word_info.get('start', 0)
                         end = word_info.get('end', 0)
                         if word:
-                            minutes = int(start // 60)
-                            seconds = int(start % 60)
-                            timestamp_str = f"{minutes}:{seconds:02d}"
+                            start_ms = int(start * 1000)
+                            end_ms = int(end * 1000) if end else start_ms
+                            timestamp_str = self._format_timestamp_mm_ss_mmm(start)
+                            end_timestamp_str = self._format_timestamp_mm_ss_mmm(end) if end else timestamp_str
                             lyrics_json.append({
                                 'timestamp': start,
+                                'timestamp_ms': start_ms,
                                 'timestamp_formatted': timestamp_str,
                                 'text': word,
                                 'end_timestamp': end,
-                                'end_timestamp_formatted': f"{int(end // 60)}:{int(end % 60):02d}"
+                                'end_timestamp_ms': end_ms,
+                                'end_timestamp_formatted': end_timestamp_str
                             })
                 elif segments:
                     for segment in segments:
@@ -12802,15 +12834,18 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
                         start = segment.get('start', 0)
                         end = segment.get('end', 0)
                         if text_seg:
-                            minutes = int(start // 60)
-                            seconds = int(start % 60)
-                            timestamp_str = f"{minutes}:{seconds:02d}"
+                            start_ms = int(start * 1000)
+                            end_ms = int(end * 1000) if end else start_ms
+                            timestamp_str = self._format_timestamp_mm_ss_mmm(start)
+                            end_timestamp_str = self._format_timestamp_mm_ss_mmm(end) if end else timestamp_str
                             lyrics_json.append({
                                 'timestamp': start,
+                                'timestamp_ms': start_ms,
                                 'timestamp_formatted': timestamp_str,
                                 'text': text_seg,
                                 'end_timestamp': end,
-                                'end_timestamp_formatted': f"{int(end // 60)}:{int(end % 60):02d}"
+                                'end_timestamp_ms': end_ms,
+                                'end_timestamp_formatted': end_timestamp_str
                             })
                 
                 # Save formatted JSON with timestamps
@@ -12833,10 +12868,13 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
                     except Exception as e:
                         self.log_debug('WARNING', f'Failed to save raw transcription JSON: {e}')
                 
-                # Format as text with timestamps for display
+                # Format as text with timestamps for display (double-equals with ms for lip-sync)
                 formatted_lines = []
                 for entry in lyrics_json:
-                    formatted_lines.append(f"{entry['timestamp_formatted']}={entry['text']}")
+                    if 'end_timestamp' in entry and entry.get('end_timestamp') is not None:
+                        formatted_lines.append(f"{entry['timestamp_formatted']}={entry['end_timestamp_formatted']}={entry['text']}")
+                    else:
+                        formatted_lines.append(f"{entry['timestamp_formatted']}={entry['text']}")
                 
                 return '\n'.join(formatted_lines) if formatted_lines else text_only
             else:
@@ -12906,33 +12944,46 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
                     lyrics_json = []
                     
                     if words:
-                        # Use word-level timestamps for precise timing
-                        for word_info in words:
+                        # Use word-level timestamps for precise timing (with end from next word if missing)
+                        for i, word_info in enumerate(words):
                             word = word_info.get('word', '').strip()
                             start = word_info.get('start', 0)
+                            end = word_info.get('end')
+                            if not end and i + 1 < len(words):
+                                end = words[i + 1].get('start')
                             if word:
-                                minutes = int(start // 60)
-                                seconds = int(start % 60)
-                                timestamp_str = f"{minutes}:{seconds:02d}"
-                                lyrics_json.append({
+                                start_ms = int(start * 1000)
+                                end_ms = int(end * 1000) if end else start_ms
+                                entry = {
                                     'timestamp': start,
-                                    'timestamp_formatted': timestamp_str,
+                                    'timestamp_ms': start_ms,
+                                    'timestamp_formatted': self._format_timestamp_mm_ss_mmm(start),
                                     'text': word
-                                })
+                                }
+                                if end is not None:
+                                    entry['end_timestamp'] = end
+                                    entry['end_timestamp_ms'] = end_ms
+                                    entry['end_timestamp_formatted'] = self._format_timestamp_mm_ss_mmm(end)
+                                lyrics_json.append(entry)
                     elif segments:
-                        # Use segment-level timestamps
+                        # Use segment-level timestamps (with end)
                         for segment in segments:
                             text_seg = segment.get('text', '').strip()
                             start = segment.get('start', 0)
+                            end = segment.get('end')
                             if text_seg:
-                                minutes = int(start // 60)
-                                seconds = int(start % 60)
-                                timestamp_str = f"{minutes}:{seconds:02d}"
-                                lyrics_json.append({
+                                start_ms = int(start * 1000)
+                                entry = {
                                     'timestamp': start,
-                                    'timestamp_formatted': timestamp_str,
+                                    'timestamp_ms': start_ms,
+                                    'timestamp_formatted': self._format_timestamp_mm_ss_mmm(start),
                                     'text': text_seg
-                                })
+                                }
+                                if end is not None:
+                                    entry['end_timestamp'] = end
+                                    entry['end_timestamp_ms'] = int(end * 1000)
+                                    entry['end_timestamp_formatted'] = self._format_timestamp_mm_ss_mmm(end)
+                                lyrics_json.append(entry)
                     elif text_only:
                         import re
                         # If raw text already contains timestamped lines like "MM:SS=word",
@@ -12959,13 +13010,12 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
                                 
                                 entry = {
                                     'timestamp': start_sec,
-                                    'timestamp_formatted': f"{int(start_sec // 60)}:{int(start_sec % 60):02d}",
+                                    'timestamp_formatted': self._format_timestamp_mm_ss_mmm(start_sec),
                                     'text': text_part
                                 }
-                                
                                 if end_sec is not None:
                                     entry['end_timestamp'] = end_sec
-                                    entry['end_timestamp_formatted'] = f"{int(end_sec // 60)}:{int(end_sec % 60):02d}"
+                                    entry['end_timestamp_formatted'] = self._format_timestamp_mm_ss_mmm(end_sec)
                                 
                                 lyrics_json.append(entry)
                         else:
@@ -12988,10 +13038,9 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
                                         estimated_start = i * time_per_sentence
                                         minutes = int(estimated_start // 60)
                                         seconds = int(estimated_start % 60)
-                                        timestamp_str = f"{minutes}:{seconds:02d}"
                                         lyrics_json.append({
                                             'timestamp': estimated_start,
-                                            'timestamp_formatted': timestamp_str,
+                                            'timestamp_formatted': self._format_timestamp_mm_ss_mmm(estimated_start),
                                             'text': sentence,
                                             'estimated': True  # Mark as estimated
                                         })
@@ -12999,15 +13048,15 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
                                     # Fallback: treat entire text as one entry
                                     lyrics_json.append({
                                         'timestamp': 0.0,
-                                        'timestamp_formatted': '0:00',
+                                        'timestamp_formatted': self._format_timestamp_mm_ss_mmm(0.0),
                                         'text': text_only,
                                         'estimated': True
                                     })
                             else:
-                                # No duration available - just use 0:00
+                                # No duration available - just use 0:00.000
                                 lyrics_json.append({
                                     'timestamp': 0.0,
-                                    'timestamp_formatted': '0:00',
+                                    'timestamp_formatted': self._format_timestamp_mm_ss_mmm(0.0),
                                     'text': text_only,
                                     'estimated': True
                                 })
@@ -13032,10 +13081,13 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
                         except Exception as e:
                             self.log_debug('WARNING', f'Failed to save raw transcription JSON: {e}')
                     
-                    # Format as text with timestamps for display: "MM:SS=text"
+                    # Format as text with timestamps for display (double-equals with ms for lip-sync)
                     formatted_lines = []
                     for entry in lyrics_json:
-                        formatted_lines.append(f"{entry['timestamp_formatted']}={entry['text']}")
+                        if 'end_timestamp' in entry and entry.get('end_timestamp') is not None:
+                            formatted_lines.append(f"{entry['timestamp_formatted']}={entry['end_timestamp_formatted']}={entry['text']}")
+                        else:
+                            formatted_lines.append(f"{entry['timestamp_formatted']}={entry['text']}")
                     
                     formatted_lyrics = '\n'.join(formatted_lines)
                     return formatted_lyrics
@@ -13078,10 +13130,10 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
         # Format 2: [00:12.345] or [0:12.345] - minutes:seconds.milliseconds
         # Format 3: [00:12:345] - minutes:seconds:milliseconds
         # Format 4: 0:12=text or 00:12=text - MM:SS=text format (old AI transcription format)
-        # Format 5: 0:00=00:01=word - start_time=end_time=word format (new AI transcription format)
+        # Format 5: 0:00=00:01=word or 0:04.400=0:05.200=word - start_time=end_time=word (with optional ms)
         bracket_timestamp_pattern = re.compile(r'[\[\(](\d+):(\d+)(?:[:.](\d+))?[\]\)]')
-        equals_timestamp_pattern = re.compile(r'^(\d+):(\d+)=(.+)$')
-        double_equals_timestamp_pattern = re.compile(r'^(\d+):(\d+)=(\d+):(\d+)=(.+)$')
+        equals_timestamp_pattern = re.compile(r'^(\d+):(\d+)(?:\.(\d+))?=(.+)$')
+        double_equals_timestamp_pattern = re.compile(r'^(\d+):(\d+)(?:\.(\d+))?=(\d+):(\d+)(?:\.(\d+))?=(.+)$')
         
         lines_with_timestamps = []
         lines_with_full_timing = []  # Lines with both start and end times
@@ -13092,31 +13144,27 @@ Return ONLY the formatted lyrics text. Do not include any explanations, error me
             if not line:
                 continue
             
-            # First check for start_time=end_time=word format (new format)
+            # First check for start_time=end_time=word format (with optional .mmm)
             double_equals_match = double_equals_timestamp_pattern.match(line)
             if double_equals_match:
-                start_minutes = int(double_equals_match.group(1))
-                start_seconds = int(double_equals_match.group(2))
-                end_minutes = int(double_equals_match.group(3))
-                end_seconds = int(double_equals_match.group(4))
-                lyric_text = double_equals_match.group(5).strip()
-                # Clean structural markers from lyric text
+                g = double_equals_match.groups()
+                sm, ss, sms, em, es, ems, lyric_text = int(g[0]), int(g[1]), g[2], int(g[3]), int(g[4]), g[5], g[6].strip()
                 lyric_text = self.clean_lyrics_text(lyric_text)
-                start_time = start_minutes * 60 + start_seconds
-                end_time = end_minutes * 60 + end_seconds
+                start_time = sm * 60 + ss + (int(sms or 0) / 1000.0)
+                end_time = em * 60 + es + (int(ems or 0) / 1000.0)
                 if lyric_text:
                     lines_with_full_timing.append((start_time, end_time, lyric_text))
                 continue
             
-            # Check for MM:SS=text format (old format)
+            # Check for MM:SS=text or M:SS.mmm=text format (old format)
             equals_match = equals_timestamp_pattern.match(line)
             if equals_match:
                 minutes = int(equals_match.group(1))
                 seconds = int(equals_match.group(2))
-                lyric_text = equals_match.group(3).strip()
-                # Clean structural markers from lyric text
+                ms = equals_match.group(3)
+                lyric_text = equals_match.group(4).strip()
                 lyric_text = self.clean_lyrics_text(lyric_text)
-                timestamp_seconds = minutes * 60 + seconds
+                timestamp_seconds = minutes * 60 + seconds + (int(ms or 0) / 1000.0)
                 if lyric_text:
                     lines_with_timestamps.append((timestamp_seconds, lyric_text))
                 continue
@@ -15772,7 +15820,7 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
                 if lyrics_with_timestamps:
                     processed_lyrics = self._process_lyrics_for_lip_sync(lyrics_with_timestamps, scene_start_seconds, seconds_per_video)
                     if processed_lyrics:
-                        video_prompt += "\n\nIMPORTANT: Synchronize lyrics by time index for lip-sync. Words and timeindex (relative to scene start 0-6s):"
+                        video_prompt += "\n\nIMPORTANT: Synchronize lyrics by time index for lip-sync. Each word has exact start and end time (relative to scene 0-6s):"
                         video_prompt += "\n\n" + processed_lyrics
             except Exception as e:
                 self.log_debug('WARNING', f'Failed to add lyrics timing to scene prompt: {e}')
@@ -16033,10 +16081,9 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
                 # Add lyrics timing only for VIDEO prompts
                 if export_prompt_type == 'video' and processed_lyrics:
                     has_timing = ('Words and timeindex' in final_prompt or 'Words and time index' in final_prompt or
-                                  re.search(r'\n\d+:\d+=.+\n\d+:\d+=', final_prompt))
+                                  re.search(r'\n\d+\.\d+s-\d+\.\d+s:', final_prompt))
                     if not has_timing:
-                        final_prompt += "\n\nIMPORTANT: You shall synchronize the lyrics from the time index in the video so that lips sync works."
-                        final_prompt += "\nThis overrides other commands in this prompt, here are Words and timeindex:"
+                        final_prompt += "\n\nIMPORTANT: Synchronize lyrics by time index for lip-sync. Each word has exact start and end time (relative to scene 0-6s):"
                         final_prompt += "\n\n" + processed_lyrics
 
                 # Ensure VIDEO prompts for persona/character scenes without lyrics include explicit NO DIALOGUE block
@@ -16098,28 +16145,164 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
         else:
             messagebox.showwarning('Warning', f'No scenes with {stored_field} found to export. (Skipped {skipped_count} scenes without prompt)')
     
+    def _load_extracted_lyrics_from_json(self, song_path: str) -> str:
+        """Load extracted_lyrics format from lyrics_transcription.json when config has none."""
+        if not song_path or not os.path.isdir(song_path):
+            return ''
+        json_path = os.path.join(song_path, 'lyrics_transcription.json')
+        if not os.path.isfile(json_path):
+            return ''
+        try:
+            with open(json_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            lines = []
+            for entry in data:
+                if not isinstance(entry, dict) or not entry.get('text'):
+                    continue
+                start = entry.get('timestamp', 0)
+                end = entry.get('end_timestamp')
+                if end is not None:
+                    ts = self._format_timestamp_mm_ss_mmm(start)
+                    end_ts = self._format_timestamp_mm_ss_mmm(end)
+                    lines.append(f"{ts}={end_ts}={entry['text']}")
+                else:
+                    ts = self._format_timestamp_mm_ss_mmm(start)
+                    lines.append(f"{ts}={entry['text']}")
+            return '\n'.join(lines) if lines else ''
+        except Exception:
+            return ''
+
+    def _get_lyrics_timing_list_for_scene(self, scene_start_seconds: float, scene_end_seconds: float) -> list:
+        """Get word-level lyrics timing as list of {text, start_ms, end_ms} for lip-sync.
+        Loads from lyrics_transcription.json or lyrics_transcription_raw.json when available.
+        """
+        song_path = getattr(self, 'current_song_path', None) or ''
+        if not song_path or not os.path.isdir(song_path):
+            return []
+        result = []
+        json_path = os.path.join(song_path, 'lyrics_transcription.json')
+        if os.path.isfile(json_path):
+            try:
+                with open(json_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                for entry in data:
+                    if not isinstance(entry, dict) or not entry.get('text'):
+                        continue
+                    start = entry.get('timestamp', 0)
+                    end = entry.get('end_timestamp', start)
+                    if start < scene_end_seconds and end > scene_start_seconds:
+                        result.append({
+                            'text': entry['text'],
+                            'start_ms': int(start * 1000),
+                            'end_ms': int(end * 1000)
+                        })
+                if result:
+                    return result
+            except Exception:
+                pass
+        raw_path = os.path.join(song_path, 'lyrics_transcription_raw.json')
+        if os.path.isfile(raw_path):
+            try:
+                with open(raw_path, 'r', encoding='utf-8') as f:
+                    raw_data = json.load(f)
+                scene_start_ms = int(scene_start_seconds * 1000)
+                scene_end_ms = int(scene_end_seconds * 1000)
+                for phrase in raw_data.get('phrases', []):
+                    for w in phrase.get('words', []):
+                        offset_ms = w.get('offsetMilliseconds', 0)
+                        dur_ms = w.get('durationMilliseconds', 0)
+                        end_ms = offset_ms + dur_ms
+                        if offset_ms < scene_end_ms and end_ms > scene_start_ms:
+                            result.append({'text': w.get('text', ''), 'start_ms': offset_ms, 'end_ms': end_ms})
+                if result:
+                    return result
+            except Exception:
+                pass
+        return []
+
+    def _parse_timestamp_with_ms_to_seconds(self, ts_str: str) -> float:
+        """Parse timestamp 'M:SS' or 'M:SS.mmm' to seconds."""
+        try:
+            if '.' in ts_str:
+                main, ms_part = ts_str.rsplit('.', 1)
+                ms = int(ms_part[:3].ljust(3, '0'))  # up to 3 digits
+            else:
+                main, ms = ts_str, 0
+            parts = main.split(':')
+            if len(parts) == 2:
+                return int(parts[0]) * 60 + int(parts[1]) + (ms / 1000.0)
+            return 0.0
+        except Exception:
+            return 0.0
+
     def _extract_timed_lyrics_for_scene(self, plain_lyrics: str, extracted_lyrics: str, scene_start_seconds: float, scene_end_seconds: float) -> str:
-        """Extract timed lyrics from extracted_lyrics that fall within the scene time range.
+        """Extract timed lyrics that fall within the scene time range.
 
-        Supports two formats:
-        - Double-equals: 0:32=00:42=hit (start=end=word)
-        - Single-equals: 0:43=You (timestamp=word, from transcription)
+        Prefers lyrics_transcription.json or lyrics_transcription_raw.json when available
+        (millisecond precision). Falls back to extracted_lyrics text parsing.
 
-        Args:
-            plain_lyrics: Plain text lyrics from the scene (for reference, not used for matching)
-            extracted_lyrics: Full extracted lyrics with timestamps
-            scene_start_seconds: Scene start time in seconds
-            scene_end_seconds: Scene end time in seconds
+        Supports formats:
+        - Double-equals: 0:32=00:42=hit or 0:04.400=0:05.200=Morgengrauen (start=end=word)
+        - Single-equals: 0:43=You (timestamp=word)
 
         Returns:
-            Timed lyrics string (format preserved) that fall within scene bounds
+            Timed lyrics string (start=end=word format) that fall within scene bounds
         """
+        song_path = getattr(self, 'current_song_path', None) or ''
+        if song_path and os.path.isdir(song_path):
+            # Prefer lyrics_transcription.json (word-level with end_timestamp)
+            json_path = os.path.join(song_path, 'lyrics_transcription.json')
+            if os.path.isfile(json_path):
+                try:
+                    with open(json_path, 'r', encoding='utf-8') as f:
+                        lyrics_data = json.load(f)
+                    matched = []
+                    for entry in lyrics_data:
+                        if not isinstance(entry, dict) or not entry.get('text'):
+                            continue
+                        start = entry.get('timestamp', 0)
+                        end = entry.get('end_timestamp')
+                        if end is None:
+                            end = start
+                        if start < scene_end_seconds and end > scene_start_seconds:
+                            ts_fmt = self._format_timestamp_mm_ss_mmm(start)
+                            end_fmt = self._format_timestamp_mm_ss_mmm(end)
+                            matched.append(f"{ts_fmt}={end_fmt}={entry['text']}")
+                    if matched:
+                        return '\n'.join(matched)
+                except Exception as e:
+                    self.log_debug('DEBUG', f'_extract_timed_lyrics: lyrics_transcription.json load failed: {e}')
+            # Prefer lyrics_transcription_raw.json (millisecond precision)
+            raw_path = os.path.join(song_path, 'lyrics_transcription_raw.json')
+            if os.path.isfile(raw_path):
+                try:
+                    with open(raw_path, 'r', encoding='utf-8') as f:
+                        raw_data = json.load(f)
+                    scene_start_ms = int(scene_start_seconds * 1000)
+                    scene_end_ms = int(scene_end_seconds * 1000)
+                    matched = []
+                    for phrase in raw_data.get('phrases', []):
+                        for w in phrase.get('words', []):
+                            offset_ms = w.get('offsetMilliseconds', 0)
+                            dur_ms = w.get('durationMilliseconds', 0)
+                            end_ms = offset_ms + dur_ms
+                            if offset_ms < scene_end_ms and end_ms > scene_start_ms:
+                                start_sec = offset_ms / 1000.0
+                                end_sec = end_ms / 1000.0
+                                ts_fmt = self._format_timestamp_mm_ss_mmm(start_sec)
+                                end_fmt = self._format_timestamp_mm_ss_mmm(end_sec)
+                                matched.append(f"{ts_fmt}={end_fmt}={w.get('text', '')}")
+                    if matched:
+                        return '\n'.join(matched)
+                except Exception as e:
+                    self.log_debug('DEBUG', f'_extract_timed_lyrics: lyrics_transcription_raw.json load failed: {e}')
+
         if not extracted_lyrics:
             return ''
 
         lines = extracted_lyrics.strip().split('\n')
-        double_equals_pattern = re.compile(r'^(\d+):(\d+)=(\d+):(\d+)=(.+)$')
-        single_equals_pattern = re.compile(r'^(\d+):(\d+)=(.+)$')
+        double_equals_pattern = re.compile(r'^(\d+):(\d+)(?:\.(\d+))?=(\d+):(\d+)(?:\.(\d+))?=(.+)$')
+        single_equals_pattern = re.compile(r'^(\d+):(\d+)(?:\.(\d+))?=(.+)$')
         matched_entries = []
 
         for i, line in enumerate(lines):
@@ -16129,23 +16312,17 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
 
             match = double_equals_pattern.match(line)
             if match:
-                start_minutes = int(match.group(1))
-                start_seconds = int(match.group(2))
-                end_minutes = int(match.group(3))
-                end_seconds = int(match.group(4))
-                word = match.group(5).strip()
-                absolute_start = start_minutes * 60 + start_seconds
-                absolute_end = end_minutes * 60 + end_seconds
+                sm, ss, sms, em, es, ems, word = match.groups()
+                absolute_start = int(sm) * 60 + int(ss) + (int(sms or 0) / 1000.0)
+                absolute_end = int(em) * 60 + int(es) + (int(ems or 0) / 1000.0)
                 if absolute_start < scene_end_seconds and absolute_end > scene_start_seconds:
                     matched_entries.append(line)
                 continue
 
             single_match = single_equals_pattern.match(line)
             if single_match:
-                start_minutes = int(single_match.group(1))
-                start_seconds = int(single_match.group(2))
-                word = single_match.group(3).strip()
-                absolute_start = start_minutes * 60 + start_seconds
+                sm, ss, sms, word = single_match.group(1), single_match.group(2), single_match.group(3), single_match.group(4).strip()
+                absolute_start = int(sm) * 60 + int(ss) + (int(sms or 0) / 1000.0)
                 if absolute_start >= scene_end_seconds:
                     continue
                 if absolute_start < scene_start_seconds:
@@ -16158,34 +16335,31 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
                         continue
                     nm = single_equals_pattern.match(next_line)
                     if nm:
-                        next_start = int(nm.group(1)) * 60 + int(nm.group(2))
+                        next_start = int(nm.group(1)) * 60 + int(nm.group(2)) + (int(nm.group(3) or 0) / 1000.0)
                         break
                     dm = double_equals_pattern.match(next_line)
                     if dm:
-                        next_start = int(dm.group(1)) * 60 + int(dm.group(2))
+                        next_start = int(dm.group(1)) * 60 + int(dm.group(2)) + (int(dm.group(3) or 0) / 1000.0)
                         break
                 absolute_end = next_start if next_start is not None else absolute_start + 0.5
-                end_min, end_sec = int(absolute_end // 60), int(absolute_end % 60)
-                out_line = f"{start_minutes}:{start_seconds:02d}={end_min}:{end_sec:02d}={word}"
-                matched_entries.append(out_line)
-                prev_absolute_start = absolute_start
+                ts_fmt = self._format_timestamp_mm_ss_mmm(absolute_start)
+                end_fmt = self._format_timestamp_mm_ss_mmm(absolute_end)
+                matched_entries.append(f"{ts_fmt}={end_fmt}={word}")
 
         return '\n'.join(matched_entries)
     
     def _parse_timestamp_to_seconds(self, timestamp: str) -> float:
-        """Parse timestamp string (MM:SS format) to seconds.
-        
-        Args:
-            timestamp: Timestamp string in MM:SS format
-            
-        Returns:
-            Seconds as float
-        """
+        """Parse timestamp string (M:SS or M:SS.mmm format) to seconds."""
         try:
             parts = timestamp.split(':')
             if len(parts) == 2:
                 minutes = int(parts[0])
-                seconds = int(parts[1])
+                sec_part = parts[1]
+                if '.' in sec_part:
+                    sec_str, ms_str = sec_part.split('.', 1)
+                    seconds = int(sec_str) + int(ms_str[:3].ljust(3, '0')) / 1000.0
+                else:
+                    seconds = int(sec_part)
                 return minutes * 60 + seconds
             return 0.0
         except Exception:
@@ -16193,65 +16367,38 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
     
     def _process_lyrics_for_lip_sync(self, lyrics: str, scene_start_seconds: float, scene_duration: int) -> str:
         """Process lyrics to convert time indices from absolute to relative (starting from 0).
-        
+        Output preserves start and end for precise lip-sync: "0.000s-0.800s: Morgengrauen"
+
         Args:
-            lyrics: Lyrics text with timestamps in format 0:32=00:42=hit
+            lyrics: Lyrics text with timestamps in format 0:32=00:42=hit or 0:04.400=0:05.200=word
             scene_start_seconds: Scene start time in seconds (absolute)
             scene_duration: Scene duration in seconds
-            
+
         Returns:
-            Processed lyrics string with relative timestamps starting from 0
+            Processed lyrics with relative start-end per word for lip-sync
         """
         if not lyrics:
             return ''
-        
         lines = lyrics.strip().split('\n')
         processed_lines = []
-        
-        # Pattern to match: 0:32=00:42=word or 0:32=00:42=word (start=end=word)
-        double_equals_pattern = re.compile(r'^(\d+):(\d+)=(\d+):(\d+)=(.+)$')
-        
+        double_equals_pattern = re.compile(r'^(\d+):(\d+)(?:\.(\d+))?=(\d+):(\d+)(?:\.(\d+))?=(.+)$')
         for line in lines:
             line = line.strip()
             if not line:
                 continue
-            
-            # Check for start_time=end_time=word format
             match = double_equals_pattern.match(line)
             if match:
-                start_minutes = int(match.group(1))
-                start_seconds = int(match.group(2))
-                end_minutes = int(match.group(3))
-                end_seconds = int(match.group(4))
-                word = match.group(5).strip()
-                
-                # Calculate absolute start time in seconds
-                absolute_start = start_minutes * 60 + start_seconds
-                absolute_end = end_minutes * 60 + end_seconds
-                
-                # Convert to relative time (starting from 0 for this scene)
-                relative_start = absolute_start - scene_start_seconds
+                sm, ss, sms, em, es, ems, word = match.groups()
+                absolute_start = int(sm) * 60 + int(ss) + (int(sms or 0) / 1000.0)
+                absolute_end = int(em) * 60 + int(es) + (int(ems or 0) / 1000.0)
+                relative_start = max(0.0, absolute_start - scene_start_seconds)
                 relative_end = absolute_end - scene_start_seconds
-                
-                # Only include if the word starts within scene bounds (0 to scene_duration)
-                # If word starts before scene (negative relative_start), clamp to 0
-                if relative_start < 0:
-                    # Word starts before scene but ends during scene - include it at time 0
-                    clamped_start = 0.0
-                elif relative_start >= scene_duration:
-                    # Word starts after scene ends - exclude it
+                if relative_start >= scene_duration:
                     continue
-                else:
-                    clamped_start = relative_start
-                
-                # Format as MM:SS (relative time starting from 0)
-                rel_minutes = int(clamped_start // 60)
-                rel_seconds = int(clamped_start % 60)
-                processed_line = f"{rel_minutes}:{rel_seconds:02d}={word}"
+                clamped_end = min(relative_end, float(scene_duration))
+                processed_line = f"{relative_start:.3f}s-{clamped_end:.3f}s: {word.strip()}"
                 processed_lines.append(processed_line)
-        
-        result = '\n'.join(processed_lines)
-        return result
+        return '\n'.join(processed_lines)
 
     def _format_lyrics_extracted_style(self, lyrics_with_timestamps: str) -> str:
         """Format timed lyrics in extracted_lyrics style: timestamp=word (absolute times).
