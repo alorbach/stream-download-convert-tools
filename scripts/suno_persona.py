@@ -6482,59 +6482,73 @@ TECHNICAL REQUIREMENTS:
         main_frame = ttk.Frame(parent, padding=10)
         main_frame.pack(fill=tk.BOTH, expand=True)
         
-        # Top controls
+        # Top controls - Row 1: main options
         controls_frame = ttk.Frame(main_frame)
-        controls_frame.pack(fill=tk.X, pady=(0, 10))
-        
-        ttk.Label(controls_frame, text='Seconds per video:', font=('TkDefaultFont', 9, 'bold')).pack(side=tk.LEFT, padx=5)
+        controls_frame.pack(fill=tk.X, pady=(0, 5))
+
+        ttk.Label(controls_frame, text='Sec/video:', font=('TkDefaultFont', 9, 'bold')).pack(side=tk.LEFT, padx=5)
         self.storyboard_seconds_var = tk.StringVar(value='6')
-        seconds_entry = ttk.Entry(controls_frame, textvariable=self.storyboard_seconds_var, width=5)
-        seconds_entry.pack(side=tk.LEFT, padx=5)
-        
-        ttk.Label(controls_frame, text='Image Size:', font=('TkDefaultFont', 9, 'bold')).pack(side=tk.LEFT, padx=(10, 5))
+        ttk.Entry(controls_frame, textvariable=self.storyboard_seconds_var, width=4).pack(side=tk.LEFT, padx=2)
+
+        ttk.Label(controls_frame, text='Image Size:', font=('TkDefaultFont', 9, 'bold')).pack(side=tk.LEFT, padx=(8, 2))
         self.storyboard_image_size_var = tk.StringVar(value='3:2 (1536x1024)')
-        image_size_combo = ttk.Combobox(controls_frame, textvariable=self.storyboard_image_size_var, 
-                                        values=['3:2 (1536x1024)', '16:9 (1792x1024)', '1:1 (1024x1024)', 
+        image_size_combo = ttk.Combobox(controls_frame, textvariable=self.storyboard_image_size_var,
+                                        values=['3:2 (1536x1024)', '16:9 (1792x1024)', '1:1 (1024x1024)',
                                                 '4:3 (1365x1024)', '2:3 (1024x1536)', '9:16 (1024x1792)', '21:9 (2048x1024)'],
-                                        state='readonly', width=18)
-        image_size_combo.pack(side=tk.LEFT, padx=5)
-        
-        ttk.Label(controls_frame, text='API Profile:', font=('TkDefaultFont', 9, 'bold')).pack(side=tk.LEFT, padx=(10, 5))
+                                        state='readonly', width=14)
+        image_size_combo.pack(side=tk.LEFT, padx=2)
+
+        ttk.Label(controls_frame, text='API Profile:', font=('TkDefaultFont', 9, 'bold')).pack(side=tk.LEFT, padx=(8, 2))
         image_profiles = self._get_available_image_profiles()
         self.storyboard_image_profile_var = tk.StringVar(value='image_gen' if 'image_gen' in image_profiles else (image_profiles[0] if image_profiles else 'image_gen'))
-        storyboard_image_profile_combo = ttk.Combobox(controls_frame, textvariable=self.storyboard_image_profile_var, 
-                                                      values=image_profiles, state='readonly', width=15)
-        storyboard_image_profile_combo.pack(side=tk.LEFT, padx=5)
+        ttk.Combobox(controls_frame, textvariable=self.storyboard_image_profile_var,
+                     values=image_profiles, state='readonly', width=12).pack(side=tk.LEFT, padx=2)
 
-        ttk.Label(controls_frame, text='Persona Scenes %:', font=('TkDefaultFont', 9, 'bold')).pack(side=tk.LEFT, padx=(10, 5))
+        ttk.Label(controls_frame, text='Persona %:', font=('TkDefaultFont', 9, 'bold')).pack(side=tk.LEFT, padx=(8, 2))
         self.persona_scene_percent_var = tk.StringVar(value='40')
-        ttk.Spinbox(controls_frame, from_=0, to=100, textvariable=self.persona_scene_percent_var, width=4).pack(side=tk.LEFT, padx=2)
+        ttk.Spinbox(controls_frame, from_=0, to=100, textvariable=self.persona_scene_percent_var, width=3).pack(side=tk.LEFT, padx=2)
 
-        ttk.Label(controls_frame, text='Distinct setups:', font=('TkDefaultFont', 9, 'bold')).pack(side=tk.LEFT, padx=(10, 5))
+        ttk.Label(controls_frame, text='Setups:', font=('TkDefaultFont', 9, 'bold')).pack(side=tk.LEFT, padx=(8, 2))
         self.storyboard_setup_count_var = tk.StringVar(value='6')
-        ttk.Spinbox(controls_frame, from_=1, to=12, textvariable=self.storyboard_setup_count_var, width=4).pack(side=tk.LEFT, padx=2)
+        ttk.Spinbox(controls_frame, from_=1, to=12, textvariable=self.storyboard_setup_count_var, width=3).pack(side=tk.LEFT, padx=2)
 
-        # Multi-scene options (sub-scenes with direct camera cuts)
-        self.storyboard_multiscene_var = tk.BooleanVar(value=False)
-        storyboard_multiscene_cb = ttk.Checkbutton(controls_frame, text='Multi-Scene', variable=self.storyboard_multiscene_var)
-        storyboard_multiscene_cb.pack(side=tk.LEFT, padx=(10, 2))
-        create_tooltip(storyboard_multiscene_cb, 'Generate scene prompts with direct camera cuts within each video segment')
-
-        ttk.Label(controls_frame, text='Scene dur:', font=('TkDefaultFont', 9, 'bold')).pack(side=tk.LEFT, padx=(10, 5))
-        self.storyboard_scene_duration_var = tk.StringVar(value='2')
-        storyboard_scene_dur_spin = ttk.Spinbox(controls_frame, from_=1, to=10, textvariable=self.storyboard_scene_duration_var, width=3)
-        storyboard_scene_dur_spin.pack(side=tk.LEFT, padx=2)
-        ttk.Label(controls_frame, text='sec', font=('TkDefaultFont', 8)).pack(side=tk.LEFT)
-        create_tooltip(storyboard_scene_dur_spin, 'Duration of each sub-scene within a video segment (1-10 seconds)')
-
-        ttk.Label(controls_frame, text='Video Style:', font=('TkDefaultFont', 9, 'bold')).pack(side=tk.LEFT, padx=(10, 5))
+        ttk.Label(controls_frame, text='Video Style:', font=('TkDefaultFont', 9, 'bold')).pack(side=tk.LEFT, padx=(8, 2))
         VIDEO_STYLE_CHOICES = ['Realism', 'Surrealism', 'Artistic', 'Dreamlike', 'Cinematic']
         self.storyboard_video_style_var = tk.StringVar(value='Realism')
         storyboard_video_style_combo = ttk.Combobox(controls_frame, textvariable=self.storyboard_video_style_var,
-            values=VIDEO_STYLE_CHOICES, state='readonly', width=12)
-        storyboard_video_style_combo.pack(side=tk.LEFT, padx=5)
+            values=VIDEO_STYLE_CHOICES, state='readonly', width=10)
+        storyboard_video_style_combo.pack(side=tk.LEFT, padx=2)
         create_tooltip(storyboard_video_style_combo,
             'Controls prompt style for AI video: Realism=filmable/concrete; Surrealism=abstract/morphing; Artistic/Dreamlike/Cinematic=gradations between')
+
+        # Row 2: Multi-Scene options (grouped, compact)
+        multiscene_frame = ttk.LabelFrame(main_frame, text='Multi-Scene', padding=4)
+        multiscene_frame.pack(fill=tk.X, pady=(0, 10))
+
+        self.storyboard_multiscene_var = tk.BooleanVar(value=False)
+        storyboard_multiscene_cb = ttk.Checkbutton(multiscene_frame, text='Multi-Scene', variable=self.storyboard_multiscene_var)
+        storyboard_multiscene_cb.pack(side=tk.LEFT, padx=(0, 8))
+        create_tooltip(storyboard_multiscene_cb, 'Generate scene prompts with direct camera cuts within each video segment')
+
+        ttk.Label(multiscene_frame, text='Sub-scene/sec:', font=('TkDefaultFont', 9, 'bold')).pack(side=tk.LEFT, padx=(0, 2))
+        self.storyboard_scene_duration_var = tk.StringVar(value='2')
+        storyboard_scene_dur_spin = ttk.Spinbox(multiscene_frame, from_=1, to=10, textvariable=self.storyboard_scene_duration_var, width=3)
+        storyboard_scene_dur_spin.pack(side=tk.LEFT, padx=2)
+        ttk.Label(multiscene_frame, text='sec', font=('TkDefaultFont', 8)).pack(side=tk.LEFT, padx=(0, 10))
+        create_tooltip(storyboard_scene_dur_spin, 'Fixed mode: duration of each sub-scene. AI-decided mode: minimum sub-scene duration. Max = Seconds per video.')
+
+        self.storyboard_ai_decides_subscene_var = tk.BooleanVar(value=False)
+        storyboard_ai_subscene_cb = ttk.Checkbutton(multiscene_frame, text='AI-decided sub-scene cuts', variable=self.storyboard_ai_decides_subscene_var)
+        storyboard_ai_subscene_cb.pack(side=tk.LEFT, padx=(0, 4))
+        create_tooltip(storyboard_ai_subscene_cb, 'AI places sub-scene cuts based on lyrics (chorus, key phrases). Sub-scenes between Sub-scene/sec and Sec/video. Each scene stays exactly Sec/video.')
+
+        def _toggle_multiscene_options(*args):
+            enabled = self.storyboard_multiscene_var.get()
+            state = 'normal' if enabled else 'disabled'
+            storyboard_scene_dur_spin.configure(state=state)
+            storyboard_ai_subscene_cb.configure(state=state)
+        self.storyboard_multiscene_var.trace_add('write', lambda *a: _toggle_multiscene_options())
+        _toggle_multiscene_options()
 
         # Button row for Generate Storyboard and Export Generated Prompts
         button_frame = ttk.Frame(main_frame)
@@ -8474,6 +8488,8 @@ TECHNICAL REQUIREMENTS:
             self.storyboard_multiscene_var.set(self.current_song.get('storyboard_multiscene', False))
         if hasattr(self, 'storyboard_scene_duration_var'):
             self.storyboard_scene_duration_var.set(str(self.current_song.get('storyboard_scene_duration', 2)))
+        if hasattr(self, 'storyboard_ai_decides_subscene_var'):
+            self.storyboard_ai_decides_subscene_var.set(self.current_song.get('storyboard_ai_decides_subscene', False))
         if hasattr(self, 'storyboard_video_style_var'):
             self.storyboard_video_style_var.set(self.current_song.get('storyboard_video_style', 'Realism'))
         
@@ -8526,6 +8542,8 @@ TECHNICAL REQUIREMENTS:
             self.storyboard_multiscene_var.set(False)
         if hasattr(self, 'storyboard_scene_duration_var'):
             self.storyboard_scene_duration_var.set('2')
+        if hasattr(self, 'storyboard_ai_decides_subscene_var'):
+            self.storyboard_ai_decides_subscene_var.set(False)
         if hasattr(self, 'storyboard_video_style_var'):
             self.storyboard_video_style_var.set('Realism')
         if hasattr(self, 'overlay_lyrics_var'):
@@ -9030,6 +9048,7 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
             'video_loop_multiscene': bool(self.video_loop_multiscene_var.get()) if hasattr(self, 'video_loop_multiscene_var') else False,
             'storyboard_multiscene': bool(self.storyboard_multiscene_var.get()) if hasattr(self, 'storyboard_multiscene_var') else False,
             'storyboard_scene_duration': int(self.storyboard_scene_duration_var.get() or 2) if hasattr(self, 'storyboard_scene_duration_var') else 2,
+            'storyboard_ai_decides_subscene': bool(self.storyboard_ai_decides_subscene_var.get()) if hasattr(self, 'storyboard_ai_decides_subscene_var') else False,
             'storyboard_video_style': (self.storyboard_video_style_var.get() or 'Realism').strip() if hasattr(self, 'storyboard_video_style_var') else 'Realism',
             'overlay_lyrics_on_image': bool(self.overlay_lyrics_var.get()) if hasattr(self, 'overlay_lyrics_var') else False,
             'embed_lyrics_in_prompt': bool(self.embed_lyrics_var.get()) if hasattr(self, 'embed_lyrics_var') else True,
@@ -14010,13 +14029,22 @@ EXAMPLE - GOOD (write like this):
         
         # Get multi-scene settings
         is_multiscene = self.storyboard_multiscene_var.get() if hasattr(self, 'storyboard_multiscene_var') else False
+        is_ai_decides_subscene = (
+            self.storyboard_ai_decides_subscene_var.get()
+            if hasattr(self, 'storyboard_ai_decides_subscene_var') else False
+        )
         try:
             scene_duration = int(self.storyboard_scene_duration_var.get() or 2) if hasattr(self, 'storyboard_scene_duration_var') else 2
         except Exception:
             scene_duration = 2
         scene_duration = max(1, min(10, scene_duration))
-        subscenes_per_video = seconds_per_video // scene_duration if is_multiscene and scene_duration > 0 else 1
-        
+        min_subscene_seconds = scene_duration
+        max_subscene_seconds = seconds_per_video
+        if is_multiscene and is_ai_decides_subscene:
+            subscenes_per_video = 0
+        else:
+            subscenes_per_video = seconds_per_video // scene_duration if is_multiscene and scene_duration > 0 else 1
+
         persona_name = self.current_persona.get('name', '')
         visual_aesthetic = self.current_persona.get('visual_aesthetic', '')
         base_image_prompt = self.current_persona.get('base_image_prompt', '')
@@ -14050,7 +14078,12 @@ EXAMPLE - GOOD (write like this):
         # Reset cached prompts for fresh generation
         self.scene_final_prompts = {}
 
-        multiscene_info = f' (multi-scene: {subscenes_per_video}x{scene_duration}s per video)' if is_multiscene and subscenes_per_video > 1 else ''
+        if is_multiscene and is_ai_decides_subscene:
+            multiscene_info = f' (multi-scene: AI-decided sub-scene cuts min {min_subscene_seconds}s max {max_subscene_seconds}s)'
+        elif is_multiscene and subscenes_per_video > 1:
+            multiscene_info = f' (multi-scene: {subscenes_per_video}x{scene_duration}s per video)'
+        else:
+            multiscene_info = ''
         self.log_debug('INFO', f'Generating storyboard for MP3: {mp3_path}{multiscene_info}')
         self.config(cursor='wait')
         self.update()
@@ -14160,7 +14193,30 @@ EXAMPLE - GOOD (write like this):
                         break
                 scene_lyrics_info += "</LYRICS_TIMING>\n"
                 self.log_debug('DEBUG', f'LYRICS_TIMING block for storyboard prompt:\n{scene_lyrics_info}')
-            
+
+            # For AI-decided sub-scene mode: lyric timestamps within each scene so AI can align cuts
+            scene_lyrics_within_info = ""
+            if is_multiscene and is_ai_decides_subscene and lyric_segments and song_duration > 0:
+                scene_lyrics_within_info = "\n<LYRICS_WITHIN_SCENE for sub-scene cut alignment>\n"
+                current_time = 0.0
+                for scene_idx in range(1, num_scenes + 1):
+                    scene_start_time = current_time
+                    scene_end_time = min(current_time + seconds_per_video, song_duration)
+                    parts = []
+                    for ly_start, ly_end, ly_text in lyric_segments:
+                        if ly_start < scene_end_time and ly_end > scene_start_time:
+                            rel_start = max(0.0, ly_start - scene_start_time)
+                            rel_end = min(seconds_per_video, ly_end - scene_start_time)
+                            clean = self.sanitize_lyrics_for_prompt(ly_text)
+                            if clean:
+                                parts.append(f"{rel_start:.1f}s-{rel_end:.1f}s: \"{clean}\"")
+                    scene_lyrics_within_info += f"Scene {scene_idx} (0s-{seconds_per_video}s): " + (" | ".join(parts) if parts else "[NO LYRICS]") + "\n"
+                    current_time = scene_end_time
+                    if current_time >= song_duration:
+                        break
+                scene_lyrics_within_info += "</LYRICS_WITHIN_SCENE>\n"
+                self.log_debug('DEBUG', f'LYRICS_WITHIN_SCENE block:\n{scene_lyrics_within_info}')
+
             embed_lyrics = bool(self.embed_lyrics_var.get()) if hasattr(self, 'embed_lyrics_var') else True
             if scene_lyrics_info:
                 if embed_lyrics:
@@ -14216,6 +14272,10 @@ When persona has lyrics: avoid "silent", "mute", "no dialogue", "not speaking" -
 <LYRICS>
 {scene_lyrics_block}
 </LYRICS>
+"""
+            if scene_lyrics_within_info:
+                prompt += scene_lyrics_within_info
+            prompt += """
 
 LYRIC EVENTS DRIVE SCENES: Each scene corresponds to a specific time range. Use LYRICS_TIMING to align visual events with lyric content. Important lyric lines should drive the visual narrative for their time window. Treat lyric events as anchors for scene content (mood, imagery, dialogue).
 
@@ -14279,7 +14339,34 @@ IMPORTANT: SAMPLE FORMAT ONLY. DO NOT COPY ANY SAMPLE TEXT INTO THE ACTUAL OUTPU
 Start immediately with SCENE 1. No preamble or questions.
 """
             # Add multi-scene format instructions if enabled
-            if is_multiscene and subscenes_per_video > 1:
+            if is_multiscene and is_ai_decides_subscene:
+                prompt += f"""
+=== MULTI-SCENE MODE (AI-decided sub-scene cuts) ===
+Each video segment is exactly {seconds_per_video} seconds. YOU decide how to split it into sub-scenes.
+- Each sub-scene must be between {min_subscene_seconds} and {max_subscene_seconds} seconds.
+- Sub-scenes must sum to exactly {seconds_per_video}s. Use LYRICS_WITHIN_SCENE to place cuts at important lyric moments (chorus, key phrases, emotional peaks).
+- Use DIRECT CAMERA CUTS between sub-scenes (NO smooth transitions, NO fades, NO morphing).
+- Each sub-scene must be visually distinct but thematically connected.
+- The persona/character must appear consistently across sub-scenes when present.
+- When a character appears in a sub-scene, use CHARACTER: persona or CHARACTER: [story_character_id] - full descriptions go in STORYBOARD_METADATA.
+- When persona appears and scene has lyrics, add: DIALOGUE: [exact lyrics for this scene from LYRICS_TIMING].
+
+CRITICAL FOR VIDEO GENERATION: When persona or any story character appears in ANY scene, you MUST include the persona in SCENE 1.
+
+IMPORTANT FOR IMAGE GENERATION:
+- When generating an IMAGE (not video), use ONLY the FIRST sub-scene [0s-Xs]
+- Generate exactly ONE single image - NOT a collage or multi-panel layout
+
+Format each scene with sub-scene timestamps, e.g.:
+SCENE 1: {seconds_per_video} seconds total
+  [0s-Xs] Sub-scene 1: [description]
+  [Xs-Ys] Sub-scene 2: [description]
+  ...
+  (sub-scenes must sum to {seconds_per_video}s)
+
+...continue through SCENE {num_scenes}...
+"""
+            elif is_multiscene and subscenes_per_video > 1:
                 prompt += f"""
 === MULTI-SCENE MODE ({scene_duration}s sub-scenes) ===
 Each video segment ({seconds_per_video}s) contains {subscenes_per_video} sub-scenes of {scene_duration} seconds each.
@@ -14354,7 +14441,7 @@ ABSOLUTE RULES:
 2. Generate ALL {num_scenes} scenes - no stopping, no questions
 3. CONTINUOUS NARRATIVE: Create a flowing story where each scene builds on the previous one. Think of it as a visual journey - scenes should connect and progress like chapters in a story. Use visual callbacks (objects, locations, elements from earlier scenes) to create narrative continuity. The story should flow from beginning to end as ONE connected narrative, not isolated moments.
 4. STORY CHARACTERS: You may introduce 1-2 story characters (distinct from the persona) that fit naturally into the narrative. These characters should serve the story purpose, match the theme/aesthetic, and appear organically as the story progresses. Use them sparingly and purposefully - they should enhance the narrative flow, not distract. Examples: a mysterious figure, a lost soul, a companion, an antagonist, a symbolic character. When introducing story characters, describe them briefly and ensure they fit the visual aesthetic and story theme.
-5. 60-70% of scenes must be [NO CHARACTERS] - purely environmental/abstract
+5. ~{no_persona_percent}% of scenes must be [NO CHARACTERS] - purely environmental/abstract. ~{persona_scene_percent}% persona scenes (non-consecutive).
 6. Use only {storyboard_setup_count} distinct setups (location + lighting). Rotate through them; do NOT introduce new setups beyond this count.
 7. Every scene must be visually distinct from all others (change shot type/angle/light/palette). No two consecutive scenes may share the same palette + setup combination; change palette OR lighting OR shot type between adjacent scenes.
 8. Keep modern pacing: think 2-4 second shots; refresh visuals on section changes (verse/chorus/bridge) using the strongest setups for hooks.
@@ -14386,7 +14473,17 @@ ABSOLUTE RULES:
             next_rule_num += 1
 
             # Add multi-scene rules to system message if enabled
-            if is_multiscene and subscenes_per_video > 1:
+            if is_multiscene and is_ai_decides_subscene:
+                system_message += f"""{next_rule_num}. MULTI-SCENE MODE (AI-decided): Each {seconds_per_video}s scene must be split into sub-scenes of {min_subscene_seconds}-{max_subscene_seconds}s each. Sub-scenes must sum to exactly {seconds_per_video}s.
+   - Use LYRICS_WITHIN_SCENE to place sub-scene boundaries at important lyric moments (chorus, key phrases, emotional peaks)
+   - Format each scene with sub-scene timestamps: [0s-Xs], [Xs-Ys], etc. You decide X, Y based on lyrics
+   - Use DIRECT CAMERA CUTS between sub-scenes (NO smooth transitions, NO fades, NO morphing)
+   - Each sub-scene must have a different camera angle, composition, or framing
+   - The persona/character must appear consistently across sub-scenes when present
+   - When a character appears in a sub-scene, use CHARACTER: persona or CHARACTER: [story_character_id] - full descriptions go in STORYBOARD_METADATA
+   - CRITICAL: When persona or any story character appears in ANY scene, you MUST include the persona in SCENE 1.
+"""
+            elif is_multiscene and subscenes_per_video > 1:
                 system_message += f"""{next_rule_num}. MULTI-SCENE MODE: Each {seconds_per_video}s scene must contain {subscenes_per_video} sub-scenes of {scene_duration}s each.
    - Format each scene with sub-scene timestamps: [0s-{scene_duration}s], [{scene_duration}s-{scene_duration*2}s], etc.
    - Use DIRECT CAMERA CUTS between sub-scenes (NO smooth transitions, NO fades, NO morphing)
@@ -14396,7 +14493,7 @@ ABSOLUTE RULES:
    - Sub-scenes should feel dynamic and match the music energy
    - CRITICAL: When persona or any story character appears in ANY scene, you MUST include the persona in SCENE 1. Scene 1's image is the reference for the video generator - if persona appears only in later scenes, the video generator will lack a reference image and cannot render the character correctly.
 """
-            system_message += """
+            system_message += f"""
 
 Start immediately with "SCENE 1:" - no introduction or commentary."""
             
@@ -14570,13 +14667,19 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
         embed_lyrics = bool(self.embed_lyrics_var.get()) if hasattr(self, 'embed_lyrics_var') else True
         # Check multi-scene settings
         is_multiscene = self.storyboard_multiscene_var.get() if hasattr(self, 'storyboard_multiscene_var') else False
+        is_ai_decides_subscene = self.storyboard_ai_decides_subscene_var.get() if hasattr(self, 'storyboard_ai_decides_subscene_var') else False
         try:
             scene_duration = int(self.storyboard_scene_duration_var.get() or 2) if hasattr(self, 'storyboard_scene_duration_var') else 2
         except Exception:
             scene_duration = 2
         scene_duration = max(1, min(10, scene_duration))
-        subscenes_per_video = seconds_per_video // scene_duration if is_multiscene and scene_duration > 0 else 1
-        
+        min_subscene_seconds = scene_duration
+        max_subscene_seconds = seconds_per_video
+        if is_multiscene and is_ai_decides_subscene:
+            subscenes_per_video = 0
+        else:
+            subscenes_per_video = seconds_per_video // scene_duration if is_multiscene and scene_duration > 0 else 1
+
         prompt = f"Generate ONLY scenes {batch_start} through {batch_end} (out of {total_scenes} total scenes) for this music video storyboard.\n\n"
         prompt += f"Song: {full_song_name if full_song_name else song_name}\n"
         prompt += f"Artist/Persona: {persona_name}\n"
@@ -14651,7 +14754,7 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
             if embed_lyrics:
                 prompt += "1. Include the exact lyrics that play during that scene's time period (from LYRICS TIMING section above)\n"
                 prompt += "2. Format: SCENE X: [duration] seconds\nLYRICS FOR THIS SCENE: \"[exact lyrics text]\"\nCRITICAL INSTRUCTIONS FOR THIS SCENE:\n"
-                prompt += "   a. MOST SCENES (60-70%) MUST NOT include the persona. If this is a scene WITHOUT the persona AND without story characters, you MUST start the scene prompt with 'No persona present. No characters. No human figures. No artist. No people.' and create a purely abstract, environmental, symbolic, or atmospheric visual that represents the lyrics WITHOUT any human presence. However, if a story character (distinct from persona) fits naturally into this scene and serves the narrative, you may include them - but mark it clearly as a story character scene, not a persona scene.\n"
+                prompt += f"   a. ~{100 - persona_scene_percent}% of scenes MUST NOT include the persona. If this is a scene WITHOUT the persona AND without story characters, you MUST start the scene prompt with 'No persona present. No characters. No human figures. No artist. No people.' and create a purely abstract, environmental, symbolic, or atmospheric visual that represents the lyrics WITHOUT any human presence. However, if a story character (distinct from persona) fits naturally into this scene and serves the narrative, you may include them - but mark it clearly as a story character scene, not a persona scene.\n"
                 prompt += "   b. The image must visually represent and incorporate the lyrics above - include visual elements that match what the lyrics describe\n"
                 prompt += "   c. The lyrics text MUST be embedded and integrated into the scene and background, merging seamlessly with the surroundings. The lyrics should appear as part of the environment - written on surfaces, integrated into textures, blended into the background, appearing on signs/walls/objects in the scene, or woven into the visual design itself. They should NOT appear as a floating text overlay, but rather as an organic part of the scene that merges with the background and surroundings\n"
                 prompt += "   d. Format the image prompt to include: [visual description] + \"with the lyrics text '[exact lyrics]' embedded INTO THE ENVIRONMENT ONLY (e.g., carved into walls, glowing in neon signs, written on objects, formed by patterns, integrated into textures) - NO text overlays, NO bottom bars, NO subtitles, NO floating text\"\n"
@@ -14661,7 +14764,7 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
             else:
                 prompt += "1. Include the lyrics that play during that scene's time period for MOOD REFERENCE ONLY (from LYRICS TIMING section above)\n"
                 prompt += "2. Format: SCENE X: [duration] seconds\nLYRICS FOR THIS SCENE (mood reference only): \"[exact lyrics text]\"\nCRITICAL INSTRUCTIONS FOR THIS SCENE:\n"
-                prompt += "   a. MOST SCENES (60-70%) MUST NOT include the persona. If this is a scene WITHOUT the persona AND without story characters, you MUST start the scene prompt with 'No persona present. No characters. No human figures. No artist. No people.' and create a purely abstract, environmental, symbolic, or atmospheric visual that represents the lyrics WITHOUT any human presence. However, if a story character (distinct from persona) fits naturally into this scene and serves the narrative, you may include them - but mark it clearly as a story character scene, not a persona scene.\n"
+                prompt += f"   a. ~{100 - persona_scene_percent}% of scenes MUST NOT include the persona. If this is a scene WITHOUT the persona AND without story characters, you MUST start the scene prompt with 'No persona present. No characters. No human figures. No artist. No people.' and create a purely abstract, environmental, symbolic, or atmospheric visual that represents the lyrics WITHOUT any human presence. However, if a story character (distinct from persona) fits naturally into this scene and serves the narrative, you may include them - but mark it clearly as a story character scene, not a persona scene.\n"
                 prompt += "   b. Do NOT render or embed any visible text or lyrics in the scene. Keep all scenes text-free (no overlays, no environmental text)\n"
                 prompt += "   c. Use the feeling of the lyrics to shape lighting, color, and symbolism only - convey the mood and meaning through visuals, not through displayed text\n"
                 prompt += "   d. The image prompt MUST visually represent the lyrics' mood and meaning through atmosphere, color, lighting, and symbolic imagery - NO visible lyric text anywhere in the scene\n"
@@ -14723,8 +14826,39 @@ Start immediately with "SCENE 1:" - no introduction or commentary."""
         prompt += self._get_video_style_instructions(video_style)
         prompt += self._get_video_style_examples(video_style)
 
+        # Add lyrics-within-scene for AI-decided sub-scene cut alignment
+        if is_multiscene and is_ai_decides_subscene and lyric_segments and song_duration > 0:
+            prompt += "\n\nLYRICS_WITHIN_SCENE for sub-scene cut alignment (place cuts at important lyric moments):\n"
+            current_time = (batch_start - 1) * seconds_per_video
+            for scene_idx in range(batch_start, batch_end + 1):
+                scene_start_time = current_time
+                scene_end_time = min(current_time + seconds_per_video, song_duration)
+                parts = []
+                for ly_start, ly_end, ly_text in lyric_segments:
+                    if ly_start < scene_end_time and ly_end > scene_start_time:
+                        rel_start = max(0.0, ly_start - scene_start_time)
+                        rel_end = min(seconds_per_video, ly_end - scene_start_time)
+                        clean = self.sanitize_lyrics_for_prompt(ly_text)
+                        if clean:
+                            parts.append(f"{rel_start:.1f}s-{rel_end:.1f}s: \"{clean}\"")
+                prompt += f"Scene {scene_idx} (0s-{seconds_per_video}s): " + (" | ".join(parts) if parts else "[NO LYRICS]") + "\n"
+                current_time = scene_end_time
+                if current_time >= song_duration:
+                    break
+            prompt += "\n"
+
         # Add multi-scene format instructions if enabled
-        if is_multiscene and subscenes_per_video > 1:
+        if is_multiscene and is_ai_decides_subscene:
+            prompt += f"""
+=== MULTI-SCENE MODE (AI-decided sub-scene cuts) ===
+Each video segment is exactly {seconds_per_video}s. YOU decide how to split it into sub-scenes of {min_subscene_seconds}-{max_subscene_seconds}s each.
+Use LYRICS_WITHIN_SCENE above to place cuts at important lyric moments. Sub-scenes must sum to exactly {seconds_per_video}s.
+Format: [0s-Xs] Sub-scene 1: [description], [Xs-Ys] Sub-scene 2: ...
+Use DIRECT CAMERA CUTS between sub-scenes. Each sub-scene must have a different camera angle/composition.
+
+At the END of your response, append <STORYBOARD_METADATA> with CHARACTERS (persona + any story characters) and optionally SETUPS.
+"""
+        elif is_multiscene and subscenes_per_video > 1:
             prompt += f"""
 === MULTI-SCENE MODE ({scene_duration}s sub-scenes) ===
 Each video segment ({seconds_per_video}s) contains {subscenes_per_video} sub-scenes of {scene_duration} seconds each.
@@ -15619,6 +15753,8 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
                                           'purely environmental', 'purely abstract', 'no human presence')
                         if any(m in stored_prompt.lower() for m in no_char_markers):
                             stored_prompt = self._sanitize_no_character_scene_prompt_for_video(stored_prompt)
+                        if prompt_type == 'image' and re.search(r'\[\d+(?:\.\d+)?s[-–]\d+(?:\.\d+)?s\]', stored_prompt):
+                            stored_prompt = self._extract_first_subscene_for_single_image(stored_prompt)
                         self.log_debug('INFO', f'Using saved {stored_field} for scene {scene_num}')
                         return stored_prompt
                     if base_prompt is None:
@@ -15764,7 +15900,7 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
         Returns:
             Single-image prompt suitable for image generation
         """
-        subscene_pattern = r'\[(\d+)s[-–](\d+)s\]\s*(?:Sub-scene\s*\d+:?)?\s*'
+        subscene_pattern = r'\[(\d+(?:\.\d+)?)s[-–](\d+(?:\.\d+)?)s\]\s*(?:Sub-scene\s*\d+:?)?\s*'
 
         if not re.search(subscene_pattern, prompt):
             single_image_prefix = (
@@ -15823,7 +15959,7 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
             return prompt
 
         subscene_pattern = re.compile(
-            r'\[\d+s[-–]\d+s\]\s*(?:Sub-scene\s*\d+:?)?\s*',
+            r'\[\d+(?:\.\d+)?s[-–]\d+(?:\.\d+)?s\]\s*(?:Sub-scene\s*\d+:?)?\s*',
             re.IGNORECASE
         )
         matches = list(subscene_pattern.finditer(prompt))
@@ -16151,7 +16287,7 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
             except Exception as e:
                 self.log_debug('WARNING', f'Failed to add lyrics timing to scene prompt: {e}')
 
-        if is_multiscene and scene_has_no_characters and re.search(r'\[\d+s[-–]\d+s\]', video_prompt):
+        if is_multiscene and scene_has_no_characters and re.search(r'\[\d+(?:\.\d+)?s[-–]\d+(?:\.\d+)?s\]', video_prompt):
             seconds_val = int(self.storyboard_seconds_var.get() or '6') if hasattr(self, 'storyboard_seconds_var') else 6
             scene_dur = int(self.storyboard_scene_duration_var.get() or '2') if hasattr(self, 'storyboard_scene_duration_var') else 2
             cut1 = scene_dur
@@ -16183,12 +16319,12 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
         video_style = (self.storyboard_video_style_var.get() or 'Realism').strip() if hasattr(self, 'storyboard_video_style_var') else 'Realism'
         video_prompt = sanitize_video_prompt(video_prompt, video_style)
 
-        # Derive IMAGE prompt
+        # Derive IMAGE prompt - for multi-scene, use ONLY first sub-scene (single image, not triptych)
         if multiscene_scene1_image_special:
             image_prompt = self._build_multiscene_reference_image_prompt(base_key)
         else:
             image_prompt = enriched_prompt
-            if re.search(r'\[\d+s[-–]\d+s\]', image_prompt):
+            if re.search(r'\[\d+(?:\.\d+)?s[-–]\d+(?:\.\d+)?s\]', image_prompt):
                 image_prompt = self._extract_first_subscene_for_single_image(image_prompt)
 
         result = {'image': image_prompt, 'video': video_prompt}
