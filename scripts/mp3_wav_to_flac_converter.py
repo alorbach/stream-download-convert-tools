@@ -98,10 +98,36 @@ class MP3WAVToFLACConverterGUI(BaseAudioGUI):
         
         quality_frame = ttk.Frame(settings_frame)
         quality_frame.grid(row=1, column=0, columnspan=3, sticky='w', pady=5)
-        ttk.Label(quality_frame, text="Output Format: High Quality FLAC - 44.1 kHz (lossless)", font=('Arial', 9, 'bold')).pack(side='left')
+        ttk.Label(quality_frame, text="Output Format:", font=('Arial', 9, 'bold')).pack(side='left')
+        self.output_format_var = tk.StringVar(value='FLAC')
+        self.output_format_combo = ttk.Combobox(
+            quality_frame, textvariable=self.output_format_var,
+            values=['FLAC', 'WAV', 'MP3'], width=10, state='readonly'
+        )
+        self.output_format_combo.pack(side='left', padx=5)
+        self.output_format_combo.set('FLAC')
+        ttk.Label(quality_frame, text="(44.1 kHz)", font=('Arial', 8)).pack(side='left', padx=2)
+
+        extract_frame = ttk.Frame(settings_frame)
+        extract_frame.grid(row=2, column=0, columnspan=3, sticky='w', pady=5)
+        self.extract_enabled_var = tk.BooleanVar(value=False)
+        self.extract_check = ttk.Checkbutton(
+            extract_frame, text="Extract first", variable=self.extract_enabled_var,
+            command=self._toggle_extract_minutes
+        )
+        self.extract_check.pack(side='left')
+        self.extract_minutes_var = tk.StringVar(value='1')
+        self.extract_minutes_combo = ttk.Combobox(
+            extract_frame, textvariable=self.extract_minutes_var,
+            values=['1', '2', '3', '4', '5'], width=4, state='readonly'
+        )
+        self.extract_minutes_combo.pack(side='left', padx=5)
+        self.extract_minutes_combo.set('1')
+        ttk.Label(extract_frame, text="minutes").pack(side='left', padx=2)
+        self._toggle_extract_minutes()
         
         info_frame_settings = ttk.Frame(settings_frame)
-        info_frame_settings.grid(row=2, column=0, columnspan=3, sticky='w', pady=5)
+        info_frame_settings.grid(row=3, column=0, columnspan=3, sticky='w', pady=5)
         ttk.Label(info_frame_settings, text="Output files will be saved in the same folder as input files", font=('Arial', 8)).pack(side='left')
         
         convert_frame = ttk.Frame(self.root)
@@ -129,7 +155,7 @@ class MP3WAVToFLACConverterGUI(BaseAudioGUI):
         info_frame = ttk.Frame(self.root)
         info_frame.pack(fill='x', padx=10, pady=5)
         
-        info_text = "Supported formats: MP3, WAV | Output: FLAC (44.1 kHz, lossless) saved in same folder as input | Requires FFmpeg installed"
+        info_text = "Supported formats: MP3, WAV | Output: FLAC, WAV or MP3 (44.1 kHz) saved in same folder | Optional: extract first 1-5 minutes | Requires FFmpeg installed"
         ttk.Label(info_frame, text=info_text, font=('Arial', 8)).pack()
     
     def set_busy(self, busy=True, message=""):
@@ -140,6 +166,14 @@ class MP3WAVToFLACConverterGUI(BaseAudioGUI):
         else:
             self.root.config(cursor="")
             self.progress_label.config(text="")
+    
+    def _toggle_extract_minutes(self):
+        """Enable or disable the minutes selector based on checkbox state."""
+        enabled = self.extract_enabled_var.get()
+        if enabled:
+            self.extract_minutes_combo.config(state='readonly')
+        else:
+            self.extract_minutes_combo.config(state='disabled')
     
     def browse_input_folder(self):
         folder = super().browse_folder(self.input_folder_var.get())
@@ -249,9 +283,31 @@ class MP3WAVToFLACConverterGUI(BaseAudioGUI):
         self.conversion_queue = self.selected_files.copy()
         self.current_index = 0
         
-        self.log(f"[INFO] Starting conversion of {len(self.conversion_queue)} file(s) to FLAC")
+        # Capture settings for use in conversion thread
+        self._conversion_format = self.output_format_var.get().upper()
+        if self._conversion_format not in ('FLAC', 'WAV', 'MP3'):
+            self._conversion_format = 'FLAC'
+        extract_enabled = self.extract_enabled_var.get()
+        extract_minutes = 0
+        if extract_enabled:
+            try:
+                extract_minutes = int(self.extract_minutes_var.get())
+                if extract_minutes < 1 or extract_minutes > 5:
+                    extract_minutes = 1
+            except (ValueError, TypeError):
+                extract_minutes = 1
+        self._extract_seconds = extract_minutes * 60 if extract_minutes else 0
+        
+        format_desc = f"{self._conversion_format} 44.1 kHz"
+        if self._conversion_format == 'FLAC':
+            format_desc += " (lossless)"
+        elif self._conversion_format == 'MP3':
+            format_desc += " (320 kbps)"
+        self.log(f"[INFO] Starting conversion of {len(self.conversion_queue)} file(s) to {self._conversion_format}")
         self.log(f"[INFO] Output files will be saved in the same folder as input files")
-        self.log(f"[INFO] Output format: FLAC 44.1 kHz (lossless)")
+        self.log(f"[INFO] Output format: {format_desc}")
+        if self._extract_seconds:
+            self.log(f"[INFO] Extracting first {self._extract_seconds // 60} minute(s)")
         
         self.progress['maximum'] = len(self.conversion_queue)
         self.progress['value'] = 0
@@ -266,12 +322,22 @@ class MP3WAVToFLACConverterGUI(BaseAudioGUI):
         success_count = 0
         error_count = 0
         
+        if self._conversion_format == 'FLAC':
+            out_ext = '.flac'
+        elif self._conversion_format == 'WAV':
+            out_ext = '.wav'
+        else:
+            out_ext = '.mp3'
+        
         for i, input_file in enumerate(self.conversion_queue):
             self.current_index = i + 1
             
             input_path = Path(input_file)
             basename = input_path.stem
-            output_file = os.path.join(input_path.parent, f"{basename}.flac")
+            if self._extract_seconds:
+                minutes = self._extract_seconds // 60
+                basename = f"{basename}_{minutes}min"
+            output_file = os.path.join(input_path.parent, f"{basename}{out_ext}")
             
             self.root.after(
                 0,
@@ -286,19 +352,28 @@ class MP3WAVToFLACConverterGUI(BaseAudioGUI):
             )
             
             try:
-                # Build FFmpeg command for FLAC conversion
-                # FLAC is lossless, so we use sample_rate=44100 and audio_codec='flac'
                 ffmpeg_path = self.get_ffmpeg_command()
                 cmd = [ffmpeg_path, '-i', str(input_file)]
+                if self._extract_seconds:
+                    cmd.extend(['-t', str(self._extract_seconds)])
                 cmd.extend([
                     '-vn',  # No video
                     '-ar', '44100',  # Sample rate: 44.1 kHz
                     '-ac', '2',  # Channels: stereo
-                    '-acodec', 'flac',  # Audio codec: FLAC
-                    '-compression_level', '5',  # FLAC compression level (0-8, 5 is default)
-                    '-y',  # Overwrite output file
-                    str(output_file)
                 ])
+                if self._conversion_format == 'FLAC':
+                    cmd.extend([
+                        '-acodec', 'flac',
+                        '-compression_level', '5',
+                    ])
+                elif self._conversion_format == 'WAV':
+                    cmd.extend(['-acodec', 'pcm_s16le'])
+                else:
+                    cmd.extend([
+                        '-acodec', 'libmp3lame',
+                        '-b:a', '320k',
+                    ])
+                cmd.extend(['-y', str(output_file)])
                 
                 process = self.run_ffmpeg_command(cmd)
                 
