@@ -953,6 +953,124 @@ def call_azure_image(config: dict, prompt: str, size: str = '1024x1024', profile
         }
 
 
+def call_azure_image_edit(config: dict, prompt: str, image_path: str, size: str = '1024x1024', profile: str = 'image_gen',
+                          quality: str = 'medium', output_format: str = 'png', input_fidelity: str = 'high') -> dict:
+    """Call Azure OpenAI Image Edit API with a reference image (GPT-Image-1.x only).
+
+    Uses /images/edits endpoint for image-to-image with persona reference.
+    Preserves character appearance when input_fidelity='high'.
+
+    Args:
+        config: Configuration dictionary
+        prompt: Text prompt for image editing
+        image_path: Path to the reference image (e.g. 50% downscaled Front persona)
+        size: Image size (e.g. '1536x1024')
+        profile: Profile name from config
+        quality: Image quality ('low', 'medium', 'high')
+        output_format: Output format ('png' or 'jpeg')
+        input_fidelity: 'high' to preserve facial/character features, 'low' for more creative edits
+
+    Returns:
+        dict with success, image_bytes, error (same shape as call_azure_image)
+    """
+    prompt = sanitize_image_prompt(prompt)
+    try:
+        profiles = config.get('profiles', {})
+        if profile not in profiles:
+            return {
+                'success': False,
+                'image_bytes': b'',
+                'error': f'Profile "{profile}" not found in configuration.'
+            }
+
+        profile_config = profiles[profile]
+        endpoint_raw = profile_config.get('endpoint', '')
+        endpoint = _sanitize_azure_endpoint(endpoint_raw)
+        deployment = profile_config.get('deployment', '')
+        api_version = profile_config.get('api_version', '2024-02-15-preview')
+        subscription_key = profile_config.get('subscription_key', '')
+
+        if not all([endpoint, deployment, subscription_key]):
+            return {
+                'success': False,
+                'image_bytes': b'',
+                'error': f'Missing Azure Image configuration for profile "{profile}". Please configure settings.'
+            }
+
+        if not os.path.exists(image_path):
+            return {
+                'success': False,
+                'image_bytes': b'',
+                'error': f'Reference image not found: {image_path}'
+            }
+
+        url = f"{endpoint}/openai/deployments/{deployment}/images/edits?api-version={api_version}"
+
+        with open(image_path, 'rb') as f:
+            img_data = f.read()
+        img_ext = 'png' if output_format.lower() == 'png' else 'jpeg'
+        img_filename = os.path.basename(image_path) or f'reference.{img_ext}'
+
+        files = {
+            'image': (img_filename, img_data, f'image/{img_ext}')
+        }
+        form_data = {
+            'prompt': prompt,
+            'size': size,
+            'quality': quality,
+            'input_fidelity': input_fidelity,
+            'n': 1,
+        }
+        if output_format and output_format.lower() in ('png', 'jpeg', 'webp'):
+            form_data['output_format'] = output_format
+
+        headers = {'api-key': subscription_key}
+
+        response = requests.post(url, headers=headers, files=files, data=form_data, timeout=90)
+        if response.status_code == 200:
+            result = response.json()
+            data_resp = result.get('data', [])
+            if not data_resp:
+                return {'success': False, 'image_bytes': b'', 'error': 'No image data returned.'}
+            b64 = data_resp[0].get('b64_json', '')
+            if not b64:
+                return {'success': False, 'image_bytes': b'', 'error': 'Missing b64_json in response.'}
+            img_bytes = base64.b64decode(b64)
+            return {'success': True, 'image_bytes': img_bytes, 'error': ''}
+
+        if response.status_code == 404 and api_version != '2025-04-01-preview':
+            fallback_url = f"{endpoint}/openai/deployments/{deployment}/images/edits?api-version=2025-04-01-preview"
+            response_fb = requests.post(fallback_url, headers=headers, files=files, data=form_data, timeout=90)
+            if response_fb.status_code == 200:
+                result = response_fb.json()
+                data_resp = result.get('data', [])
+                if not data_resp:
+                    return {'success': False, 'image_bytes': b'', 'error': 'No image data returned.'}
+                b64 = data_resp[0].get('b64_json', '')
+                if not b64:
+                    return {'success': False, 'image_bytes': b'', 'error': 'Missing b64_json in response.'}
+                img_bytes = base64.b64decode(b64)
+                return {'success': True, 'image_bytes': img_bytes, 'error': ''}
+
+        return {
+            'success': False,
+            'image_bytes': b'',
+            'error': f'Azure Image Edit error: {response.status_code} - {response.text}'
+        }
+    except requests.exceptions.RequestException as e:
+        return {
+            'success': False,
+            'image_bytes': b'',
+            'error': f'Request error: {e}'
+        }
+    except Exception as e:
+        return {
+            'success': False,
+            'image_bytes': b'',
+            'error': f'Unexpected error: {e}'
+        }
+
+
 class ExtraCommandsDialog(tk.Toplevel):
     """Dialog for entering extra commands to inject into the prompt."""
     
@@ -3697,7 +3815,26 @@ Return only the single most important keyword, nothing else. Just one word."""
         """Wrapper to call Azure Image generation and log the prompt."""
         self.log_prompt_debug('Azure Image prompt', prompt, None)
         return call_azure_image(self.ai_config, prompt, size=size, profile=profile, quality=quality, output_format=output_format, output_compression=output_compression)
-    
+
+    def azure_image_edit(self, prompt: str, image_path: str, size: str = '1024x1024', profile: str = 'image_gen',
+                         quality: str = 'medium', output_format: str = 'png', input_fidelity: str = 'high') -> dict:
+        """Wrapper to call Azure Image Edit API with reference image (GPT-Image-1.x)."""
+        self.log_prompt_debug('Azure Image Edit prompt', prompt, None)
+        return call_azure_image_edit(
+            self.ai_config, prompt, image_path,
+            size=size, profile=profile, quality=quality, output_format=output_format, input_fidelity=input_fidelity
+        )
+
+    def _profile_supports_image_edit(self, profile: str) -> bool:
+        """Check if the profile deploys a GPT-Image-1.x model (supports /images/edits)."""
+        profiles = (self.ai_config or {}).get('profiles', {})
+        if profile not in profiles:
+            return False
+        cfg = profiles[profile]
+        deployment = (cfg.get('deployment') or '').lower()
+        model_name = (cfg.get('model_name') or '').lower()
+        return 'gpt-image' in deployment or 'gpt_image' in deployment or 'gpt-image' in model_name or 'gpt_image' in model_name
+
     def azure_video(self, prompt: str, size: str = '720x1280', seconds: str = '4', profile: str = 'video_gen') -> dict:
         """Wrapper to call Azure Video generation and log the prompt."""
         self.log_prompt_debug('Azure Video prompt', prompt, None)
@@ -6810,18 +6947,19 @@ TECHNICAL REQUIREMENTS:
                 else:
                     scene_start_seconds = max(0.0, (scene_num_int - 1) * seconds_per_video) if scene_num_int else 0.0
                 scene_end_seconds = scene_start_seconds + seconds_per_video
-                # Prefer config lyrics_timing when present
-                config_timing = scene_dict.get('lyrics_timing') if scene_dict else None
-                if config_timing and isinstance(config_timing, list) and len(config_timing) > 0:
+                # Lyrics timing from extracted_lyrics only - no fallback
+                timing_list = self._get_lyrics_timing_list_for_scene(scene_start_seconds, scene_end_seconds)
+                if timing_list:
                     processed_lyrics = self._process_config_lyrics_timing_for_lip_sync(
-                        config_timing, scene_start_seconds, float(seconds_per_video)
+                        timing_list, scene_start_seconds, float(seconds_per_video)
                     )
                 else:
-                    lyrics_with_timestamps = lyrics
-                    extracted_lyrics = self.current_song.get('extracted_lyrics', '') if self.current_song else ''
-                    if extracted_lyrics and not re.search(r'\d+:\d+=\d+:\d+=', lyrics):
-                        lyrics_with_timestamps = self._extract_timed_lyrics_for_scene(lyrics, extracted_lyrics, scene_start_seconds, scene_end_seconds)
-                    processed_lyrics = self._process_lyrics_for_lip_sync(lyrics_with_timestamps, scene_start_seconds, seconds_per_video)
+                    self.log_debug('ERROR', f'export_selected_scene_prompt: No lyrics timing from extracted_lyrics for scene {scene_num}. Lip-sync will be omitted.')
+                    messagebox.showwarning(
+                        'Lyrics Timing Missing',
+                        f'Scene {scene_num}: extracted_lyrics is missing or has no valid timing format (M:SS.mmm=M:SS.mmm=Word). Lip-sync block will not be included in export.'
+                    )
+                    processed_lyrics = ''
                 already_has_timing = ('Words and timeindex' in full_prompt or 'Words and time index' in full_prompt or
                                      re.search(r'\n\d+\.\d+s-\d+\.\d+s:', full_prompt))
                 scene_has_no_characters = any(m in full_prompt.lower() for m in (
@@ -16201,15 +16339,17 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
                 else:
                     scene_start_seconds = max(0.0, (scene_num_int - 1) * seconds_per_video) if scene_num_int else 0.0
                 scene_end_seconds = scene_start_seconds + seconds_per_video
-                extracted_lyrics = self.current_song.get('extracted_lyrics', '') if self.current_song else ''
-                lyrics_with_timestamps = lyrics_text
-                if extracted_lyrics and not re.search(r'\d+:\d+=\d+:\d+=', lyrics_text):
-                    lyrics_with_timestamps = self._extract_timed_lyrics_for_scene(lyrics_text, extracted_lyrics, scene_start_seconds, scene_end_seconds)
-                if lyrics_with_timestamps:
-                    processed_lyrics = self._process_lyrics_for_lip_sync(lyrics_with_timestamps, scene_start_seconds, seconds_per_video)
+                # Lyrics timing from extracted_lyrics only - no fallback
+                timing_list = self._get_lyrics_timing_list_for_scene(scene_start_seconds, scene_end_seconds)
+                if timing_list:
+                    processed_lyrics = self._process_config_lyrics_timing_for_lip_sync(
+                        timing_list, scene_start_seconds, float(seconds_per_video)
+                    )
                     if processed_lyrics:
                         video_prompt += "\n\nIMPORTANT: Synchronize lyrics by time index for lip-sync. Each word has exact start and end time (relative to scene 0-6s):"
                         video_prompt += "\n\n" + processed_lyrics
+                else:
+                    self.log_debug('WARNING', f'build_scene_prompts_both: Scene {scene_num} - extracted_lyrics missing or no valid timing format. Lip-sync block omitted.')
             except Exception as e:
                 self.log_debug('WARNING', f'Failed to add lyrics timing to scene prompt: {e}')
 
@@ -16956,14 +17096,55 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
         self.update()
 
         image_size = self.get_storyboard_image_size()
-        
+
         # Get selected profile for storyboard images
         selected_profile = 'image_gen'
         if hasattr(self, 'storyboard_image_profile_var'):
             selected_profile = self.storyboard_image_profile_var.get() or 'image_gen'
 
+        # Persona scene with reference image: use Edit API when Front exists and profile supports it
+        use_edit_api = False
+        reference_image_path = None
+        if self.current_persona and self.current_persona_path:
+            if 'REFERENCE CHARACTER' in final_prompt or 'from Front Persona Image' in final_prompt:
+                preset_key = self._get_song_persona_preset_key()
+                base_path = self.get_persona_image_base_path(preset_key)
+                safe_name = self._safe_persona_basename()
+                front_image_path = os.path.join(base_path, f'{safe_name}-Front.png')
+                if os.path.exists(front_image_path) and self._profile_supports_image_edit(selected_profile):
+                    try:
+                        from PIL import Image
+                        original_img = Image.open(front_image_path)
+                        new_width = original_img.width // 2
+                        new_height = original_img.height // 2
+                        downscaled_img = original_img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                        temp_dir = os.path.join(self.current_song_path, 'temp')
+                        os.makedirs(temp_dir, exist_ok=True)
+                        reference_image_path = os.path.join(temp_dir, f'{safe_name}-Front-downscaled.png')
+                        backup_path = backup_file_if_exists(reference_image_path)
+                        if backup_path:
+                            self.log_debug('INFO', f'Backed up existing downscaled image to: {backup_path}')
+                        downscaled_img.save(reference_image_path, 'PNG')
+                        use_edit_api = True
+                        self.log_debug('INFO', f'Scene {scene_num}: using Edit API with persona reference image')
+                    except Exception as e:
+                        self.log_debug('WARNING', f'Failed to prepare reference image for Edit API: {e}')
+                        use_edit_api = False
+                elif os.path.exists(front_image_path) and not self._profile_supports_image_edit(selected_profile):
+                    self.log_debug('INFO', f'Scene {scene_num}: profile does not support Edit API, using Generations only')
+
         try:
-            result = self.azure_image(final_prompt, size=image_size, profile=selected_profile)
+            if use_edit_api and reference_image_path:
+                result = self.azure_image_edit(
+                    final_prompt, reference_image_path,
+                    size=image_size, profile=selected_profile,
+                    quality='medium', output_format='png', input_fidelity='high'
+                )
+                if not result['success']:
+                    self.log_debug('WARNING', f'Edit API failed, falling back to Generations: {result.get("error", "")}')
+                    result = self.azure_image(final_prompt, size=image_size, profile=selected_profile)
+            else:
+                result = self.azure_image(final_prompt, size=image_size, profile=selected_profile)
 
             if result['success']:
                 img_bytes = result.get('image_bytes', b'')
