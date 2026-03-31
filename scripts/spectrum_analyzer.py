@@ -42,6 +42,14 @@ except ImportError:
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 from lib.base_gui import BaseAudioGUI
 
+try:
+    from lib.spectrum_gl_surface import GL_AVAILABLE, SpectrumGLSurface, build_cmap_lut
+except ImportError:
+    GL_AVAILABLE = False
+    SpectrumGLSurface = None
+    build_cmap_lut = None
+
+GL_MESH_STRIDE = 1
 
 TARGET_SR = 48000
 BLOCK_SIZE = 2048
@@ -52,6 +60,7 @@ MAX_HISTORY_COLS = 120000
 F_MIN = 10.0
 F_MAX = 20000.0
 MAX_DECODE_BYTES = 520_000_000
+Y_TICK_MIN_ROW_GAP = 9
 
 # Per-frame relative dB (peak bin = 0 dB) so raw FFT dB does not clip the colormap.
 SPEC_DB_VMIN = -78.0
@@ -127,6 +136,19 @@ class SpectrumAnalyzerGUI(BaseAudioGUI):
         self._follow_live = True
         self._hist_pos = tk.IntVar(value=100)
         self._suppress_scroll = False
+        self._view_mode_var = tk.StringVar(value="2D")
+        self._gl_surface = None
+        self._gl_ui_ok = False
+        self._cmap_lut = None
+        self._fullscreen = False
+        self._plot_container = None
+        self._mpl_widget = None
+        self._log_frame = None
+        self._drop_zone = None
+        self._log_show_var = tk.BooleanVar(value=False)
+        self._gl_auto_spin_var = tk.BooleanVar(value=False)
+        self._gl_track_tone_var = tk.BooleanVar(value=False)
+        self._gl_anim_after = None
 
         super().__init__(root, "Spectrum Analyzer")
         try:
@@ -134,11 +156,16 @@ class SpectrumAnalyzerGUI(BaseAudioGUI):
                 return
         except tk.TclError:
             return
-        self.root.geometry("1000x720")
+        self.root.geometry("1000x780")
+        self.root.minsize(720, 520)
         self._rebuild_freq_grid()
+        if GL_AVAILABLE and build_cmap_lut is not None:
+            self._cmap_lut = build_cmap_lut(self._cmap)
         self._setup_ui()
         self.log_manager.set_log_widget(self._log_text)
         self._check_audio()
+        self.root.bind("<F11>", self._toggle_fullscreen)
+        self.root.bind("<Escape>", self._on_escape_fullscreen)
 
     def setup_common_ui(self):
         pass
@@ -162,6 +189,32 @@ class SpectrumAnalyzerGUI(BaseAudioGUI):
         self._pause_btn = ttk.Button(top, text="Pause", command=self._pause, state=tk.DISABLED)
         self._pause_btn.pack(side=tk.LEFT, padx=4)
         ttk.Button(top, text="Stop", command=self._stop).pack(side=tk.LEFT, padx=4)
+        ttk.Button(top, text="Fullscreen", command=self._toggle_fullscreen_btn).pack(
+            side=tk.LEFT, padx=4
+        )
+
+        self._view_combo = ttk.Combobox(
+            top,
+            textvariable=self._view_mode_var,
+            values=("2D", "3D"),
+            width=5,
+            state="readonly",
+        )
+        self._view_combo.pack(side=tk.LEFT, padx=8)
+        self._view_combo.bind("<<ComboboxSelected>>", self._on_view_mode)
+
+        self._gl_orbit_chk = ttk.Checkbutton(
+            top,
+            text="3D orbit",
+            variable=self._gl_auto_spin_var,
+        )
+        self._gl_orbit_chk.pack(side=tk.LEFT, padx=(4, 0))
+        self._gl_tone_chk = ttk.Checkbutton(
+            top,
+            text="Center tone",
+            variable=self._gl_track_tone_var,
+        )
+        self._gl_tone_chk.pack(side=tk.LEFT, padx=(2, 0))
 
         ttk.Checkbutton(
             top,
@@ -173,8 +226,20 @@ class SpectrumAnalyzerGUI(BaseAudioGUI):
         self._file_label = ttk.Label(top, text="No file loaded")
         self._file_label.pack(side=tk.LEFT, padx=8)
 
+        ttk.Checkbutton(
+            top,
+            text="Show log",
+            variable=self._log_show_var,
+            command=self._on_log_show_toggle,
+        ).pack(side=tk.LEFT, padx=8)
+
         spec_frame = ttk.LabelFrame(self.root, text="Spectrogram (10 Hz - 20 kHz)", padding=4)
         spec_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=4)
+
+        self._plot_container = tk.Frame(spec_frame, bg="#1a1a22", highlightthickness=0)
+        self._plot_container.pack(fill=tk.BOTH, expand=True)
+        self._plot_container.grid_rowconfigure(0, weight=1)
+        self._plot_container.grid_columnconfigure(0, weight=1)
 
         self._fig = Figure(figsize=(10, 4.5), dpi=100, facecolor="#1a1a22")
         self._ax = self._fig.add_subplot(111, facecolor="#0d0d12")
@@ -188,9 +253,39 @@ class SpectrumAnalyzerGUI(BaseAudioGUI):
             interpolation="nearest",
         )
         self._fig.tight_layout()
-        self._canvas = FigureCanvasTkAgg(self._fig, master=spec_frame)
-        self._canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        self._canvas = FigureCanvasTkAgg(self._fig, master=self._plot_container)
+        self._mpl_widget = self._canvas.get_tk_widget()
+        self._mpl_widget.grid(row=0, column=0, sticky="nsew")
         self._update_y_ticks()
+
+        if GL_AVAILABLE and SpectrumGLSurface is not None and self._cmap_lut is not None:
+            try:
+                self._gl_surface = SpectrumGLSurface(
+                    self._plot_container,
+                    self,
+                    N_FREQ_ROWS,
+                    N_TIME_COLS,
+                    F_MIN,
+                    F_MAX,
+                    SPEC_DB_VMIN,
+                    SPEC_DB_VMAX,
+                    self._cmap_lut,
+                    mesh_stride=GL_MESH_STRIDE,
+                    width=800,
+                    height=400,
+                    takefocus=True,
+                )
+                self._gl_ui_ok = True
+            except Exception as e:
+                self.log(f"[WARNING] OpenGL 3D view unavailable: {e}")
+                self._gl_surface = None
+                self._gl_ui_ok = False
+        if not self._gl_ui_ok:
+            self._view_combo.config(state=tk.DISABLED)
+            self._gl_orbit_chk.config(state=tk.DISABLED)
+            self._gl_tone_chk.config(state=tk.DISABLED)
+        else:
+            self._view_mode_var.trace_add("write", self._trace_view_mode)
 
         hist_row = ttk.Frame(spec_frame)
         hist_row.pack(fill=tk.X, pady=(6, 0))
@@ -209,22 +304,144 @@ class SpectrumAnalyzerGUI(BaseAudioGUI):
         self._hist_scale.pack(side=tk.LEFT, fill=tk.X, expand=True)
         ttk.Label(hist_row, text="Live").pack(side=tk.LEFT, padx=(4, 0))
 
-        drop_zone = ttk.LabelFrame(self.root, text="Drop audio file here", padding=6)
-        drop_zone.pack(fill=tk.X, padx=8, pady=4)
+        self._drop_zone = ttk.LabelFrame(self.root, text="Drop audio file here", padding=6)
+        self._drop_zone.pack(fill=tk.X, padx=8, pady=4)
 
-        log_frame = ttk.Frame(self.root, padding=(8, 0, 8, 8))
-        log_frame.pack(fill=tk.BOTH)
-        ttk.Label(log_frame, text="Log:").pack(anchor=tk.W)
-        self._log_text = scrolledtext.ScrolledText(log_frame, height=5, wrap=tk.WORD)
+        self._log_frame = ttk.Frame(self.root, padding=(8, 0, 8, 8))
+        ttk.Label(self._log_frame, text="Log:").pack(anchor=tk.W)
+        self._log_text = scrolledtext.ScrolledText(self._log_frame, height=5, wrap=tk.WORD)
         self._log_text.pack(fill=tk.BOTH, expand=True)
 
+        dnd_widgets = [
+            self.root,
+            spec_frame,
+            self._plot_container,
+            self._mpl_widget,
+            self._drop_zone,
+        ]
+        if self._gl_surface is not None:
+            dnd_widgets.append(self._gl_surface)
         if DND_AVAILABLE:
-            for w in (self.root, spec_frame, drop_zone, self._canvas.get_tk_widget()):
+            for w in dnd_widgets:
                 try:
                     w.drop_target_register(DND_FILES)
                     w.dnd_bind("<<Drop>>", self._on_drop)
                 except tk.TclError:
                     pass
+
+        self._apply_log_visibility()
+        self._apply_view_mode()
+
+    def _apply_log_visibility(self):
+        if self._fullscreen:
+            return
+        try:
+            self._log_frame.pack_forget()
+        except tk.TclError:
+            pass
+        if self._log_show_var.get():
+            self._log_frame.pack(fill=tk.BOTH, expand=True)
+
+    def _on_log_show_toggle(self):
+        self._apply_log_visibility()
+
+    def _on_view_mode(self, _event=None):
+        self._apply_view_mode()
+
+    def _trace_view_mode(self, *_args):
+        try:
+            self.root.after_idle(self._apply_view_mode)
+        except tk.TclError:
+            pass
+
+    def _cancel_gl_animation(self):
+        if self._gl_anim_after is not None:
+            try:
+                self.root.after_cancel(self._gl_anim_after)
+            except tk.TclError:
+                pass
+            self._gl_anim_after = None
+
+    def _gl_animation_tick(self):
+        self._gl_anim_after = None
+        if not self._view_is_3d() or self._gl_surface is None:
+            return
+        if self._gl_auto_spin_var.get() or self._playing:
+            self._gl_surface.request_redraw()
+        self._gl_anim_after = self.root.after(33, self._gl_animation_tick)
+
+    def _view_is_3d(self):
+        return str(self._view_mode_var.get()).strip() == "3D"
+
+    def _apply_view_mode(self):
+        sticky = "nsew"
+        if not self._gl_ui_ok or self._gl_surface is None:
+            try:
+                self._mpl_widget.grid(row=0, column=0, sticky=sticky)
+            except tk.TclError:
+                pass
+            return
+        if self._view_is_3d():
+            try:
+                self._mpl_widget.grid_remove()
+            except tk.TclError:
+                pass
+            self._gl_surface.grid(row=0, column=0, sticky=sticky)
+            self._plot_container.update_idletasks()
+            self.root.update_idletasks()
+            self._gl_surface.update_idletasks()
+            self._cancel_gl_animation()
+            self._gl_anim_after = self.root.after(33, self._gl_animation_tick)
+            self._gl_surface.request_redraw()
+
+            def _kick_gl():
+                if self._gl_surface is not None and self._view_is_3d():
+                    self._gl_surface.draw_now()
+                    self._gl_surface.request_redraw()
+
+            try:
+                self.root.after(1, _kick_gl)
+                self.root.after(50, _kick_gl)
+                self.root.after(200, _kick_gl)
+            except tk.TclError:
+                pass
+        else:
+            self._cancel_gl_animation()
+            try:
+                self._gl_surface.grid_remove()
+            except tk.TclError:
+                pass
+            self._mpl_widget.grid(row=0, column=0, sticky=sticky)
+            self._plot_container.update_idletasks()
+            self._canvas.draw_idle()
+
+    def _toggle_fullscreen(self, _event=None):
+        self._fullscreen = not self._fullscreen
+        try:
+            self.root.attributes("-fullscreen", self._fullscreen)
+        except tk.TclError:
+            self._fullscreen = not self._fullscreen
+            return
+        if self._fullscreen:
+            self._drop_zone.pack_forget()
+            self._log_frame.pack_forget()
+        else:
+            self._drop_zone.pack(fill=tk.X, padx=8, pady=4)
+            self._apply_log_visibility()
+
+    def _toggle_fullscreen_btn(self):
+        self._toggle_fullscreen(None)
+
+    def _on_escape_fullscreen(self, _event=None):
+        if not self._fullscreen:
+            return
+        self._fullscreen = False
+        try:
+            self.root.attributes("-fullscreen", False)
+        except tk.TclError:
+            pass
+        self._drop_zone.pack(fill=tk.X, padx=8, pady=4)
+        self._apply_log_visibility()
 
     def _apply_chart_style(self):
         ax = self._ax
@@ -244,29 +461,37 @@ class SpectrumAnalyzerGUI(BaseAudioGUI):
         for label in list(ax.get_xticklabels()) + list(ax.get_yticklabels()):
             label.set_color(CHART_TEXT)
 
-    def _update_y_ticks(self):
+    def _y_tick_row_labels(self):
         targets = list(range(10, 101, 10)) + [200, 500, 1000, 2000, 5000, 10000, 20000]
         targets = sorted(set(targets))
-        rows = []
-        labels = []
         used_idx = set()
         freqs = self._disp_freqs
+        out = []
         for t in targets:
             if not (F_MIN <= t <= F_MAX):
                 continue
             idx = int(np.argmin(np.abs(freqs - t)))
             if idx in used_idx:
                 continue
+            if any(abs(idx - u) < Y_TICK_MIN_ROW_GAP for u in used_idx):
+                continue
             used_idx.add(idx)
-            rows.append(idx)
             if t >= 1000:
-                labels.append(f"{t/1000:g}k")
+                lab = f"{t/1000:g}k"
             else:
-                labels.append(str(int(t)))
+                lab = str(int(t))
+            out.append((idx, lab))
+        return out
+
+    def _update_y_ticks(self):
+        pairs = self._y_tick_row_labels()
+        rows = [p[0] for p in pairs]
+        labels = [p[1] for p in pairs]
         self._ax.set_yticks(rows)
         self._ax.set_yticklabels(labels)
         self._apply_chart_style()
-        self._canvas.draw_idle()
+        if not self._view_is_3d():
+            self._canvas.draw_idle()
 
     def _on_log_toggle(self):
         self._rebuild_freq_grid()
@@ -319,7 +544,14 @@ class SpectrumAnalyzerGUI(BaseAudioGUI):
                 if w < N_TIME_COLS:
                     self._spec[:, w:].fill(SPEC_DB_VMIN)
         self._img.set_data(self._spec)
-        self._canvas.draw_idle()
+        if not self._view_is_3d():
+            self._canvas.draw_idle()
+        if (
+            self._gl_ui_ok
+            and self._gl_surface is not None
+            and self._view_is_3d()
+        ):
+            self._gl_surface.request_redraw()
 
     def _spectrum_column(self, samples):
         n = len(samples)
@@ -467,10 +699,17 @@ class SpectrumAnalyzerGUI(BaseAudioGUI):
             self.log(f"[WARNING] Unsupported extension {ext}, trying anyway")
         self._stop()
         self._clear_hist_buffer()
+        self._pcm = np.zeros(0, dtype=np.float32)
+        self._current_path = None
+        self._file_label.config(text="Decoding...")
+        self._play_btn.config(state=tk.DISABLED)
+        self._refresh_hist_view()
         self.log(f"[INFO] Decoding: {os.path.basename(path)}")
         self.root.update_idletasks()
         pcm = self._decode_file(path)
         if pcm is None:
+            self._file_label.config(text="No file loaded")
+            self._refresh_hist_view()
             return
         self._pcm = pcm
         self._current_path = path
