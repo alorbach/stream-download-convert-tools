@@ -400,7 +400,8 @@ def load_config() -> dict:
             "styles_import_path": "D:/AI/suno",
             "styles_import_base_name": "",
             "analysis_data_path": "data",
-            "auto_import_song_style_from_analysis": True
+            "auto_import_song_style_from_analysis": True,
+            "image_generation_quality": "medium"
         },
         "profiles": {
             "text": {
@@ -478,6 +479,22 @@ def save_config(config: dict):
     except Exception as exc:
         print(f'Config Error: Failed to save config:\n{exc}')
         return False
+
+
+def normalize_image_generation_quality(value) -> str:
+    q = (value or 'medium').lower().strip()
+    return q if q in ('low', 'medium', 'high') else 'medium'
+
+
+IMAGE_QUALITY_FROM_SETTINGS = 'From settings'
+IMAGE_QUALITY_OVERRIDE_UI_VALUES = (IMAGE_QUALITY_FROM_SETTINGS, 'low', 'medium', 'high')
+
+
+def coerce_image_quality_override_label(stored) -> str:
+    v = (stored or '').strip()
+    if v in ('low', 'medium', 'high'):
+        return v
+    return IMAGE_QUALITY_FROM_SETTINGS
 
 
 def get_personas_path(config: dict) -> str:
@@ -859,7 +876,7 @@ def call_azure_image(config: dict, prompt: str, size: str = '1024x1024', profile
         prompt: Text prompt for image generation
         size: Image size (e.g., '1024x1024')
         profile: Profile name from config
-        quality: Image quality ('standard' or 'hd')
+        quality: Image quality ('low', 'medium', 'high' for GPT-image; some deployments may expect 'standard' or 'hd')
         output_format: Output format ('png' or 'jpeg')
         output_compression: Compression level (0-100)
     """
@@ -1759,6 +1776,15 @@ class SettingsDialog(tk.Toplevel):
         ttk.Label(general_frame, text='Base name (filter):', font=('TkDefaultFont', 8)).grid(row=8, column=0, sticky=tk.W, pady=5, padx=(10, 0))
         self.general_vars['styles_import_base_name'] = tk.StringVar(value=general_data.get('styles_import_base_name', ''))
         ttk.Entry(general_frame, textvariable=self.general_vars['styles_import_base_name'], width=40).grid(row=8, column=1, pady=5, padx=5, sticky=tk.W)
+
+        ttk.Label(general_frame, text='Azure image generation:', font=('TkDefaultFont', 9, 'bold')).grid(row=9, column=0, sticky=tk.W, pady=(15, 2), columnspan=3)
+        ttk.Label(general_frame, text='Quality (covers, storyboard, etc.):', font=('TkDefaultFont', 8)).grid(row=10, column=0, sticky=tk.W, pady=5, padx=(10, 0))
+        iq = normalize_image_generation_quality(general_data.get('image_generation_quality', 'medium'))
+        self.general_vars['image_generation_quality'] = tk.StringVar(value=iq)
+        ttk.Combobox(
+            general_frame, textvariable=self.general_vars['image_generation_quality'], width=12, state='readonly',
+            values=('low', 'medium', 'high')
+        ).grid(row=10, column=1, pady=5, padx=5, sticky=tk.W)
         
         profiles = self.config.get('profiles', {})
         
@@ -2026,7 +2052,8 @@ class SettingsDialog(tk.Toplevel):
             'default_save_path': self.config.get('general', {}).get('default_save_path', ''),
             'styles_csv_path': self.general_vars['styles_csv_path'].get(),
             'styles_import_path': self.general_vars['styles_import_path'].get(),
-            'styles_import_base_name': self.general_vars['styles_import_base_name'].get()
+            'styles_import_base_name': self.general_vars['styles_import_base_name'].get(),
+            'image_generation_quality': normalize_image_generation_quality(self.general_vars['image_generation_quality'].get())
         }
         
         profiles = {}
@@ -2749,7 +2776,8 @@ def load_persona_config(persona_path: str) -> dict:
         'image_presets': [
             {'key': 'default', 'label': 'Main', 'is_default': True, 'profile_prompt': '', 'profile_custom_prompt': ''}
         ],
-        'current_image_preset': 'default'
+        'current_image_preset': 'default',
+        'profile_image_quality': IMAGE_QUALITY_FROM_SETTINGS
     }
     
     if os.path.exists(config_file):
@@ -2836,6 +2864,8 @@ def load_song_config(song_path: str) -> dict:
         'storyboard_metadata': {},
         'storyboard_seconds_per_video': 6,
         'storyboard_image_size': '3:2 (1536x1024)',
+        'song_cover_image_quality': IMAGE_QUALITY_FROM_SETTINGS,
+        'storyboard_image_quality': IMAGE_QUALITY_FROM_SETTINGS,
         'album_cover_size': '1:1 (1024x1024)',
         'album_cover_format': 'PNG',
         'include_persona_in_cover': True,
@@ -2889,6 +2919,7 @@ def load_album_config(album_path: str) -> dict:
         'cover_prompt': '',
         'cover_size': '1:1 (1024x1024)',
         'cover_format': 'PNG',
+        'cover_image_quality': IMAGE_QUALITY_FROM_SETTINGS,
         'video_prompt': '',
         'video_size': '9:16 (720x1280)',
         'language': 'EN',
@@ -3810,15 +3841,33 @@ Return only the single most important keyword, nothing else. Just one word."""
                 available = [list(profiles.keys())[0]]
         
         return available if available else ['image_gen']
+
+    def _image_generation_quality(self) -> str:
+        return normalize_image_generation_quality((self.ai_config or {}).get('general', {}).get('image_generation_quality'))
+
+    def _effective_image_quality(self, *, ui_var: tk.StringVar | None = None, stored: str | None = None) -> str:
+        if ui_var is not None:
+            v = (ui_var.get() or '').strip()
+            if v and v != IMAGE_QUALITY_FROM_SETTINGS:
+                return normalize_image_generation_quality(v)
+        if stored is not None:
+            sv = (stored or '').strip()
+            if sv and sv != IMAGE_QUALITY_FROM_SETTINGS and sv in ('low', 'medium', 'high'):
+                return sv
+        return self._image_generation_quality()
     
-    def azure_image(self, prompt: str, size: str = '1024x1024', profile: str = 'image_gen', quality: str = 'medium', output_format: str = 'png', output_compression: int = 100) -> dict:
+    def azure_image(self, prompt: str, size: str = '1024x1024', profile: str = 'image_gen', quality: str | None = None, output_format: str = 'png', output_compression: int = 100) -> dict:
         """Wrapper to call Azure Image generation and log the prompt."""
+        if quality is None:
+            quality = self._image_generation_quality()
         self.log_prompt_debug('Azure Image prompt', prompt, None)
         return call_azure_image(self.ai_config, prompt, size=size, profile=profile, quality=quality, output_format=output_format, output_compression=output_compression)
 
     def azure_image_edit(self, prompt: str, image_path: str, size: str = '1024x1024', profile: str = 'image_gen',
-                         quality: str = 'medium', output_format: str = 'png', input_fidelity: str = 'high') -> dict:
+                         quality: str | None = None, output_format: str = 'png', input_fidelity: str = 'high') -> dict:
         """Wrapper to call Azure Image Edit API with reference image (GPT-Image-1.x)."""
+        if quality is None:
+            quality = self._image_generation_quality()
         self.log_prompt_debug('Azure Image Edit prompt', prompt, None)
         return call_azure_image_edit(
             self.ai_config, prompt, image_path,
@@ -3983,7 +4032,8 @@ Return only the single most important keyword, nothing else. Just one word."""
                 ],
                 'current_image_preset': 'default',
                 'reference_image_profile': default_image_profile,
-                'profile_image_profile': default_image_profile
+                'profile_image_profile': default_image_profile,
+                'profile_image_quality': IMAGE_QUALITY_FROM_SETTINGS
             }
             
             save_persona_config(new_persona_path, config)
@@ -4217,6 +4267,15 @@ Return only the single most important keyword, nothing else. Just one word."""
         profile_image_profile_combo.pack(side=tk.LEFT, padx=2)
         # Save profile selection when changed
         self.profile_image_profile_var.trace_add('write', lambda *args: self._save_image_profile_selections())
+        
+        ttk.Label(prompt_toolbar, text='Quality:', font=('TkDefaultFont', 8)).pack(side=tk.LEFT, padx=(12, 2))
+        self.profile_image_quality_var = tk.StringVar(value=IMAGE_QUALITY_FROM_SETTINGS)
+        profile_image_quality_combo = ttk.Combobox(
+            prompt_toolbar, textvariable=self.profile_image_quality_var,
+            values=IMAGE_QUALITY_OVERRIDE_UI_VALUES, state='readonly', width=14)
+        profile_image_quality_combo.pack(side=tk.LEFT, padx=2)
+        create_tooltip(profile_image_quality_combo, 'Overrides Settings > General for profile portrait generation. Saved with the persona.')
+        self.profile_image_quality_var.trace_add('write', lambda *args: self._save_image_profile_selections())
         
         ttk.Button(prompt_toolbar, text='Generate Profile Images', command=self.generate_profile_images).pack(side=tk.RIGHT, padx=(6, 0))
         
@@ -4691,6 +4750,8 @@ Return only the single most important keyword, nothing else. Just one word."""
             config['reference_image_profile'] = self.reference_image_profile_var.get()
         if hasattr(self, 'profile_image_profile_var'):
             config['profile_image_profile'] = self.profile_image_profile_var.get()
+        if hasattr(self, 'profile_image_quality_var'):
+            config['profile_image_quality'] = self.profile_image_quality_var.get() or IMAGE_QUALITY_FROM_SETTINGS
         
         if save_persona_config(self.current_persona_path, config):
             self.current_persona = config
@@ -4725,6 +4786,10 @@ Return only the single most important keyword, nothing else. Just one word."""
                 self.profile_image_profile_var.set(saved_profile_profile)
             else:
                 self.profile_image_profile_var.set(default_profile)
+        
+        if hasattr(self, 'profile_image_quality_var'):
+            self.profile_image_quality_var.set(
+                coerce_image_quality_override_label(self.current_persona.get('profile_image_quality')))
     
     def _save_image_profile_selections(self):
         """Save API profile selections to persona config."""
@@ -4738,6 +4803,8 @@ Return only the single most important keyword, nothing else. Just one word."""
             config['reference_image_profile'] = self.reference_image_profile_var.get()
         if hasattr(self, 'profile_image_profile_var'):
             config['profile_image_profile'] = self.profile_image_profile_var.get()
+        if hasattr(self, 'profile_image_quality_var'):
+            config['profile_image_quality'] = self.profile_image_quality_var.get() or IMAGE_QUALITY_FROM_SETTINGS
         
         # Save without showing message (silent save)
         if save_persona_config(self.current_persona_path, config):
@@ -5456,7 +5523,9 @@ Vibe: {vibe}
             try:
                 self.log_prompt_debug('Persona Images: profile image', variation_prompt, None)
                 selected_profile = self.profile_image_profile_var.get() if hasattr(self, 'profile_image_profile_var') else 'image_gen'
-                result = self.azure_image(variation_prompt, size='1024x1024', profile=selected_profile)
+                q = self._effective_image_quality(
+                    ui_var=self.profile_image_quality_var if hasattr(self, 'profile_image_quality_var') else None)
+                result = self.azure_image(variation_prompt, size='1024x1024', profile=selected_profile, quality=q)
                 if result['success']:
                     img_bytes = result.get('image_bytes', b'')
                     if img_bytes:
@@ -6314,6 +6383,12 @@ TECHNICAL REQUIREMENTS:
         album_cover_profile_combo = ttk.Combobox(cover_row2, textvariable=self.album_cover_profile_var,
                                                  values=image_profiles, state='readonly', width=15)
         album_cover_profile_combo.pack(side=tk.LEFT, padx=2)
+        ttk.Label(cover_row2, text='Quality:', font=('TkDefaultFont', 8)).pack(side=tk.LEFT, padx=(10, 2))
+        self.song_cover_image_quality_var = tk.StringVar(value=IMAGE_QUALITY_FROM_SETTINGS)
+        song_cover_q_combo = ttk.Combobox(cover_row2, textvariable=self.song_cover_image_quality_var,
+                                          values=IMAGE_QUALITY_OVERRIDE_UI_VALUES, state='readonly', width=14)
+        song_cover_q_combo.pack(side=tk.LEFT, padx=2)
+        create_tooltip(song_cover_q_combo, 'Overrides Settings > General Azure image quality when not "From settings". Saved with the song.')
         
         self.album_cover_text = scrolledtext.ScrolledText(album_cover_frame, height=6, wrap=tk.WORD)
         self.album_cover_text.pack(fill=tk.BOTH, expand=True)
@@ -6498,6 +6573,12 @@ TECHNICAL REQUIREMENTS:
         self.album_cover_format_album_var = tk.StringVar(value='PNG')
         ttk.Combobox(size_bar, textvariable=self.album_cover_format_album_var,
                      values=['PNG', 'JPEG'], state='readonly', width=8).pack(side=tk.LEFT)
+        ttk.Label(size_bar, text='Quality:').pack(side=tk.LEFT, padx=(10, 4))
+        self.album_tab_cover_image_quality_var = tk.StringVar(value=IMAGE_QUALITY_FROM_SETTINGS)
+        album_tab_q_combo = ttk.Combobox(size_bar, textvariable=self.album_tab_cover_image_quality_var,
+                                         values=IMAGE_QUALITY_OVERRIDE_UI_VALUES, state='readonly', width=14)
+        album_tab_q_combo.pack(side=tk.LEFT)
+        create_tooltip(album_tab_q_combo, 'Overrides Settings > General for this album cover run. Saved with the album.')
 
         self.album_cover_album_text = scrolledtext.ScrolledText(album_prompt_frame, height=4, wrap=tk.WORD, width=60)
         self.album_cover_album_text.pack(fill=tk.BOTH, expand=True, pady=(0, 6))
@@ -6639,6 +6720,13 @@ TECHNICAL REQUIREMENTS:
         self.storyboard_image_profile_var = tk.StringVar(value='image_gen' if 'image_gen' in image_profiles else (image_profiles[0] if image_profiles else 'image_gen'))
         ttk.Combobox(controls_frame, textvariable=self.storyboard_image_profile_var,
                      values=image_profiles, state='readonly', width=12).pack(side=tk.LEFT, padx=2)
+
+        ttk.Label(controls_frame, text='Quality:', font=('TkDefaultFont', 9, 'bold')).pack(side=tk.LEFT, padx=(8, 2))
+        self.storyboard_image_quality_var = tk.StringVar(value=IMAGE_QUALITY_FROM_SETTINGS)
+        storyboard_q_combo = ttk.Combobox(controls_frame, textvariable=self.storyboard_image_quality_var,
+                                          values=IMAGE_QUALITY_OVERRIDE_UI_VALUES, state='readonly', width=14)
+        storyboard_q_combo.pack(side=tk.LEFT, padx=2)
+        create_tooltip(storyboard_q_combo, 'Overrides Settings > General for storyboard scene images. Saved with the song.')
 
         ttk.Label(controls_frame, text='Persona %:', font=('TkDefaultFont', 9, 'bold')).pack(side=tk.LEFT, padx=(8, 2))
         self.persona_scene_percent_var = tk.StringVar(value='40')
@@ -8650,6 +8738,9 @@ TECHNICAL REQUIREMENTS:
             self.album_cover_size_var.set(self.current_song.get('album_cover_size', '1:1 (1024x1024)'))
         if hasattr(self, 'album_cover_format_var'):
             self.album_cover_format_var.set(self.current_song.get('album_cover_format', 'PNG'))
+        if hasattr(self, 'song_cover_image_quality_var'):
+            self.song_cover_image_quality_var.set(
+                coerce_image_quality_override_label(self.current_song.get('song_cover_image_quality')))
         if hasattr(self, 'include_persona_in_cover_var'):
             self.include_persona_in_cover_var.set(bool(self.current_song.get('include_persona_in_cover', True)))
         if hasattr(self, 'video_loop_size_var'):
@@ -8670,6 +8761,9 @@ TECHNICAL REQUIREMENTS:
             self.storyboard_seconds_var.set(str(self.current_song.get('storyboard_seconds_per_video', 6)))
             if hasattr(self, 'storyboard_image_size_var'):
                 self.storyboard_image_size_var.set(self.current_song.get('storyboard_image_size', '3:2 (1536x1024)'))
+            if hasattr(self, 'storyboard_image_quality_var'):
+                self.storyboard_image_quality_var.set(
+                    coerce_image_quality_override_label(self.current_song.get('storyboard_image_quality')))
             self.load_storyboard()
         if hasattr(self, 'storyboard_multiscene_var'):
             self.storyboard_multiscene_var.set(self.current_song.get('storyboard_multiscene', False))
@@ -9227,6 +9321,8 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
             'storyboard_metadata': self.current_song.get('storyboard_metadata', {}) if self.current_song else {},
             'storyboard_seconds_per_video': int(self.storyboard_seconds_var.get() or '6') if hasattr(self, 'storyboard_seconds_var') else 6,
             'storyboard_image_size': self.storyboard_image_size_var.get() if hasattr(self, 'storyboard_image_size_var') else '3:2 (1536x1024)',
+            'storyboard_image_quality': self.storyboard_image_quality_var.get() if hasattr(self, 'storyboard_image_quality_var') else IMAGE_QUALITY_FROM_SETTINGS,
+            'song_cover_image_quality': self.song_cover_image_quality_var.get() if hasattr(self, 'song_cover_image_quality_var') else IMAGE_QUALITY_FROM_SETTINGS,
             'album_cover_size': self.album_cover_size_var.get() if hasattr(self, 'album_cover_size_var') else '1:1 (1024x1024)',
             'album_cover_format': self.album_cover_format_var.get() if hasattr(self, 'album_cover_format_var') else 'PNG',
             'include_persona_in_cover': bool(self.include_persona_in_cover_var.get()) if hasattr(self, 'include_persona_in_cover_var') else True,
@@ -9284,6 +9380,8 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
         self.album_songs_list.delete(0, tk.END)
         self.current_album_songs = []
         self.last_album_cover_path = ''
+        if hasattr(self, 'album_tab_cover_image_quality_var'):
+            self.album_tab_cover_image_quality_var.set(IMAGE_QUALITY_FROM_SETTINGS)
 
     def refresh_album_selector(self):
         """Refresh album combobox options."""
@@ -9310,6 +9408,9 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
         self.album_lang_var.set(self.current_album.get('language', 'EN') or 'EN')
         self.album_cover_size_album_var.set(self.current_album.get('cover_size', '1:1 (1024x1024)'))
         self.album_cover_format_album_var.set(self.current_album.get('cover_format', 'PNG'))
+        if hasattr(self, 'album_tab_cover_image_quality_var'):
+            self.album_tab_cover_image_quality_var.set(
+                coerce_image_quality_override_label(self.current_album.get('cover_image_quality')))
         self.album_video_size_var.set(self.current_album.get('video_size', '9:16 (720x1280)'))
         if hasattr(self, 'album_video_duration_var'):
             self.album_video_duration_var.set(str(self.current_album.get('video_duration', 6)))
@@ -9419,6 +9520,8 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
         config['language'] = self.album_lang_var.get() or 'EN'
         config['cover_size'] = self.album_cover_size_album_var.get()
         config['cover_format'] = self.album_cover_format_album_var.get()
+        if hasattr(self, 'album_tab_cover_image_quality_var'):
+            config['cover_image_quality'] = self.album_tab_cover_image_quality_var.get() or IMAGE_QUALITY_FROM_SETTINGS
         config['video_size'] = self.album_video_size_var.get()
         config['video_duration'] = int(self.album_video_duration_var.get() or 6) if hasattr(self, 'album_video_duration_var') else 6
         config['video_multiscene'] = bool(self.album_video_multiscene_var.get()) if hasattr(self, 'album_video_multiscene_var') else False
@@ -9509,6 +9612,7 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
             'language': self.album_lang_var.get() or 'EN',
             'cover_size': self.album_cover_size_album_var.get(),
             'cover_format': self.album_cover_format_album_var.get(),
+            'cover_image_quality': self.album_tab_cover_image_quality_var.get() if hasattr(self, 'album_tab_cover_image_quality_var') else IMAGE_QUALITY_FROM_SETTINGS,
             'video_size': self.album_video_size_var.get(),
             'video_duration': int(self.album_video_duration_var.get() or 6) if hasattr(self, 'album_video_duration_var') else 6,
             'video_multiscene': bool(self.album_video_multiscene_var.get()) if hasattr(self, 'album_video_multiscene_var') else False,
@@ -10238,7 +10342,8 @@ If you cannot process this chunk (e.g., too long), set "success": false and incl
         try:
             self.config(cursor='wait')
             self.update()
-            result = self.azure_image(prompt, size=size, profile='image_gen')
+            q = self._effective_image_quality(ui_var=self.album_tab_cover_image_quality_var)
+            result = self.azure_image(prompt, size=size, profile='image_gen', quality=q)
         except Exception as exc:
             self.config(cursor='')
             messagebox.showerror('Error', f'Failed to generate cover: {exc}')
@@ -17134,17 +17239,18 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
                     self.log_debug('INFO', f'Scene {scene_num}: profile does not support Edit API, using Generations only')
 
         try:
+            q = self._effective_image_quality(ui_var=self.storyboard_image_quality_var)
             if use_edit_api and reference_image_path:
                 result = self.azure_image_edit(
                     final_prompt, reference_image_path,
                     size=image_size, profile=selected_profile,
-                    quality='medium', output_format='png', input_fidelity='high'
+                    output_format='png', input_fidelity='high', quality=q
                 )
                 if not result['success']:
                     self.log_debug('WARNING', f'Edit API failed, falling back to Generations: {result.get("error", "")}')
-                    result = self.azure_image(final_prompt, size=image_size, profile=selected_profile)
+                    result = self.azure_image(final_prompt, size=image_size, profile=selected_profile, quality=q)
             else:
-                result = self.azure_image(final_prompt, size=image_size, profile=selected_profile)
+                result = self.azure_image(final_prompt, size=image_size, profile=selected_profile, quality=q)
 
             if result['success']:
                 img_bytes = result.get('image_bytes', b'')
@@ -17300,7 +17406,8 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
             selected_profile = self.album_cover_profile_var.get() or 'image_gen'
         
         try:
-            result = self.azure_image(prompt, size=image_size, profile=selected_profile, output_format=image_format)
+            q = self._effective_image_quality(ui_var=self.song_cover_image_quality_var)
+            result = self.azure_image(prompt, size=image_size, profile=selected_profile, output_format=image_format, quality=q)
         finally:
             self.config(cursor='')
         
@@ -17648,8 +17755,9 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
             else:
                 format_lower = 'png'  # Default fallback
             
-            # Generate image
-            result = self.azure_image(enhanced_prompt, size=size_value, profile='image_gen', output_format=format_lower)
+            # Generate image (per-song override from song JSON for bulk runs)
+            q = self._effective_image_quality(stored=song_config.get('song_cover_image_quality'))
+            result = self.azure_image(enhanced_prompt, size=size_value, profile='image_gen', output_format=format_lower, quality=q)
             
             if not result.get('success'):
                 self.log_debug('ERROR', f'Image generation failed: {result.get("error", "Unknown error")}')
