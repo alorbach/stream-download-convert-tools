@@ -3,6 +3,7 @@ import os
 import sys
 import csv
 import tempfile
+import datetime
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, scrolledtext, simpledialog
 import requests
@@ -561,7 +562,12 @@ def call_azure_ai(
                 'error': f'Missing Azure AI configuration for profile "{profile}". Please configure settings.'
             }
         
-        url = f"{endpoint}/openai/deployments/{deployment}/chat/completions?api-version={api_version}"
+        # Azure AI Foundry /v1 endpoints are OpenAI-compatible and do not accept api-version
+        is_foundry = endpoint.endswith('/v1') or '/v1/' in endpoint
+        if is_foundry:
+            url = f"{endpoint}/chat/completions"
+        else:
+            url = f"{endpoint}/openai/deployments/{deployment}/chat/completions?api-version={api_version}"
         
         headers = {
             'Content-Type': 'application/json',
@@ -577,11 +583,13 @@ def call_azure_ai(
             'messages': messages,
             'max_completion_tokens': max_tokens
         }
+        if is_foundry:
+            payload['model'] = deployment
         if temperature is not None:
             payload['temperature'] = temperature
         
-        # Long storyboards can exceed 30s; allow more headroom
-        response = requests.post(url, headers=headers, json=payload, timeout=120)
+        # Long storyboards can exceed 120s on large models; allow more headroom
+        response = requests.post(url, headers=headers, json=payload, timeout=300)
         
         # Handle model-specific parameter restrictions
         if response.status_code == 400:
@@ -593,7 +601,7 @@ def call_azure_ai(
                 if ('temperature' in error_msg) and ('not support' in error_msg or 'only the default' in error_msg):
                     # Try forcing temperature=1 first
                     payload['temperature'] = 1
-                    response = requests.post(url, headers=headers, json=payload, timeout=120)
+                    response = requests.post(url, headers=headers, json=payload, timeout=300)
                     if response.status_code == 400:
                         try:
                             error_data = response.json()
@@ -603,7 +611,7 @@ def call_azure_ai(
                     # If still failing due to temperature, remove parameter entirely
                     if response.status_code == 400 and 'temperature' in error_msg:
                         payload.pop('temperature', None)
-                        response = requests.post(url, headers=headers, json=payload, timeout=120)
+                        response = requests.post(url, headers=headers, json=payload, timeout=300)
                         if response.status_code == 400:
                             try:
                                 error_data = response.json()
@@ -615,13 +623,13 @@ def call_azure_ai(
                 if response.status_code == 400 and 'max_completion_tokens' in error_msg and 'not supported' in error_msg:
                     payload.pop('max_completion_tokens', None)
                     payload['max_tokens'] = max_tokens
-                    response = requests.post(url, headers=headers, json=payload, timeout=120)
-            except:
+                    response = requests.post(url, headers=headers, json=payload, timeout=300)
+            except Exception:
                 pass
         
         if response.status_code == 200:
             result = response.json()
-            content = result['choices'][0]['message']['content']
+            content = result.get('choices', [{}])[0].get('message', {}).get('content', '')
             return {
                 'success': True,
                 'content': content,
@@ -672,7 +680,11 @@ def call_azure_vision(config: dict, image_paths: list, prompt: str, system_messa
                 'error': f'Missing Azure AI configuration for profile "{profile}". Please configure settings.'
             }
         
-        url = f"{endpoint}/openai/deployments/{deployment}/chat/completions?api-version={api_version}"
+        is_foundry = endpoint.endswith('/v1') or '/v1/' in endpoint
+        if is_foundry:
+            url = f"{endpoint}/chat/completions"
+        else:
+            url = f"{endpoint}/openai/deployments/{deployment}/chat/completions?api-version={api_version}"
         
         headers = {
             'Content-Type': 'application/json',
@@ -726,8 +738,10 @@ def call_azure_vision(config: dict, image_paths: list, prompt: str, system_messa
             'messages': messages,
             'max_completion_tokens': 2000
         }
+        if is_foundry:
+            payload['model'] = deployment
         
-        response = requests.post(url, headers=headers, json=payload, timeout=60)
+        response = requests.post(url, headers=headers, json=payload, timeout=120)
         
         # Handle model-specific parameter restrictions
         if response.status_code == 400:
@@ -739,13 +753,13 @@ def call_azure_vision(config: dict, image_paths: list, prompt: str, system_messa
                 if 'max_completion_tokens' in error_msg and 'not supported' in error_msg:
                     payload.pop('max_completion_tokens', None)
                     payload['max_tokens'] = 2000
-                    response = requests.post(url, headers=headers, json=payload, timeout=60)
-            except:
+                    response = requests.post(url, headers=headers, json=payload, timeout=120)
+            except Exception:
                 pass
         
         if response.status_code == 200:
             result = response.json()
-            content = result['choices'][0]['message']['content']
+            content = result.get('choices', [{}])[0].get('message', {}).get('content', '')
             return {
                 'success': True,
                 'content': content,
@@ -790,16 +804,13 @@ def sanitize_image_prompt(prompt: str) -> str:
     """Sanitize image prompt to avoid Azure moderation blocks by replacing potentially problematic words."""
     # Replace words that might trigger moderation with safer alternatives
     replacements = {
-        # Color-related (often flagged when combined with certain contexts)
+        # Color-related specific phrases (handled before the generic word-boundary replace below)
         'black-glass': 'dark-glass',
+        'black wires sleep': 'dark wires rest',
         'black wires': 'dark wires',
         'black-and-blue': 'deep blue',
-        'black wires sleep': 'dark wires rest',
         'black-': 'dark-',
-        ' black ': ' dark ',
-        ' black,': ' dark,',
-        ' black.': ' dark.',
-        
+
         # Potentially violent/forceful language
         'compressing inward': 'contracting inward',
         'bending under invisible force': 'curving subtly',
@@ -808,27 +819,31 @@ def sanitize_image_prompt(prompt: str) -> str:
         'bending': 'curving',
         'under invisible force': 'subtly',
         'under force': 'subtly',
-        
+
         # Religious content (sometimes flagged)
         'praying': 'pleading',
         'cathedral-like': 'temple-like',
         'cathedral': 'temple',
-        
+
         # Other potentially problematic terms
-        'void': 'empty space',
         'deep void': 'vast empty space',
         'the void': 'empty space',
-        
+        'void': 'empty space',
+
         # Fear-related (can be flagged)
         'fear the future': 'worry about the future',
         'fear': 'concern',
     }
-    
+
     sanitized = prompt
     # Apply replacements in order (longer phrases first to avoid partial matches)
     for old, new in sorted(replacements.items(), key=lambda x: -len(x[0])):
         sanitized = sanitized.replace(old, new)
-    
+
+    # Generic word-boundary replace for standalone "black" / "Black" missed by the
+    # space-padded entries above (e.g. at start/end of string or before/after punctuation)
+    sanitized = re.sub(r'\bblack\b', 'dark', sanitized, flags=re.IGNORECASE)
+
     return sanitized
 
 
@@ -1901,7 +1916,7 @@ class SettingsDialog(tk.Toplevel):
                     self.general_vars['personas_path'].set(rel_path.replace('\\', '/'))
                 else:
                     self.general_vars['personas_path'].set(path)
-            except:
+            except Exception:
                 self.general_vars['personas_path'].set(path)
 
     def browse_styles_csv(self):
@@ -1923,7 +1938,7 @@ class SettingsDialog(tk.Toplevel):
                     self.general_vars['styles_csv_path'].set(rel_path.replace('\\', '/'))
                 else:
                     self.general_vars['styles_csv_path'].set(path)
-            except:
+            except Exception:
                 self.general_vars['styles_csv_path'].set(path)
     
     def add_profile(self):
@@ -2123,20 +2138,8 @@ def call_azure_audio_transcription(config: dict, audio_file_path: str, profile: 
         # Note: Azure OpenAI Whisper uses /openai/deployments/{deployment}/audio/transcriptions
         url = f"{endpoint}/openai/deployments/{deployment}/audio/transcriptions?api-version={api_version}"
         
-        # Debug logging
-        print(f'[DEBUG] Transcription URL: {url}')
-        print(f'[DEBUG] Endpoint: {endpoint}')
-        print(f'[DEBUG] Deployment: {deployment}')
-        print(f'[DEBUG] API Version: {api_version}')
-        print(f'[DEBUG] Audio file: {audio_file_path}')
-        
         headers = {
             'api-key': subscription_key
-        }
-        
-        # Prepare multipart form data
-        files = {
-            'file': (os.path.basename(audio_file_path), open(audio_file_path, 'rb'), 'audio/mpeg')
         }
         
         # Check if model is gpt-4o-transcribe (uses different API format)
@@ -2145,7 +2148,6 @@ def call_azure_audio_transcription(config: dict, audio_file_path: str, profile: 
         if is_gpt4o_transcribe:
             # gpt-4o-transcribe uses 'json' format but still supports timestamp_granularities
             actual_response_format = 'json'
-            print(f'[DEBUG] Using gpt-4o-transcribe model - requesting word-level timestamps')
         else:
             # Standard Whisper models use verbose_json for timestamps
             actual_response_format = 'verbose_json' if response_format == 'verbose_json' else 'json'
@@ -2170,26 +2172,20 @@ def call_azure_audio_transcription(config: dict, audio_file_path: str, profile: 
         if prompt:
             data.append(('prompt', prompt))
         
-        print(f'[DEBUG] Request data: {data}')
-        print(f'[DEBUG] Actual response format: {actual_response_format}')
-        print(f'[DEBUG] File size: {os.path.getsize(audio_file_path)} bytes')
-        
-        response = requests.post(url, headers=headers, files=files, data=data, timeout=300)
-        files['file'][1].close()  # Close the file
-        
-        print(f'[DEBUG] Response status: {response.status_code}')
-        print(f'[DEBUG] Response headers: {dict(response.headers)}')
+        # Prepare multipart form data inside a with-block so the handle is always closed
+        with open(audio_file_path, 'rb') as audio_f:
+            files = {
+                'file': (os.path.basename(audio_file_path), audio_f, 'audio/mpeg')
+            }
+            response = requests.post(url, headers=headers, files=files, data=data, timeout=300)
         
         if response.status_code == 200:
             result = response.json()
-            print(f'[DEBUG] Response JSON keys: {list(result.keys()) if isinstance(result, dict) else "Not a dict"}')
             
             # Extract common fields - both verbose_json and gpt-4o-transcribe json can have these
             text = result.get('text', '') if isinstance(result, dict) else str(result)
             segments = result.get('segments', []) if isinstance(result, dict) else []
             words = result.get('words', []) if isinstance(result, dict) else []
-            
-            print(f'[DEBUG] Found {len(words)} words, {len(segments)} segments')
             
             # Format lyrics with timestamps
             lyrics_lines = []
@@ -2232,16 +2228,13 @@ def call_azure_audio_transcription(config: dict, audio_file_path: str, profile: 
             error_msg = f'API error {response.status_code}'
             try:
                 error_json = response.json()
-                print(f'[DEBUG] Error response JSON: {error_json}')
                 error_detail = error_json.get('error', {})
                 if isinstance(error_detail, dict):
                     error_msg = f'{error_msg}: {error_detail.get("message", error_detail.get("code", str(error_detail)))}'
                 else:
                     error_msg = f'{error_msg}: {str(error_detail)}'
-            except:
-                error_text = response.text[:500]
-                print(f'[DEBUG] Error response text: {error_text}')
-                error_msg = f'{error_msg}: {error_text}'
+            except Exception:
+                error_msg = f'{error_msg}: {response.text[:500]}'
             
             return {
                 'success': False,
@@ -2318,12 +2311,6 @@ def call_azure_speech_transcription(config: dict, audio_file_path: str, profile:
         # Azure Speech Services transcription endpoint
         url = f"{endpoint}/speechtotext/transcriptions:transcribe?api-version={api_version}"
         
-        print(f'[DEBUG] Azure Speech Transcription URL: {url}')
-        print(f'[DEBUG] Endpoint: {endpoint}')
-        print(f'[DEBUG] API Version: {api_version}')
-        print(f'[DEBUG] Audio file: {audio_file_path}')
-        print(f'[DEBUG] Language: {language}')
-        
         headers = {
             'Ocp-Apim-Subscription-Key': subscription_key
         }
@@ -2348,7 +2335,6 @@ def call_azure_speech_transcription(config: dict, audio_file_path: str, profile:
             "wordLevelTimestampsEnabled": True
         }
         
-        print(f'[DEBUG] Definition: {json.dumps(definition)}')
         
         with open(audio_file_path, 'rb') as audio_file:
             files = {
@@ -2358,12 +2344,8 @@ def call_azure_speech_transcription(config: dict, audio_file_path: str, profile:
             
             response = requests.post(url, headers=headers, files=files, timeout=600)
         
-        print(f'[DEBUG] Response status: {response.status_code}')
-        print(f'[DEBUG] Response headers: {dict(response.headers)}')
-        
         if response.status_code == 200:
             result = response.json()
-            print(f'[DEBUG] Response JSON keys: {list(result.keys()) if isinstance(result, dict) else "Not a dict"}')
             
             # Parse Azure Speech response format
             # The response contains 'combinedPhrases' and 'phrases' with word-level timing
@@ -2412,8 +2394,6 @@ def call_azure_speech_transcription(config: dict, audio_file_path: str, profile:
                         'end': word_end
                     })
             
-            print(f'[DEBUG] Found {len(words)} words, {len(segments)} segments')
-            
             # Format lyrics with timestamps
             lyrics_lines = []
             if words:
@@ -2452,16 +2432,13 @@ def call_azure_speech_transcription(config: dict, audio_file_path: str, profile:
             error_msg = f'API error {response.status_code}'
             try:
                 error_json = response.json()
-                print(f'[DEBUG] Error response JSON: {error_json}')
                 error_detail = error_json.get('error', {})
                 if isinstance(error_detail, dict):
                     error_msg = f'{error_msg}: {error_detail.get("message", error_detail.get("code", str(error_detail)))}'
                 else:
                     error_msg = f'{error_msg}: {str(error_detail)}'
-            except:
-                error_text = response.text[:500]
-                print(f'[DEBUG] Error response text: {error_text}')
-                error_msg = f'{error_msg}: {error_text}'
+            except Exception:
+                error_msg = f'{error_msg}: {response.text[:500]}'
             
             return {
                 'success': False,
@@ -2715,6 +2692,7 @@ def call_azure_video(config: dict, prompt: str, size: str = '720x1280', seconds:
             if api_version and 'api-version=' not in status_url:
                 status_url += f"?api-version={api_version}"
 
+            poll_json = job  # initialise so it is always defined even if loop never runs
             start_time = time.time()
             while status not in ['succeeded', 'failed'] and (time.time() - start_time) < 300:
                 time.sleep(5)
@@ -2815,7 +2793,6 @@ def backup_file_if_exists(file_path: str) -> str | None:
         return None
     
     try:
-        import datetime
         timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
         base, ext = os.path.splitext(file_path)
         backup_path = f"{base}_backup_{timestamp}{ext}"
@@ -3095,7 +3072,6 @@ class SunoPersona(tk.Tk):
     
     def log_debug(self, level: str, message: str):
         """Log a debug/info message."""
-        import datetime
         timestamp = datetime.datetime.now().strftime('%H:%M:%S')
         
         # Ensure message is a proper string and handle encoding issues
@@ -8204,7 +8180,7 @@ TECHNICAL REQUIREMENTS:
                 if os.path.exists(new_song_path):
                     try:
                         shutil.rmtree(new_song_path)
-                    except:
+                    except Exception:
                         pass
     
     def create_full_album_ai(self):
@@ -8878,7 +8854,6 @@ TECHNICAL REQUIREMENTS:
             return None
         
         try:
-            import datetime
             # Create backup filename with timestamp
             base, ext = os.path.splitext(filepath)
             timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -15541,7 +15516,6 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
             return
         try:
             os.makedirs(song_path, exist_ok=True)
-            import datetime
             timestamp = datetime.datetime.now()
             filename = os.path.join(song_path, f'storyboard_response_{timestamp.strftime("%Y%m%d_%H%M%S")}.json')
             persona_name = ''
@@ -15660,7 +15634,6 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
             return
         try:
             os.makedirs(song_path, exist_ok=True)
-            import datetime
             timestamp = datetime.datetime.now()
             filename = os.path.join(song_path, f'storyboard_prompt_{timestamp.strftime("%Y%m%d_%H%M%S")}.txt')
             data = {
@@ -15926,12 +15899,12 @@ CRITICAL: Format each scene with sub-scene timestamps like this:
                 font_size = max(24, int(height / 30))  # Scale font size with image height
                 try:
                     font = ImageFont.truetype("arial.ttf", font_size)
-                except:
+                except Exception:
                     try:
                         font = ImageFont.truetype("C:/Windows/Fonts/arial.ttf", font_size)
-                    except:
+                    except Exception:
                         font = ImageFont.load_default()
-            except:
+            except Exception:
                 font = ImageFont.load_default()
             
             # Prepare text - wrap long lines

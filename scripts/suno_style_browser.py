@@ -883,7 +883,12 @@ def call_azure_ai(config: dict, prompt: str, system_message: str = None, profile
         
         # All profiles use chat completions API for generating text prompts
         # Different profiles allow using different Azure deployments/models
-        url = f"{endpoint}/openai/deployments/{deployment}/chat/completions?api-version={api_version}"
+        # Azure AI Foundry /v1 endpoints are OpenAI-compatible and do not accept api-version
+        is_foundry = endpoint.endswith('/v1') or '/v1/' in endpoint
+        if is_foundry:
+            url = f"{endpoint}/chat/completions"
+        else:
+            url = f"{endpoint}/openai/deployments/{deployment}/chat/completions?api-version={api_version}"
         
         headers = {
             'Content-Type': 'application/json',
@@ -900,6 +905,8 @@ def call_azure_ai(config: dict, prompt: str, system_message: str = None, profile
             'temperature': 0.7,
             'max_tokens': 2000
         }
+        if is_foundry:
+            payload['model'] = deployment
         
         response = requests.post(url, headers=headers, json=payload, timeout=30)
         
