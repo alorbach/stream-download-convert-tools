@@ -1,5 +1,6 @@
 """
-Song Style Analyzer - Analyze songs for generative conditioning using Azure Whisper API
+Song Style Analyzer - Analyze songs for generative conditioning using Azure Speech
+or OpenAI transcription, then style via Azure OpenAI (text or audio+text multimodal).
 
 Copyright 2025 Andre Lorbach
 
@@ -18,6 +19,7 @@ limitations under the License.
 
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
+import base64
 import os
 import sys
 import json
@@ -58,10 +60,26 @@ def get_config_path() -> str:
     return os.path.join(script_dir, 'suno_persona_config.json')
 
 
+def save_config(config: dict) -> bool:
+    """Write configuration to suno_persona_config.json (shared with suno_persona)."""
+    config_path = get_config_path()
+    try:
+        with open(config_path, 'w', encoding='utf-8') as f:
+            json.dump(config, f, indent=4)
+        return True
+    except Exception as exc:
+        print(f'Config Error: Failed to save config:\n{exc}')
+        return False
+
+
 def load_config() -> dict:
     """Load configuration from JSON file, create default if it doesn't exist."""
     config_path = get_config_path()
     default_config = {
+        "transcription_service": "speech",
+        "song_style_analyzer": {
+            "use_audio_for_style_analysis": True
+        },
         "general": {
             "personas_path": "AI/Personas",
             "default_save_path": "",
@@ -81,6 +99,13 @@ def load_config() -> dict:
                 "deployment": "whisper-1",
                 "subscription_key": "<your-api-key>",
                 "api_version": "2024-12-01-preview"
+            },
+            "speech": {
+                "endpoint": "https://your-endpoint.cognitiveservices.azure.com/",
+                "model_name": "",
+                "deployment": "",
+                "subscription_key": "<your-api-key>",
+                "api_version": "2025-10-15"
             }
         }
     }
@@ -102,6 +127,14 @@ def load_config() -> dict:
                                 for setting_key in default_config['profiles'][profile_name]:
                                     if setting_key not in config['profiles'][profile_name]:
                                         config['profiles'][profile_name][setting_key] = default_config['profiles'][profile_name][setting_key]
+                    elif key == 'general' and isinstance(config[key], dict):
+                        for sub_key in default_config['general']:
+                            if sub_key not in config[key]:
+                                config[key][sub_key] = default_config['general'][sub_key]
+                    elif key == 'song_style_analyzer' and isinstance(config[key], dict):
+                        for sub_key in default_config['song_style_analyzer']:
+                            if sub_key not in config[key]:
+                                config[key][sub_key] = default_config['song_style_analyzer'][sub_key]
                 return config
         except Exception as exc:
             print(f'Config Error: Failed to load config:\n{exc}')
@@ -113,6 +146,62 @@ def load_config() -> dict:
         except Exception as exc:
             print(f'Config Error: Failed to create config:\n{exc}')
         return default_config
+
+
+def _sanitize_filename_part(name: str) -> str:
+    if not name:
+        return ''
+    bad = '<>:"/\\|?*\n\r\t'
+    out = ''.join(c if c not in bad else '_' for c in str(name))
+    return out.strip(' .')
+
+
+def build_export_suggested_filename(artist: str, album: str, extension: str) -> str:
+    """Build a Windows-safe base filename Artist_Album.ext (album omitted if empty)."""
+    ap = _sanitize_filename_part(artist or '')
+    al = _sanitize_filename_part(album or '')
+    if ap and al:
+        base = f'{ap}_{al}'
+    elif ap:
+        base = ap
+    elif al:
+        base = al
+    else:
+        base = 'song_style_export'
+    base = re.sub(r'_+', '_', base).strip('_') or 'song_style_export'
+    ext = extension if extension.startswith('.') else f'.{extension}'
+    return f'{base}{ext}'
+
+
+def _profile_key_configured(profile: dict, mode: str) -> bool:
+    """mode: 'speech' (endpoint + key) or 'transcribe' (endpoint + deployment + key)."""
+    if not profile:
+        return False
+    key = (profile.get('subscription_key') or '').strip()
+    if not key or key == '<your-api-key>':
+        return False
+    endpoint = (profile.get('endpoint') or '').strip()
+    if not endpoint:
+        return False
+    if mode == 'transcribe':
+        deployment = (profile.get('deployment') or '').strip()
+        return bool(deployment)
+    return True
+
+
+def _azure_openai_resource_base(endpoint_raw: str) -> str:
+    """Strip /openai/deployments/... from pasted Azure OpenAI URLs; keep Foundry /v1 bases unchanged."""
+    e = (endpoint_raw or '').strip().rstrip('/')
+    if not e:
+        return e
+    el = e.lower()
+    if el.endswith('/v1') or '/v1/' in el:
+        return e
+    marker = '/openai/'
+    if marker in el:
+        i = el.index(marker)
+        return e[:i].rstrip('/')
+    return e
 
 
 def call_azure_ai(
@@ -167,10 +256,14 @@ def call_azure_ai(
             return error_result
         
         profile_config = profiles[profile]
-        endpoint = profile_config.get('endpoint', '').rstrip('/')
+        endpoint_raw = (profile_config.get('endpoint', '') or '').strip().rstrip('/')
+        endpoint = _azure_openai_resource_base(endpoint_raw)
         deployment = profile_config.get('deployment', '')
         api_version = profile_config.get('api_version', '2024-12-01-preview')
         subscription_key = profile_config.get('subscription_key', '')
+
+        if endpoint_raw != endpoint:
+            debug_log(f"Normalized endpoint {endpoint_raw!r} -> {endpoint!r}")
         
         if not all([endpoint, deployment, subscription_key]):
             error_result = {
@@ -180,8 +273,21 @@ def call_azure_ai(
             }
             debug_log(f"=== ERROR: {error_result['error']} ===")
             return error_result
-        
-        url = f"{endpoint}/openai/deployments/{deployment}/chat/completions?api-version={api_version}"
+
+        if profile == 'text' and _text_profile_requires_audio_input(config):
+            msg = (
+                'This text deployment is an audio model (e.g. gpt-audio). It does not accept text-only chat. '
+                'Use audio+text style analysis (enabled automatically when deployment name matches).'
+            )
+            debug_log(f"=== ERROR: {msg} ===")
+            return {'success': False, 'content': '', 'error': msg}
+
+        # Azure AI Foundry OpenAI-compatible base (no api-version on URL; model in body)
+        is_foundry = endpoint.endswith('/v1') or '/v1/' in endpoint
+        if is_foundry:
+            url = f"{endpoint.rstrip('/')}/chat/completions"
+        else:
+            url = f"{endpoint}/openai/deployments/{deployment}/chat/completions?api-version={api_version}"
         debug_log(f"API URL: {url}")
         
         headers = {
@@ -198,6 +304,8 @@ def call_azure_ai(
             'messages': messages,
             'max_completion_tokens': max_tokens
         }
+        if is_foundry:
+            payload['model'] = deployment
         # Only add temperature if it's not None and not 1 (some models only support default value of 1)
         # For models that don't support temperature, we'll omit it
         if temperature is not None and temperature != 1:
@@ -225,15 +333,18 @@ def call_azure_ai(
         
         if response.status_code == 200:
             result = response.json()
-            content = result.get('choices', [{}])[0].get('message', {}).get('content', '')
-            
+            msg = (result.get('choices') or [{}])[0].get('message') or {}
+            if msg.get('refusal'):
+                return {'success': False, 'content': '', 'error': f"Model refusal: {msg.get('refusal')}"}
+            content = _assistant_message_text(msg, debug_log)
+
             # Log the full response
             debug_log("=" * 80)
             debug_log("=== AZURE AI RESPONSE (SUCCESS) ===")
             debug_log(f"--- RESPONSE CONTENT ({len(content)} chars) ---")
             debug_log(content)
             debug_log("=" * 80)
-            
+
             return {
                 'success': True,
                 'content': content,
@@ -279,6 +390,271 @@ def call_azure_ai(
             'content': '',
             'error': error_msg
         }
+
+
+# Azure / OpenAI chat multimodal: max audio payload guidance (docs often cite ~20 MB).
+MAX_AUDIO_STYLE_BYTES = 20 * 1024 * 1024
+
+
+def _audio_format_for_chat_path(file_path: str) -> str:
+    ext = os.path.splitext(file_path)[1].lower().lstrip('.')
+    if ext in ('mp3', 'wav', 'flac', 'aac', 'opus', 'm4a'):
+        if ext == 'm4a':
+            return 'mp4'
+        return ext
+    return 'mp3'
+
+
+def _message_content_to_text(content) -> str:
+    if content is None:
+        return ''
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict):
+                if block.get('type') == 'text':
+                    parts.append(block.get('text', ''))
+                elif block.get('type') == 'output_text':
+                    parts.append(block.get('text', '') or block.get('output_text', ''))
+                elif 'text' in block:
+                    parts.append(str(block.get('text', '')))
+            elif isinstance(block, str):
+                parts.append(block)
+        return ''.join(parts)
+    return str(content)
+
+
+def _assistant_message_text(message: dict, debug_logger=None) -> str:
+    """Extract assistant text from chat message; gpt-audio may use varied content shapes."""
+    if not message:
+        return ''
+    raw = message.get('content')
+    text = _message_content_to_text(raw).strip()
+    if text:
+        return text
+    if isinstance(raw, list):
+        buf = []
+        for block in raw:
+            if not isinstance(block, dict):
+                continue
+            t = (block.get('type') or '').lower()
+            if t in ('text', 'output_text'):
+                buf.append(block.get('text') or '')
+            if block.get('text') and not buf:
+                buf.append(str(block.get('text')))
+        text = ''.join(buf).strip()
+        if text:
+            return text
+    for key in ('text', 'output_text'):
+        v = message.get(key)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    if debug_logger:
+        try:
+            slim = {k: message[k] for k in message.keys() if k != 'audio'}
+            debug_logger(
+                'Assistant message has no text content. keys=%s preview=%s'
+                % (list(message.keys()), json.dumps(slim, default=str)[:2500])
+            )
+        except Exception as exc:
+            debug_logger(f'Assistant message dump failed: {exc}')
+    return ''
+
+
+def _text_profile_requires_audio_input(config: dict) -> bool:
+    """gpt-audio / 4o-audio chat models reject text-only messages."""
+    p = config.get('profiles', {}).get('text') or {}
+    dep = ((p.get('deployment') or '') + ' ' + (p.get('model_name') or '')).lower()
+    return (
+        'gpt-audio' in dep
+        or '4o-audio' in dep
+        or 'audio-preview' in dep
+    )
+
+
+def empty_style_analysis_dict() -> dict:
+    return {
+        "prompt_string": "",
+        "taxonomy": {
+            "primary_genre": "",
+            "sub_genre": "",
+            "fusion_tags": [],
+            "mood": "",
+            "instrumentation": [],
+            "production_quality": ""
+        },
+        "suno_style_prompt": "",
+        "negative_prompt": ""
+    }
+
+
+def call_azure_ai_with_audio(
+    config: dict,
+    audio_file_path: str,
+    text_prompt: str,
+    system_message: str = None,
+    profile: str = 'text',
+    max_tokens: int = 4000,
+    temperature=None,
+    debug_logger=None,
+    request_timeout: int = 420,
+) -> dict:
+    """Chat completions with input_audio (gpt-audio, etc.) plus text. Returns same shape as call_azure_ai."""
+
+    def debug_log(msg):
+        if debug_logger:
+            debug_logger(msg)
+
+    debug_log('=' * 80)
+    debug_log('=== AZURE AI MULTIMODAL (audio + text) REQUEST ===')
+    debug_log(f'Profile: {profile}  file: {os.path.basename(audio_file_path)}')
+
+    try:
+        if not os.path.isfile(audio_file_path):
+            return {'success': False, 'content': '', 'error': f'Audio file not found: {audio_file_path}'}
+
+        file_size = os.path.getsize(audio_file_path)
+        if file_size > MAX_AUDIO_STYLE_BYTES:
+            return {
+                'success': False,
+                'content': '',
+                'error': f'Audio too large ({file_size} bytes). Max {MAX_AUDIO_STYLE_BYTES} bytes for chat input.',
+            }
+
+        with open(audio_file_path, 'rb') as f:
+            raw = f.read()
+        b64 = base64.standard_b64encode(raw).decode('ascii')
+        audio_fmt = _audio_format_for_chat_path(audio_file_path)
+
+        profiles = config.get('profiles', {})
+        if profile not in profiles:
+            return {'success': False, 'content': '', 'error': f'Profile "{profile}" not found in configuration.'}
+
+        profile_config = profiles[profile]
+        endpoint_raw = (profile_config.get('endpoint', '') or '').strip().rstrip('/')
+        endpoint = _azure_openai_resource_base(endpoint_raw)
+        deployment = profile_config.get('deployment', '')
+        api_version = profile_config.get('api_version', '2024-12-01-preview')
+        subscription_key = profile_config.get('subscription_key', '')
+
+        if endpoint_raw != endpoint:
+            debug_log(f'Normalized endpoint {endpoint_raw!r} -> {endpoint!r}')
+
+        if not all([endpoint, deployment, subscription_key]):
+            return {
+                'success': False,
+                'content': '',
+                'error': f'Missing Azure AI configuration for profile "{profile}".',
+            }
+
+        is_foundry = endpoint.endswith('/v1') or '/v1/' in endpoint
+        if is_foundry:
+            url = f"{endpoint.rstrip('/')}/chat/completions"
+        else:
+            url = f"{endpoint}/openai/deployments/{deployment}/chat/completions?api-version={api_version}"
+        debug_log(f'API URL: {url}')
+
+        headers = {'Content-Type': 'application/json', 'api-key': subscription_key}
+
+        user_content = [
+            {'type': 'text', 'text': text_prompt},
+            {'type': 'input_audio', 'input_audio': {'data': b64, 'format': audio_fmt}},
+        ]
+
+        messages = []
+        if system_message:
+            messages.append({'role': 'system', 'content': system_message})
+        messages.append({'role': 'user', 'content': user_content})
+
+        # Text-only output: gpt-audio often leaves message.content empty if output audio is requested.
+        base_payload = {
+            'messages': messages,
+            'max_completion_tokens': max_tokens,
+            'modalities': ['text'],
+        }
+        if is_foundry:
+            base_payload['model'] = deployment
+        if temperature is not None and temperature != 1:
+            base_payload['temperature'] = temperature
+
+        def do_post(body):
+            return requests.post(url, headers=headers, json=body, timeout=request_timeout)
+
+        work = dict(base_payload)
+        response = do_post(work)
+
+        if response.status_code == 400:
+            try:
+                err_snip = response.text.lower()
+            except Exception:
+                err_snip = ''
+            if any(
+                s in err_snip
+                for s in ('modality', 'modalities', 'output modality', 'audio', 'requires')
+            ):
+                debug_log('Retrying with text+audio output modalities (API requirement)...')
+                work = dict(base_payload)
+                work['modalities'] = ['text', 'audio']
+                work['audio'] = {'voice': 'alloy', 'format': 'mp3'}
+                response = do_post(work)
+
+        if response.status_code == 400 and work.get('temperature') is not None:
+            try:
+                err_json = response.json()
+                em = str((err_json.get('error') or {}).get('message', '')).lower()
+                if 'temperature' in em:
+                    debug_log('Retrying without temperature...')
+                    work = dict(work)
+                    work.pop('temperature', None)
+                    response = do_post(work)
+            except Exception:
+                pass
+
+        if response.status_code == 200:
+            result = response.json()
+            msg = (result.get('choices') or [{}])[0].get('message') or {}
+            if msg.get('refusal'):
+                return {'success': False, 'content': '', 'error': f"Model refusal: {msg.get('refusal')}"}
+            content = _assistant_message_text(msg, debug_log)
+            if not (content or '').strip() and work.get('modalities') == ['text']:
+                debug_log('Empty assistant text with text-only modalities; one retry with text+audio output...')
+                work_alt = dict(base_payload)
+                if is_foundry:
+                    work_alt['model'] = deployment
+                if temperature is not None and temperature != 1:
+                    work_alt['temperature'] = temperature
+                work_alt['modalities'] = ['text', 'audio']
+                work_alt['audio'] = {'voice': 'alloy', 'format': 'mp3'}
+                r_alt = do_post(work_alt)
+                if r_alt.status_code == 200:
+                    result = r_alt.json()
+                    msg = (result.get('choices') or [{}])[0].get('message') or {}
+                    if msg.get('refusal'):
+                        return {'success': False, 'content': '', 'error': f"Model refusal: {msg.get('refusal')}"}
+                    content = _assistant_message_text(msg, debug_log)
+            debug_log('=== AZURE AI MULTIMODAL RESPONSE (SUCCESS) ===')
+            debug_log(content[:8000] if len(content) > 8000 else (content or '(empty)'))
+            return {'success': True, 'content': content, 'error': ''}
+
+        error_msg = f'API error {response.status_code}'
+        try:
+            error_json = response.json()
+            error_detail = error_json.get('error', {})
+            if isinstance(error_detail, dict):
+                error_msg = f"{error_msg}: {error_detail.get('message', error_detail.get('code', str(error_detail)))}"
+            else:
+                error_msg = f'{error_msg}: {str(error_detail)}'
+        except Exception:
+            error_msg = f'{error_msg}: {response.text[:800]}'
+        debug_log(f'=== MULTIMODAL ERROR: {error_msg}')
+        return {'success': False, 'content': '', 'error': error_msg}
+
+    except requests.exceptions.RequestException as e:
+        return {'success': False, 'content': '', 'error': f'Request error: {str(e)}'}
+    except Exception as e:
+        return {'success': False, 'content': '', 'error': f'Unexpected error: {str(e)}'}
 
 
 def call_azure_audio_transcription(config: dict, audio_file_path: str, profile: str = 'transcribe', language: str = None, response_format: str = 'json', prompt: str = None) -> dict:
@@ -398,6 +774,303 @@ def call_azure_audio_transcription(config: dict, audio_file_path: str, profile: 
         }
 
 
+def call_azure_speech_transcription(config: dict, audio_file_path: str, profile: str = 'speech', language: str = 'en-US') -> dict:
+    """Call Azure Cognitive Services Speech-to-Text API (batch transcribe with timestamps).
+
+    Returns dict with success, content (timestamped lines), text (plain combined), words, segments, error.
+    """
+    try:
+        if not os.path.exists(audio_file_path):
+            return {
+                'success': False,
+                'content': '',
+                'text': '',
+                'words': [],
+                'segments': [],
+                'error': f'Audio file not found: {audio_file_path}'
+            }
+
+        profiles = config.get('profiles', {})
+        if profile not in profiles:
+            return {
+                'success': False,
+                'content': '',
+                'text': '',
+                'words': [],
+                'segments': [],
+                'error': f'Profile "{profile}" not found in configuration.'
+            }
+
+        profile_config = profiles[profile]
+        endpoint = profile_config.get('endpoint', '').rstrip('/')
+        subscription_key = profile_config.get('subscription_key', '')
+        api_version = profile_config.get('api_version', '2024-11-15')
+
+        if not all([endpoint, subscription_key]):
+            return {
+                'success': False,
+                'content': '',
+                'text': '',
+                'words': [],
+                'segments': [],
+                'error': f'Missing Azure Speech configuration for profile "{profile}". Please configure endpoint and subscription_key.'
+            }
+
+        url = f"{endpoint}/speechtotext/transcriptions:transcribe?api-version={api_version}"
+
+        headers = {
+            'Ocp-Apim-Subscription-Key': subscription_key
+        }
+
+        ext = os.path.splitext(audio_file_path)[1].lower()
+        content_type_map = {
+            '.wav': 'audio/wav',
+            '.mp3': 'audio/mpeg',
+            '.mp4': 'audio/mp4',
+            '.m4a': 'audio/mp4',
+            '.ogg': 'audio/ogg',
+            '.flac': 'audio/flac'
+        }
+        content_type = content_type_map.get(ext, 'audio/mpeg')
+
+        definition = {
+            "locales": [language],
+            "profanityFilterMode": "None",
+            "wordLevelTimestampsEnabled": True
+        }
+
+        with open(audio_file_path, 'rb') as audio_file:
+            files = {
+                'audio': (os.path.basename(audio_file_path), audio_file, content_type),
+                'definition': (None, json.dumps(definition), 'application/json')
+            }
+
+            response = requests.post(url, headers=headers, files=files, timeout=600)
+
+        if response.status_code == 200:
+            result = response.json()
+
+            combined_text = ''
+            words = []
+            segments = []
+
+            combined_phrases = result.get('combinedPhrases', [])
+            if combined_phrases:
+                combined_text = ' '.join([p.get('text', '') for p in combined_phrases])
+
+            phrases = result.get('phrases', [])
+            for phrase in phrases:
+                phrase_text = phrase.get('text', '')
+                offset_ms = phrase.get('offsetMilliseconds', 0)
+                duration_ms = phrase.get('durationMilliseconds', 0)
+
+                start_seconds = offset_ms / 1000.0
+                end_seconds = start_seconds + (duration_ms / 1000.0)
+
+                segments.append({
+                    'text': phrase_text,
+                    'start': start_seconds,
+                    'end': end_seconds
+                })
+
+                phrase_words = phrase.get('words', [])
+                for word_info in phrase_words:
+                    word_text = word_info.get('text', '')
+                    word_offset_ms = word_info.get('offsetMilliseconds', 0)
+                    word_duration_ms = word_info.get('durationMilliseconds', 0)
+
+                    word_start = word_offset_ms / 1000.0
+                    word_end = word_start + (word_duration_ms / 1000.0)
+
+                    words.append({
+                        'word': word_text,
+                        'start': word_start,
+                        'end': word_end
+                    })
+
+            lyrics_lines = []
+            if words:
+                for word_info in words:
+                    word = word_info.get('word', '')
+                    start = word_info.get('start', 0)
+
+                    minutes = int(start // 60)
+                    seconds = int(start % 60)
+                    milliseconds = int((start % 1) * 1000)
+                    timestamp = f"[{minutes:02d}:{seconds:02d}.{milliseconds:03d}]"
+                    lyrics_lines.append(f"{timestamp} {word}")
+            elif segments:
+                for segment in segments:
+                    text_seg = segment.get('text', '').strip()
+                    start = segment.get('start', 0)
+                    if text_seg:
+                        minutes = int(start // 60)
+                        seconds = int(start % 60)
+                        milliseconds = int((start % 1) * 1000)
+                        timestamp = f"[{minutes:02d}:{seconds:02d}.{milliseconds:03d}]"
+                        lyrics_lines.append(f"{timestamp} {text_seg}")
+
+            formatted_lyrics = '\n'.join(lyrics_lines) if lyrics_lines else combined_text
+
+            return {
+                'success': True,
+                'content': formatted_lyrics,
+                'text': combined_text,
+                'segments': segments,
+                'words': words,
+                'raw_json': result,
+                'error': ''
+            }
+        else:
+            error_msg = f'API error {response.status_code}'
+            try:
+                error_json = response.json()
+                error_detail = error_json.get('error', {})
+                if isinstance(error_detail, dict):
+                    error_msg = f'{error_msg}: {error_detail.get("message", error_detail.get("code", str(error_detail)))}'
+                else:
+                    error_msg = f'{error_msg}: {str(error_detail)}'
+            except Exception:
+                error_msg = f'{error_msg}: {response.text[:500]}'
+
+            return {
+                'success': False,
+                'content': '',
+                'text': '',
+                'words': [],
+                'segments': [],
+                'error': error_msg
+            }
+
+    except requests.exceptions.RequestException as e:
+        return {
+            'success': False,
+            'content': '',
+            'text': '',
+            'words': [],
+            'segments': [],
+            'error': f'Request error: {str(e)}'
+        }
+    except Exception as e:
+        return {
+            'success': False,
+            'content': '',
+            'text': '',
+            'words': [],
+            'segments': [],
+            'error': f'Unexpected error: {str(e)}'
+        }
+
+
+class SongStyleProfileSettingsDialog(tk.Toplevel):
+    """Edit Azure profiles used by this tool (text, transcribe, speech) in suno_persona_config.json."""
+
+    _PROFILE_TABS = (
+        ('text', 'text (style analysis)'),
+        ('transcribe', 'transcribe (Whisper)'),
+        ('speech', 'speech (Azure STT)'),
+    )
+
+    def __init__(self, parent, app: 'SongStyleAnalyzerGUI'):
+        super().__init__(parent)
+        self.app = app
+        self.title('Song Style Analyzer - Profile settings')
+        self.geometry('720x420')
+        self.minsize(600, 360)
+        self.transient(parent)
+        self.grab_set()
+
+        self._vars = {}
+
+        main = ttk.Frame(self, padding=10)
+        main.pack(fill='both', expand=True)
+
+        nb = ttk.Notebook(main)
+        nb.pack(fill='both', expand=True)
+
+        profiles = app.ai_config.setdefault('profiles', {})
+
+        for profile_key, tab_title in self._PROFILE_TABS:
+            tab = ttk.Frame(nb, padding=10)
+            nb.add(tab, text=tab_title)
+
+            pdata = profiles.get(profile_key, {})
+            v = {
+                'endpoint': tk.StringVar(value=pdata.get('endpoint', '') or ''),
+                'model_name': tk.StringVar(value=pdata.get('model_name', '') or ''),
+                'deployment': tk.StringVar(value=pdata.get('deployment', '') or ''),
+                'subscription_key': tk.StringVar(value=pdata.get('subscription_key', '') or ''),
+                'api_version': tk.StringVar(value=pdata.get('api_version', '') or ''),
+            }
+            self._vars[profile_key] = v
+
+            r = 0
+            if profile_key == 'text':
+                hint = (
+                    'Chat completions for style (after transcription). For gpt-audio: set deployment id; '
+                    'under Options enable sending the audio file (input_audio). '
+                    'Endpoint = resource base only, e.g. https://YOUR_RESOURCE.openai.azure.com '
+                    '(not .../openai/deployments/.../chat/). Foundry: base URL ending in /v1.'
+                )
+                hl = ttk.Label(tab, text=hint, wraplength=660, foreground='gray')
+                hl.grid(row=r, column=0, columnspan=2, sticky='w', pady=(0, 10))
+                r += 1
+
+            ttk.Label(tab, text='Endpoint:').grid(row=r, column=0, sticky='nw', pady=4)
+            ttk.Entry(tab, textvariable=v['endpoint'], width=72).grid(row=r, column=1, sticky='ew', pady=4)
+            r += 1
+
+            ttk.Label(tab, text='Model name:').grid(row=r, column=0, sticky='w', pady=4)
+            ttk.Entry(tab, textvariable=v['model_name'], width=72).grid(row=r, column=1, sticky='ew', pady=4)
+            r += 1
+
+            ttk.Label(tab, text='Deployment:').grid(row=r, column=0, sticky='w', pady=4)
+            ttk.Entry(tab, textvariable=v['deployment'], width=72).grid(row=r, column=1, sticky='ew', pady=4)
+            r += 1
+
+            ttk.Label(tab, text='Subscription key:').grid(row=r, column=0, sticky='w', pady=4)
+            ttk.Entry(tab, textvariable=v['subscription_key'], width=72, show='*').grid(row=r, column=1, sticky='ew', pady=4)
+            r += 1
+
+            ttk.Label(tab, text='API version:').grid(row=r, column=0, sticky='w', pady=4)
+            ttk.Entry(tab, textvariable=v['api_version'], width=72).grid(row=r, column=1, sticky='ew', pady=4)
+            r += 1
+
+            tab.columnconfigure(1, weight=1)
+
+        bf = ttk.Frame(main)
+        bf.pack(fill='x', pady=(10, 0))
+        ttk.Button(bf, text='Save', command=self._on_save).pack(side='right', padx=4)
+        ttk.Button(bf, text='Cancel', command=self.destroy).pack(side='right', padx=4)
+        ttk.Label(
+            bf,
+            text='Writes to scripts/suno_persona_config.json (shared with Suno Persona).',
+            foreground='gray'
+        ).pack(side='left')
+
+    def _on_save(self):
+        profiles = self.app.ai_config.setdefault('profiles', {})
+        for profile_key, _title in self._PROFILE_TABS:
+            v = self._vars[profile_key]
+            ep = v['endpoint'].get().strip()
+            ep = _azure_openai_resource_base(ep)
+            profiles[profile_key] = {
+                'endpoint': ep,
+                'model_name': v['model_name'].get().strip(),
+                'deployment': v['deployment'].get().strip(),
+                'subscription_key': v['subscription_key'].get().strip(),
+                'api_version': v['api_version'].get().strip(),
+            }
+            v['endpoint'].set(ep)
+        if save_config(self.app.ai_config):
+            self.app._refresh_transcription_status_label()
+            self.app._refresh_transcription_status_log()
+            self.app.log('Profile settings saved to suno_persona_config.json.')
+            self.destroy()
+        else:
+            messagebox.showerror('Error', 'Could not save configuration file.', parent=self)
+
+
 class SongStyleAnalyzerGUI(BaseAudioGUI):
     def __init__(self, root):
         super().__init__(root, "Song Style Analyzer")
@@ -408,19 +1081,15 @@ class SongStyleAnalyzerGUI(BaseAudioGUI):
         self.cancel_requested = False
         self.processed_files = []
         self.results = []
-        
+        self._transcription_use_speech = False
+
         self.setup_ui()
-        
+
         # Check dependencies
         if not MUTAGEN_AVAILABLE:
             self.log_error("mutagen library not available. Audio metadata extraction will be limited.")
-        
-        # Check Azure configuration
-        transcribe_profile = self.ai_config.get('profiles', {}).get('transcribe', {})
-        if not transcribe_profile.get('subscription_key') or transcribe_profile.get('subscription_key') == '<your-api-key>':
-            self.log_error("Azure transcription not configured. Please configure 'transcribe' profile in suno_persona_config.json")
-        else:
-            self.log("Azure transcription configured (using 'transcribe' profile from suno_persona_config.json)")
+
+        self._refresh_transcription_status_log()
     
     def setup_ui(self):
         """Setup the user interface."""
@@ -431,26 +1100,47 @@ class SongStyleAnalyzerGUI(BaseAudioGUI):
         # Settings frame
         settings_frame = ttk.LabelFrame(main_frame, text="Azure Configuration", padding=10)
         settings_frame.pack(fill='x', pady=(0, 10))
-        
+
         settings_inner = ttk.Frame(settings_frame)
         settings_inner.pack(fill='x')
-        
-        ttk.Label(settings_inner, 
-                 text="Using 'transcribe' profile from suno_persona_config.json", 
-                 foreground='gray').pack(side='left', padx=5)
-        
-        status_label = ttk.Label(settings_inner, text="", foreground='gray')
-        status_label.pack(side='left', padx=10)
-        
-        transcribe_profile = self.ai_config.get('profiles', {}).get('transcribe', {})
-        if transcribe_profile.get('subscription_key') and transcribe_profile.get('subscription_key') != '<your-api-key>':
-            status_label.config(text="✓ Azure configured", foreground='green')
-        else:
-            status_label.config(text="⚠ Azure not configured", foreground='orange')
-        
+
+        ttk.Label(
+            settings_inner,
+            text="Style analysis uses the text profile (Edit profiles). Service = transcription only.",
+            foreground='gray'
+        ).pack(side='left', padx=5)
+
+        svc_frame = ttk.Frame(settings_frame)
+        svc_frame.pack(fill='x', pady=(8, 0))
+        ttk.Label(svc_frame, text="Service:").pack(side='left', padx=(5, 5))
+        self.transcription_service_var = tk.StringVar(
+            value=self.ai_config.get('transcription_service', 'speech')
+        )
+        transcription_service_combo = ttk.Combobox(
+            svc_frame,
+            textvariable=self.transcription_service_var,
+            values=['ask', 'speech', 'transcribe'],
+            state='readonly',
+            width=12
+        )
+        transcription_service_combo.pack(side='left', padx=5)
+        transcription_service_combo.bind('<<ComboboxSelected>>', self._on_transcription_service_changed)
+        ttk.Label(
+            svc_frame,
+            text='(ask=prompt, speech=Azure Speech, transcribe=OpenAI)',
+            foreground='gray'
+        ).pack(side='left', padx=5)
+
+        status_row = ttk.Frame(settings_frame)
+        status_row.pack(fill='x', pady=(6, 0))
+        status_label = ttk.Label(status_row, text="", foreground='gray')
+        status_label.pack(side='left', padx=5)
         self.azure_status_label = status_label
-        
-        # Input frame
+        self._refresh_transcription_status_label()
+
+        edit_row = ttk.Frame(settings_frame)
+        edit_row.pack(fill='x', pady=(4, 0))
+        ttk.Button(edit_row, text='Edit profiles...', command=self.open_profile_settings).pack(side='left', padx=5)
         input_frame = ttk.LabelFrame(main_frame, text="Input", padding=10)
         input_frame.pack(fill='both', expand=True, pady=(0, 10))
         
@@ -479,8 +1169,16 @@ class SongStyleAnalyzerGUI(BaseAudioGUI):
                        value='json').pack(side='left', padx=5)
         ttk.Radiobutton(output_format_frame, text="CSV", variable=self.output_format_var, 
                        value='csv').pack(side='left', padx=5)
-        
-        # File list
+
+        self.use_audio_for_style_var = tk.BooleanVar(
+            value=bool((self.ai_config.get('song_style_analyzer') or {}).get('use_audio_for_style_analysis', True))
+        )
+        ttk.Checkbutton(
+            options_frame,
+            text='Style: send audio file to text profile (auto for gpt-audio deployments)',
+            variable=self.use_audio_for_style_var,
+            command=self._persist_use_audio_for_style,
+        ).pack(anchor='w', pady=4)
         list_frame = ttk.Frame(input_frame)
         list_frame.pack(fill='both', expand=True, pady=5)
         
@@ -590,7 +1288,109 @@ class SongStyleAnalyzerGUI(BaseAudioGUI):
         
         # Bind double-click to show details
         self.results_tree.bind('<Double-1>', self.on_result_double_click)
-    
+
+    def _speech_profile_ok(self) -> bool:
+        return _profile_key_configured(self.ai_config.get('profiles', {}).get('speech', {}), 'speech')
+
+    def _transcribe_profile_ok(self) -> bool:
+        return _profile_key_configured(self.ai_config.get('profiles', {}).get('transcribe', {}), 'transcribe')
+
+    def _refresh_transcription_status_label(self):
+        speech_ok = self._speech_profile_ok()
+        transcribe_ok = self._transcribe_profile_ok()
+        pref = self.ai_config.get('transcription_service', 'speech')
+        if speech_ok and transcribe_ok:
+            self.azure_status_label.config(
+                text=f"Speech: OK | Transcribe: OK (preference: {pref})",
+                foreground='green'
+            )
+        elif speech_ok:
+            self.azure_status_label.config(text="Speech: OK | Transcribe: not configured", foreground='green')
+        elif transcribe_ok:
+            self.azure_status_label.config(text="Transcribe: OK | Speech: not configured", foreground='orange')
+        else:
+            self.azure_status_label.config(text="Speech and Transcribe: not configured", foreground='orange')
+
+    def _refresh_transcription_status_log(self):
+        if self._speech_profile_ok():
+            self.log("Azure Speech profile is configured (speech in suno_persona_config.json).")
+        if self._transcribe_profile_ok():
+            self.log("Azure OpenAI transcribe profile is configured.")
+        if not self._speech_profile_ok() and not self._transcribe_profile_ok():
+            self.log_error(
+                "No transcription backend configured. Set speech and/or transcribe in suno_persona_config.json."
+            )
+
+    def _on_transcription_service_changed(self, event=None):
+        svc = self.transcription_service_var.get()
+        self.ai_config['transcription_service'] = svc
+        save_config(self.ai_config)
+        self._refresh_transcription_status_label()
+        self.log(f"Transcription service preference saved: {svc}")
+
+    def _persist_use_audio_for_style(self):
+        ssa = self.ai_config.setdefault('song_style_analyzer', {})
+        ssa['use_audio_for_style_analysis'] = bool(self.use_audio_for_style_var.get())
+        save_config(self.ai_config)
+        self.log('use_audio_for_style_analysis saved to config.')
+
+    def open_profile_settings(self):
+        SongStyleProfileSettingsDialog(self.root, self)
+
+    def _resolve_transcription_backend(self) -> Optional[bool]:
+        """Return True to use Azure Speech, False for OpenAI transcribe, None if unusable."""
+        speech_ok = self._speech_profile_ok()
+        transcribe_ok = self._transcribe_profile_ok()
+        preferred = self.ai_config.get('transcription_service', 'speech')
+
+        if preferred == 'speech':
+            if speech_ok:
+                return True
+            if transcribe_ok:
+                self.log("Azure Speech not configured; falling back to OpenAI transcribe.")
+                return False
+            return None
+        if preferred == 'transcribe':
+            if transcribe_ok:
+                return False
+            if speech_ok:
+                self.log("OpenAI transcribe not configured; falling back to Azure Speech.")
+                return True
+            return None
+        # ask
+        if speech_ok and transcribe_ok:
+            result = messagebox.askquestion(
+                'Select Transcription Service',
+                'Multiple transcription services are available:\n\n'
+                '1. Azure Speech Services (recommended for music)\n'
+                '   - Better accuracy for vocals with music\n'
+                '   - Word-level timestamps\n\n'
+                '2. Azure OpenAI (Whisper/gpt-4o-transcribe)\n'
+                '   - General purpose transcription\n\n'
+                'Use Azure Speech Services?\n\n'
+                '(Tip: Set Service dropdown to avoid this prompt)',
+                icon='question'
+            )
+            return result == 'yes'
+        if speech_ok:
+            return True
+        if transcribe_ok:
+            return False
+        return None
+
+    def _export_suggested_initialfile(self, extension: str) -> str:
+        artist, album = '', ''
+        paths = list(self.file_listbox.get(0, tk.END))
+        if paths:
+            a, _t, alb = self.extract_metadata(paths[0])
+            artist = a or ''
+            album = (alb or '') if alb else ''
+        elif self.results:
+            im = self.results[0].get('input_metadata', {})
+            artist = im.get('artist') or ''
+            album = im.get('album') or ''
+        return build_export_suggested_filename(artist, album, extension)
+
     
     def select_single_file(self):
         """Select a single audio file (MP3 or FLAC)."""
@@ -621,7 +1421,7 @@ class SongStyleAnalyzerGUI(BaseAudioGUI):
                     
                     # Check metadata if required
                     if self.require_metadata_var.get():
-                        artist, title = self.extract_metadata(file_path)
+                        artist, title, _album = self.extract_metadata(file_path)
                         if not artist or not title:
                             continue
                     
@@ -637,71 +1437,80 @@ class SongStyleAnalyzerGUI(BaseAudioGUI):
         
         self.log(f"Found {len(audio_files)} audio file(s)")
     
-    def extract_metadata(self, file_path: str) -> Tuple[Optional[str], Optional[str]]:
-        """Extract artist and title from audio file metadata (MP3 or FLAC)."""
+    def extract_metadata(self, file_path: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+        """Extract artist, title, and album from audio file metadata (MP3 or FLAC)."""
         if not MUTAGEN_AVAILABLE:
-            return None, None
-        
+            return None, None, None
+
         file_ext = os.path.splitext(file_path)[1].lower()
-        
+
         try:
             # Handle MP3 files
             if file_ext == '.mp3':
                 audio = MP3(file_path, ID3=ID3)
-                
-                # Try to get title
+
                 title = None
+                artist = None
+                album = None
                 if audio.tags:
                     title_tag = audio.tags.get('TIT2')
                     if title_tag:
                         title = str(title_tag.text[0]) if title_tag.text else None
-                    
-                    # Try alternative tag names
+
                     if not title:
                         for tag_name in ['TITLE', 'TIT2']:
                             if tag_name in audio.tags:
                                 title = str(audio.tags[tag_name].text[0])
                                 break
-                    
-                    # Try to get artist
-                    artist = None
+
                     artist_tag = audio.tags.get('TPE1')
                     if artist_tag:
                         artist = str(artist_tag.text[0]) if artist_tag.text else None
-                    
+
                     if not artist:
                         for tag_name in ['ARTIST', 'TPE1', 'TPE2']:
                             if tag_name in audio.tags:
                                 artist = str(audio.tags[tag_name].text[0])
                                 break
-                    
-                    return artist, title
-            
+
+                    alb_tag = audio.tags.get('TALB')
+                    if alb_tag:
+                        album = str(alb_tag.text[0]) if alb_tag.text else None
+                    if not album:
+                        for tag_name in ['ALBUM', 'TALB']:
+                            if tag_name in audio.tags:
+                                album = str(audio.tags[tag_name].text[0])
+                                break
+
+                return artist, title, album
+
             # Handle FLAC files
-            elif file_ext == '.flac':
+            if file_ext == '.flac':
                 audio = FLAC(file_path)
-                
+
+                title = None
+                artist = None
+                album = None
                 if audio.tags:
-                    # Get title
-                    title = None
                     if 'TITLE' in audio.tags:
                         title = str(audio.tags['TITLE'][0]) if audio.tags['TITLE'] else None
-                    
-                    # Get artist
-                    artist = None
+
                     if 'ARTIST' in audio.tags:
                         artist = str(audio.tags['ARTIST'][0]) if audio.tags['ARTIST'] else None
                     elif 'ALBUMARTIST' in audio.tags:
                         artist = str(audio.tags['ALBUMARTIST'][0]) if audio.tags['ALBUMARTIST'] else None
-                    
-                    return artist, title
-            
+
+                    if 'ALBUM' in audio.tags:
+                        album = str(audio.tags['ALBUM'][0]) if audio.tags['ALBUM'] else None
+
+                return artist, title, album
+
         except ID3NoHeaderError:
             pass
         except Exception as e:
             self.log(f"Error extracting metadata from {os.path.basename(file_path)}: {e}")
-        
-        return None, None
+
+        return None, None, None
     
     def clear_file_list(self):
         """Clear the file list."""
@@ -747,7 +1556,7 @@ class SongStyleAnalyzerGUI(BaseAudioGUI):
                             if file_path not in list(self.file_listbox.get(0, tk.END)):
                                 # Check metadata if required
                                 if self.require_metadata_var.get():
-                                    artist, title = self.extract_metadata(file_path)
+                                    artist, title, _album = self.extract_metadata(file_path)
                                     if not artist or not title:
                                         skipped += 1
                                         continue
@@ -759,7 +1568,7 @@ class SongStyleAnalyzerGUI(BaseAudioGUI):
                 if path not in list(self.file_listbox.get(0, tk.END)):
                     # Check metadata if required
                     if self.require_metadata_var.get():
-                        artist, title = self.extract_metadata(path)
+                        artist, title, _album = self.extract_metadata(path)
                         if not artist or not title:
                             skipped += 1
                             continue
@@ -774,30 +1583,35 @@ class SongStyleAnalyzerGUI(BaseAudioGUI):
     
     def start_analysis(self):
         """Start analyzing files."""
-        transcribe_profile = self.ai_config.get('profiles', {}).get('transcribe', {})
-        if not transcribe_profile.get('subscription_key') or transcribe_profile.get('subscription_key') == '<your-api-key>':
-            messagebox.showerror("Error", "Azure transcription not configured. Please configure 'transcribe' profile in suno_persona_config.json")
-            return
-        
         files = list(self.file_listbox.get(0, tk.END))
         if not files:
             messagebox.showwarning("Warning", "No files selected")
             return
-        
+
+        use_speech = self._resolve_transcription_backend()
+        if use_speech is None:
+            messagebox.showerror(
+                "Error",
+                'No transcription service configured. Please configure either "speech" or "transcribe" '
+                "profile in suno_persona_config.json (AI Settings in Suno Persona)."
+            )
+            return
+        self._transcription_use_speech = use_speech
+
         self.is_processing = True
         self.cancel_requested = False
         self.processed_files = []
         self.results = []
-        
+
         self.process_button.config(state='disabled')
         self.cancel_button.config(state='normal')
         self.progress_bar['value'] = 0
         self.progress_bar['maximum'] = len(files)
-        
+
         # Clear results grid
         for item in self.results_tree.get_children():
             self.results_tree.delete(item)
-        
+
         # Start processing in thread
         thread = threading.Thread(target=self.process_files, args=(files,), daemon=True)
         thread.start()
@@ -844,20 +1658,14 @@ class SongStyleAnalyzerGUI(BaseAudioGUI):
     
     def extract_style_from_transcription(self, transcription: str, artist: str, title: str) -> Dict:
         """Extract style information from transcription using Azure OpenAI."""
+        if _text_profile_requires_audio_input(self.ai_config):
+            self.log(
+                "Skipping transcript-only style: text profile is gpt-audio (or similar); API requires audio in the request."
+            )
+            return empty_style_analysis_dict()
+
         if not transcription or not transcription.strip():
-            return {
-                "prompt_string": "",
-                "taxonomy": {
-                    "primary_genre": "",
-                    "sub_genre": "",
-                    "fusion_tags": [],
-                    "mood": "",
-                    "instrumentation": [],
-                    "production_quality": ""
-                },
-                "suno_style_prompt": "",
-                "negative_prompt": ""
-            }
+            return empty_style_analysis_dict()
         
         # Create prompt for style analysis
         system_message = """You are a music analysis expert specializing in extracting style information from song lyrics and metadata for Suno AI music generation. 
@@ -937,38 +1745,108 @@ If information cannot be determined, use empty strings or empty arrays. Be speci
             temperature=None,  # Use None to let the function handle it (will retry without if needed)
             debug_logger=self.log  # Output full prompt and response to debug log
         )
-        
+
+        return self._style_dict_from_llm_response(result)
+
+    def extract_style_from_audio_file(
+        self,
+        audio_path: str,
+        transcription: str,
+        artist: str,
+        title: str,
+    ) -> Dict:
+        """Style JSON via text profile with input_audio (gpt-audio etc.) plus transcript context."""
+        trans_block = (transcription or '').strip()
+        if len(trans_block) > 120000:
+            trans_block = trans_block[:120000] + '\n...[truncated]'
+
+        system_message = """You are a music analysis expert specializing in extracting style information for Suno AI music generation.
+You listen to the actual audio recording and use what you hear as the primary evidence.
+You may use the provided automatic transcript only as a secondary hint (it may be imperfect).
+Return your analysis as structured JSON only in plain text. Do not emit audio; write UTF-8 text JSON only."""
+
+        prompt = f"""Listen to the attached audio file and extract comprehensive style information for Suno-style generation.
+
+Primary: judge genre, mood, energy, instrumentation, mix/production, and vocal character from the AUDIO.
+Secondary: you may cross-check with this automatic transcript (may contain errors):
+---
+{trans_block}
+---
+
+Metadata (do not copy artist name into style tags; describe the sound instead):
+Artist: {artist}
+Title: {title}
+
+Please provide:
+1. A natural language style description (prompt_string) - dense, adjective-rich
+2. Genre classification (primary_genre, sub_genre, fusion_tags as array)
+3. Mood/Valence (mood)
+4. Instrumentation (as array)
+5. Production quality description
+6. A Suno-style prompt (suno_style_prompt) - comma-separated, up to 1000 characters, important first
+7. A negative prompt (negative_prompt) - comma-separated exclusions or empty string
+
+CRITICAL INSTRUCTIONS FOR SUNO_STYLE_PROMPT:
+- TARGET 800-1000 characters when useful
+- Maximum 1000 characters total
+- Order keywords by importance
+- Use: [Mood] + [Genre/Era] + [Key Instruments] + [Vocal Type] + [Production/Mix Tone] + [Tempo/Energy]
+- DO NOT include artist names - describe their style instead
+
+CRITICAL INSTRUCTIONS FOR NEGATIVE_PROMPT:
+- Be clear and specific about what to exclude
+- If nothing to exclude, use empty string
+
+Return ONLY valid JSON in this exact format:
+{{
+  "prompt_string": "A detailed style description...",
+  "taxonomy": {{
+    "primary_genre": "Genre name",
+    "sub_genre": "Sub-genre name",
+    "fusion_tags": ["tag1", "tag2"],
+    "mood": "Mood description",
+    "instrumentation": ["Instrument1", "Instrument2"],
+    "production_quality": "Production quality description"
+  }},
+  "suno_style_prompt": "comma-separated style tags, up to 1000 chars",
+  "negative_prompt": "exclusions or empty string"
+}}
+
+If information cannot be determined, use empty strings or empty arrays. Be specific.
+
+Your entire reply MUST be only the JSON object as plain text (no markdown fences, no audio, no preamble)."""
+
+        result = call_azure_ai_with_audio(
+            self.ai_config,
+            audio_path,
+            prompt,
+            system_message=system_message,
+            profile='text',
+            max_tokens=4000,
+            temperature=None,
+            debug_logger=self.log,
+        )
+        return self._style_dict_from_llm_response(result)
+
+    def _style_dict_from_llm_response(self, result: dict) -> Dict:
+        empty = empty_style_analysis_dict()
         if result.get('success'):
             try:
-                content = result.get('content', '').strip()
-                # Try to extract JSON from response (might have markdown code blocks)
+                content = result.get('content', '')
+                content = _message_content_to_text(content).strip()
                 if '```json' in content:
                     content = content.split('```json')[1].split('```')[0].strip()
                 elif '```' in content:
                     content = content.split('```')[1].split('```')[0].strip()
-                
                 style_data = json.loads(content)
                 return style_data
             except json.JSONDecodeError as e:
                 self.log(f"Warning: Could not parse style analysis JSON: {e}")
-                # Try to extract basic info from text response
-                return self._parse_style_from_text(result.get('content', ''))
+                return self._parse_style_from_text(content)
         else:
             self.log(f"Warning: Style analysis failed: {result.get('error', 'Unknown error')}")
-            return {
-                "prompt_string": "",
-                "taxonomy": {
-                    "primary_genre": "",
-                    "sub_genre": "",
-                    "fusion_tags": [],
-                    "mood": "",
-                    "instrumentation": [],
-                    "production_quality": ""
-                },
-                "suno_style_prompt": "",
-                "negative_prompt": ""
-            }
-    
+            return empty
+
     def _parse_style_from_text(self, text: str) -> Dict:
         """Fallback: Try to extract style info from unstructured text."""
         # Basic fallback parsing
@@ -990,8 +1868,8 @@ If information cannot be determined, use empty strings or empty arrays. Be speci
         """Analyze a single audio file (MP3 or FLAC)."""
         try:
             # Extract metadata
-            artist, title = self.extract_metadata(file_path)
-            
+            artist, title, album = self.extract_metadata(file_path)
+
             # Get file duration and detect format
             duration = None
             detected_format = "unknown"
@@ -1022,17 +1900,57 @@ If information cannot be determined, use empty strings or empty arrays. Be speci
             if duration and duration > 480:
                 self.log(f"Warning: {os.path.basename(file_path)} is longer than 8 minutes, may be truncated")
             
-            # Transcribe with Azure Whisper
-            transcription = self.transcribe_audio(file_path)
-            
-            if not transcription:
+            # Transcribe (Azure Speech or OpenAI transcribe)
+            transcription_plain, transcription_display = self.transcribe_audio(file_path)
+
+            if not transcription_plain and not transcription_display:
                 self.log(f"Warning: No transcription obtained for {os.path.basename(file_path)}")
                 return None
-            
-            # Extract style information from transcription
+
+            style_source = transcription_plain if (transcription_plain and transcription_plain.strip()) else transcription_display
+            lyrics_stored = transcription_display if (transcription_display and transcription_display.strip()) else transcription_plain
+
             self.log(f"Extracting style information for {os.path.basename(file_path)}...")
-            style_info = self.extract_style_from_transcription(transcription, artist or "Unknown", title or os.path.splitext(os.path.basename(file_path))[0])
-            
+            audio_model = _text_profile_requires_audio_input(self.ai_config)
+            use_audio_style = bool(self.use_audio_for_style_var.get()) or audio_model
+            if audio_model and not bool(self.use_audio_for_style_var.get()):
+                self.log(
+                    "Text profile deployment is an audio model; sending file as input_audio (required by API)."
+                )
+
+            fsize = os.path.getsize(file_path)
+            style_info = None
+            if use_audio_style and fsize <= MAX_AUDIO_STYLE_BYTES:
+                self.log("Style: calling text profile with input_audio (full file) + transcript context...")
+                style_info = self.extract_style_from_audio_file(
+                    file_path,
+                    style_source,
+                    artist or "Unknown",
+                    title or os.path.splitext(os.path.basename(file_path))[0],
+                )
+                sp = (style_info.get('suno_style_prompt') or '').strip()
+                ps = (style_info.get('prompt_string') or '').strip()
+                if not sp and not ps:
+                    self.log("Audio style response empty; falling back to transcript-only style.")
+                    style_info = None
+            elif use_audio_style and fsize > MAX_AUDIO_STYLE_BYTES:
+                self.log(f"Style: file larger than {MAX_AUDIO_STYLE_BYTES} bytes; cannot send as chat audio.")
+                if audio_model:
+                    style_info = empty_style_analysis_dict()
+
+            if style_info is None:
+                if audio_model:
+                    self.log_error(
+                        "gpt-audio style step failed or file too large. Transcript-only chat is not supported for this deployment."
+                    )
+                    style_info = empty_style_analysis_dict()
+                else:
+                    style_info = self.extract_style_from_transcription(
+                        style_source,
+                        artist or "Unknown",
+                        title or os.path.splitext(os.path.basename(file_path))[0],
+                    )
+
             # Build result structure based on task specification
             result = {
                 "task_id": f"analysis_{int(time.time())}_{os.path.basename(file_path)}",
@@ -1043,7 +1961,8 @@ If information cannot be determined, use empty strings or empty arrays. Be speci
                     "duration_seconds": duration,
                     "detected_format": detected_format,
                     "artist": artist or "Unknown",
-                    "title": title or os.path.splitext(os.path.basename(file_path))[0]
+                    "title": title or os.path.splitext(os.path.basename(file_path))[0],
+                    "album": album or ""
                 },
                 "style_analysis": {
                     "prompt_string": style_info.get("prompt_string", ""),
@@ -1059,15 +1978,15 @@ If information cannot be determined, use empty strings or empty arrays. Be speci
                         "bpm": None,  # Would need audio analysis
                         "key": None,  # Would need audio analysis
                         "time_signature": None,  # Would need audio analysis
-                        "vocal_presence": bool(transcription and transcription.strip())
+                        "vocal_presence": bool(style_source and str(style_source).strip())
                     }
                 },
                 "lyric_analysis": {
-                    "detected_language": "en",  # Azure Whisper detects language
-                    "has_vocals": bool(transcription and transcription.strip()),
+                    "detected_language": "en",
+                    "has_vocals": bool(style_source and str(style_source).strip()),
                     "vocal_gender": None,  # Would need additional analysis
                     "vocal_style": None,  # Would need additional analysis
-                    "structured_lyrics": transcription if transcription else ""
+                    "structured_lyrics": lyrics_stored if lyrics_stored else ""
                 },
                 "agent_usage_suggestions": {
                     "suno_style_prompt": style_info.get("suno_style_prompt", ""),
@@ -1083,22 +2002,40 @@ If information cannot be determined, use empty strings or empty arrays. Be speci
             self.log_error(f"Traceback: {traceback.format_exc()}")
             return None
     
-    def transcribe_audio(self, file_path: str) -> Optional[str]:
-        """Transcribe audio using Azure Whisper API via REST API."""
+    def transcribe_audio(self, file_path: str) -> Tuple[Optional[str], Optional[str]]:
+        """Transcribe audio. Returns (plain_text_for_style_analysis, lyrics_for_display/storage)."""
+        if getattr(self, '_transcription_use_speech', False):
+            result = call_azure_speech_transcription(
+                self.ai_config,
+                file_path,
+                profile='speech',
+                language='en-US',
+            )
+            if result.get('success'):
+                plain = (result.get('text') or '').strip()
+                disp = (result.get('content') or '').strip()
+                if not plain and disp:
+                    plain = disp
+                out_disp = disp if disp else plain
+                return plain, out_disp
+            error = result.get('error', 'Unknown error')
+            self.log_error(f"Transcription error for {os.path.basename(file_path)}: {error}")
+            return None, None
+
         result = call_azure_audio_transcription(
-            self.ai_config, 
-            file_path, 
+            self.ai_config,
+            file_path,
             profile='transcribe',
             language='en',
             response_format='json'
         )
-        
+
         if result.get('success'):
-            return result.get('content', '')
-        else:
-            error = result.get('error', 'Unknown error')
-            self.log_error(f"Transcription error for {os.path.basename(file_path)}: {error}")
-            return None
+            text = (result.get('content') or '').strip()
+            return text, text
+        error = result.get('error', 'Unknown error')
+        self.log_error(f"Transcription error for {os.path.basename(file_path)}: {error}")
+        return None, None
     
     def update_results_display(self, result: Dict):
         """Update the results grid with a new result."""
@@ -1197,6 +2134,7 @@ If information cannot be determined, use empty strings or empty arrays. Be speci
         summary_text = f"""File Path: {input_meta.get('file_path', 'N/A')}
 Artist: {input_meta.get('artist', 'Unknown')}
 Title: {input_meta.get('title', 'Unknown')}
+Album: {input_meta.get('album', '') or 'N/A'}
 Duration: {input_meta.get('duration_seconds', 'N/A')} seconds
 Format: {input_meta.get('detected_format', 'N/A')}
 Analysis Timestamp: {result.get('analysis_timestamp', 'N/A')}
@@ -1234,10 +2172,11 @@ Usage Suggestions:
         except:
             frame_bg = 'SystemButtonFace'  # Default Windows background
         
-        summary_text_widget = tk.Text(summary_frame, wrap=tk.WORD, font=('TkDefaultFont', 9), 
-                                     relief='flat', bg=frame_bg, 
-                                     padx=10, pady=10, state='disabled', borderwidth=0)
+        summary_text_widget = tk.Text(summary_frame, wrap=tk.WORD, font=('TkDefaultFont', 9),
+                                     relief='flat', bg=frame_bg,
+                                     padx=10, pady=10, state='normal', borderwidth=0)
         summary_text_widget.insert('1.0', summary_text)
+        summary_text_widget.config(state='disabled')
         summary_text_widget.pack(fill='both', expand=True, padx=10, pady=10)
         
         # Copy buttons for Usage Suggestions
@@ -1350,12 +2289,24 @@ Usage Suggestions:
         
         output_format = self.output_format_var.get()
         extension = '.json' if output_format == 'json' else '.csv'
-        
-        file_path = filedialog.asksaveasfilename(
-            title="Save Results",
-            defaultextension=extension,
-            filetypes=[(f"{output_format.upper()} files", f"*{extension}"), ("All files", "*.*")]
-        )
+        initialfile = self._export_suggested_initialfile(extension)
+
+        initialdir = None
+        dsp = (self.ai_config.get('general') or {}).get('default_save_path', '') or ''
+        dsp = dsp.strip()
+        if dsp and os.path.isdir(dsp):
+            initialdir = dsp
+
+        fd_kwargs = {
+            'title': 'Save Results',
+            'defaultextension': extension,
+            'initialfile': initialfile,
+            'filetypes': [(f"{output_format.upper()} files", f"*{extension}"), ('All files', '*.*')],
+        }
+        if initialdir:
+            fd_kwargs['initialdir'] = initialdir
+
+        file_path = filedialog.asksaveasfilename(**fd_kwargs)
         
         if not file_path:
             return
@@ -1368,19 +2319,20 @@ Usage Suggestions:
                 # Flatten results for CSV
                 with open(file_path, 'w', newline='', encoding='utf-8') as f:
                     fieldnames = [
-                        'file_path', 'artist', 'title', 'duration_seconds',
+                        'file_path', 'artist', 'album', 'title', 'duration_seconds',
                         'has_vocals', 'detected_language', 'lyrics', 'analysis_timestamp'
                     ]
                     writer = csv.DictWriter(f, fieldnames=fieldnames)
                     writer.writeheader()
-                    
+
                     for result in self.results:
                         input_meta = result.get('input_metadata', {})
                         lyric_meta = result.get('lyric_analysis', {})
-                        
+
                         writer.writerow({
                             'file_path': input_meta.get('file_path', ''),
                             'artist': input_meta.get('artist', ''),
+                            'album': input_meta.get('album', ''),
                             'title': input_meta.get('title', ''),
                             'duration_seconds': input_meta.get('duration_seconds', ''),
                             'has_vocals': lyric_meta.get('has_vocals', False),
