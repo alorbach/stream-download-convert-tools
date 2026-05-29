@@ -35,52 +35,23 @@ except ImportError:
     print("[WARNING] tkinterdnd2 not available. Drag-and-drop from Explorer will not work.")
     print("[INFO] Install with: pip install tkinterdnd2")
 
-# Import shared libraries
-sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-try:
-    from lib.base_gui import BaseAudioGUI
-    from lib.ffmpeg_utils import FFmpegManager
-except ImportError:
-    # Fallback if base_gui is not available
-    class BaseAudioGUI:
-        def __init__(self, root, title):
-            self.root = root
-            self.root.title(title)
-            self.is_busy = False
-        
-        def log(self, message):
-            print(message)
-        
-        def browse_folder(self, initial_dir=None):
-            folder = filedialog.askdirectory(initialdir=initial_dir)
-            return folder if folder else None
-    
-    class FFmpegManager:
-        def __init__(self, root_dir, log_callback=None):
-            self.root_dir = root_dir
-            self.ffmpeg_path = None
-        
-        def check_ffmpeg(self):
-            try:
-                result = subprocess.run(['ffmpeg', '-version'], capture_output=True, text=True)
-                if result.returncode == 0:
-                    self.ffmpeg_path = 'ffmpeg'
-                    return True
-            except:
-                pass
-            return False
-        
-        def get_ffmpeg_command(self):
-            return self.ffmpeg_path if self.ffmpeg_path else 'ffmpeg'
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
+from lib.video_utils import parse_dropped_paths
 
 
-class ImageFormatConverterGUI(BaseAudioGUI):
-    def __init__(self, root):
-        if DND_AVAILABLE:
-            super().__init__(root, "Image & Video Format Converter")
-        else:
-            super().__init__(root, "Image & Video Format Converter")
-        self.root.geometry("900x800")
+class FormatCropTab:
+    TAB_NAME = 'Format and Crop'
+    _settings_key = 'format'
+
+    def __init__(self, app, parent):
+        self.app = app
+        self.parent = parent
+        self.root = app.root
+        self.root_dir = app.root_dir
+        self.file_manager = app.file_manager
+        self.process_manager = app.process_manager
+        self.ffmpeg_manager = app.ffmpeg_manager
+        self.is_busy = False
         
         self.selected_files = []
         self.log_text = None  # Will be initialized in setup_ui()
@@ -94,13 +65,7 @@ class ImageFormatConverterGUI(BaseAudioGUI):
         self.last_selected_video_file = None  # Track last selected video file
         self.truncate_only_var = tk.BooleanVar(value=False)
         
-        # Settings file path
-        root_dir = os.path.dirname(os.path.dirname(__file__))
-        self.settings_file = os.path.join(root_dir, "image_format_converter_settings.json")
         self.settings_loaded = False  # Flag to prevent saving during load
-        
-        # Initialize FFmpeg manager (with safe log callback)
-        self.ffmpeg_manager = FFmpegManager(root_dir, log_callback=lambda msg: self._safe_log(f"[FFmpeg] {msg}"))
         
         # Aspect ratio presets (width:height) with standard resolutions
         self.aspect_ratios = {
@@ -139,13 +104,22 @@ class ImageFormatConverterGUI(BaseAudioGUI):
         # Check FFmpeg after UI is initialized
         if not self.ffmpeg_manager.check_ffmpeg():
             self.log("[WARNING] FFmpeg not found. Video conversion will not be available.")
-        
-        # Save settings on window close
-        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+
+    def check_ffmpeg(self):
+        return self.app.check_ffmpeg()
+
+    def offer_ffmpeg_install(self):
+        return self.app.offer_ffmpeg_install()
+
+    def get_ffmpeg_command(self):
+        return self.app.get_ffmpeg_command()
+
+    def browse_folder(self, initial=''):
+        return self.app.browse_folder(initial)
     
     def setup_ui(self):
         # File selection frame
-        top_frame = ttk.LabelFrame(self.root, text="File Selection", padding=10)
+        top_frame = ttk.LabelFrame(self.parent, text="File Selection", padding=10)
         top_frame.pack(fill='both', expand=True, padx=10, pady=10)
         
         btn_frame = ttk.Frame(top_frame)
@@ -192,7 +166,7 @@ class ImageFormatConverterGUI(BaseAudioGUI):
                 pass
         
         # Settings frame
-        settings_frame = ttk.LabelFrame(self.root, text="Conversion Settings", padding=10)
+        settings_frame = ttk.LabelFrame(self.parent, text="Conversion Settings", padding=10)
         settings_frame.pack(fill='x', padx=10, pady=10)
         
         # Info label about output location
@@ -269,7 +243,7 @@ class ImageFormatConverterGUI(BaseAudioGUI):
         self.input_format_label.grid(row=6, column=1, sticky='w', padx=5)
         
         # Processing frame
-        process_frame = ttk.Frame(self.root)
+        process_frame = ttk.Frame(self.parent)
         process_frame.pack(fill='x', padx=10, pady=10)
         
         ttk.Button(process_frame, text="Convert Selected Files", command=self.convert_selected).pack(side='left', padx=5)
@@ -283,13 +257,13 @@ class ImageFormatConverterGUI(BaseAudioGUI):
         self.progress_label.pack(anchor='w')
         
         # Log frame
-        log_frame = ttk.LabelFrame(self.root, text="Conversion Log", padding=10)
+        log_frame = ttk.LabelFrame(self.parent, text="Conversion Log", padding=10)
         log_frame.pack(fill='both', expand=True, padx=10, pady=10)
         
         self.log_text = scrolledtext.ScrolledText(log_frame, height=10)
         self.log_text.pack(fill='both', expand=True)
         
-        info_frame = ttk.Frame(self.root)
+        info_frame = ttk.Frame(self.parent)
         info_frame.pack(fill='x', padx=10, pady=5)
         
         info_text = (
@@ -623,13 +597,12 @@ class ImageFormatConverterGUI(BaseAudioGUI):
                 pass
     
     def log(self, message):
-        """Log message to both console and UI log text widget"""
-        print(message)
+        self.app.log(message, self.TAB_NAME)
         if hasattr(self, 'log_text') and self.log_text is not None:
             try:
                 self.log_text.insert(tk.END, message + "\n")
                 self.log_text.see(tk.END)
-            except:
+            except Exception:
                 pass
     
     def get_target_aspect_ratio(self):
@@ -1266,9 +1239,8 @@ class ImageFormatConverterGUI(BaseAudioGUI):
     def load_settings(self):
         """Load saved settings from JSON file"""
         try:
-            if os.path.exists(self.settings_file):
-                with open(self.settings_file, 'r', encoding='utf-8') as f:
-                    settings = json.load(f)
+            settings = self.app.get_tab_settings(self._settings_key)
+            if settings:
                     
                 # Load aspect ratio
                 if 'aspect_ratio' in settings:
@@ -1331,8 +1303,7 @@ class ImageFormatConverterGUI(BaseAudioGUI):
                 'truncate_only': self.truncate_only_var.get()
             }
             
-            with open(self.settings_file, 'w', encoding='utf-8') as f:
-                json.dump(settings, f, indent=2)
+            self.app.set_tab_settings(self._settings_key, settings)
         except Exception as e:
             self.log(f"[WARNING] Could not save settings: {e}")
     
@@ -1348,17 +1319,6 @@ class ImageFormatConverterGUI(BaseAudioGUI):
         self.video_duration_var.trace('w', lambda *args: self.save_settings())
         self.truncate_only_var.trace('w', lambda *args: self.save_settings())
     
-    def on_closing(self):
-        """Handle window closing - save settings and destroy window"""
+    def save_on_exit(self):
         self.save_settings()
-        self.root.destroy()
 
-
-def main():
-    root = TkinterDnD.Tk() if DND_AVAILABLE else tk.Tk()
-    app = ImageFormatConverterGUI(root)
-    root.mainloop()
-
-
-if __name__ == "__main__":
-    main()

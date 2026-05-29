@@ -8,7 +8,7 @@ Welcome to Stream Download Convert Tools! This comprehensive guide will help you
 
 1. [Getting Started](#getting-started)
 2. [YouTube Downloader](#youtube-downloader)
-3. [Video to MP3 Converter](#video-to-mp3-converter)
+3. [Video Tools (Unified)](#video-tools-unified)
 4. [Audio Modifier](#audio-modifier)
 5. [Cover Song Checker](#cover-song-checker)
 6. [Song Style Analyzer](#song-style-analyzer)
@@ -17,6 +17,8 @@ Welcome to Stream Download Convert Tools! This comprehensive guide will help you
 9. [Troubleshooting](#troubleshooting)
 10. [Advanced Features](#advanced-features)
 11. [Legal and Compliance](#legal-and-compliance)
+
+Note: Video to MP3 conversion moved from Stream Download Convert Tools to Video Tools Unified.
 
 ## Getting Started
 
@@ -137,42 +139,25 @@ Streams are organized by type:
 - **Storage**: Check available disk space before large downloads
 - **Canceling**: You can cancel downloads at any time using the Cancel button
 
-## Video to MP3 Converter
+## Video Tools (Unified)
 
-![Video to MP3 Converter Tab](docs/video_to_mp3_converter.png)
+Stream Download Convert Tools no longer includes Video to MP3. Use the separate **Video Tools** application.
 
-### Step 1: Select Video Files
+**Launch:** `launchers/video_tools_unified.bat` (Windows) or `launchers/video_tools_unified.sh` (Linux/Mac)
 
-1. Click "Select Video Files" in the Video to MP3 tab
-2. Choose one or more video files
-3. Supported formats: MP4, WEBM, M4A, AVI, MOV, MKV, FLV, WMV
-4. Default folder: `downloads/` (where YouTube videos are saved)
+**Tabs:**
+- **Video to MP3** - Extract audio from downloaded videos (same workflow as before)
+- **Format and Crop** - Aspect ratios for social platforms
+- **MP3 to Video** - Music videos from MP3 + artwork or loops
+- **Combine Videos** - Multi-clip editor with transitions
+- **Split and Chunks** - Fixed intervals (e.g. 6s), single clips, or JSON plans
 
-### Step 2: Configure Settings
+See [docs/VIDEO_TOOLS_GUIDE.md](docs/VIDEO_TOOLS_GUIDE.md) for chunk JSON format, examples, and troubleshooting.
 
-**Output Folder:**
-- Default: `converted/`
-- Click "Browse" to change location
-
-**Audio Quality:**
-- **128k**: Smallest files, basic quality
-- **192k**: Good balance (recommended)
-- **256k**: High quality
-- **320k**: Maximum quality, largest files
-
-### Step 3: Convert
-
-1. Click "Convert to MP3"
-2. Watch the progress bar
-3. Monitor the log for detailed information
-4. Files are saved with the same basename as input
-
-### Conversion Tips
-
-- **Batch Processing**: Select multiple files for efficiency
-- **Quality Settings**: 192k is usually sufficient for most uses
-- **File Organization**: Use descriptive folder names
-- **Backup**: Original files are never modified
+**Typical workflow after YouTube download:**
+1. Open Video Tools Unified
+2. Video to MP3 tab: Convert Selected or Convert All (downloads folder)
+3. Optional: other tabs for format, combine, or split
 
 ## Audio Modifier
 

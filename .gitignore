@@ -139,3 +139,65 @@ Thumbs.db
 
 # Grok automation run logs and failure screenshots
 private/grok/logs/
+
+# Local legal acceptance markers
+.legal_accepted
+.legal_agreement_accepted
+
+# AI workspace (local prompts, tasks, temp, docs)
+AI/APIS_SERVICES_COVER_SONGS.md
+AI/PLAN_COVER_SONG_CHECK.md
+AI/PROMPTS/
+AI/TASKS/
+AI/_tmp/
+AI/distrokid.txt
+AI/suno/add_new_styles.py
+AI/suno/analyze_prompts.py
+AI/suno/enhance_prompts.py
+AI/suno/gym_music_styles_analysis.md
+AI/suno/missing_styles_analysis.md
+AI/top100_soul_rap_30years_prompt.md
+
+# Root scratch / automation temp
+/_tmp/
+
+# Browser automation profile data
+browser_data/
+
+# Local data and converted assets
+converted_images/
+data/
+
+# Tool settings (local)
+grok_imagine_settings.json
+grok_video_maker_settings.json
+image_format_converter_settings.json
+mp3_to_video_converter_settings.json
+video_editor_settings.json
+
+# Input CSV playlists (local)
+input/kelly_family_top20.csv
+input/snatam_kaur_mul_mantra.csv
+input/spotify_global_top20_january_2026.csv
+input/top100.csv
+input/top100_christmas_songs.csv
+input/top100_fitness_workout_songs_2004_2024_by_genre.csv
+input/top100_iconic_movie_moments.csv
+input/top100_rock_metal_1990_2000.csv
+input/top100_rock_metal_1990_2000_2.csv
+input/top100_songs_1970s_2024.csv
+input/top100_songs_late_1960s_jimi_hendrix_style.csv
+input/top100_soul_rap_1994_2024.csv
+input/top20_viral_songs_last_3months.csv
+input/top_20_stranger_sings_songs.csv
+
+# Private local content
+private/
+
+# Script configs (local)
+scripts/cover_song_checker_config.json
+scripts/suno_persona_config.json
+scripts/suno_style_browser_config.json
+
+# Video editor temp thumbnails
+temp_thumb_*.jpg

@@ -47,10 +47,6 @@ class StreamDownloadConvertToolsUnifiedGUI(BaseAudioGUI):
         self.available_streams = []
         self.current_video_info = None
         
-        # Video to MP3 Converter attributes
-        self.selected_video_files = []
-        self.conversion_queue = []
-        
         # Audio Modifier attributes
         self.selected_audio_files = []
         self.modification_queue = []
@@ -67,17 +63,14 @@ class StreamDownloadConvertToolsUnifiedGUI(BaseAudioGUI):
         
         # Create tabs
         self.tab_youtube = ttk.Frame(self.notebook)
-        self.tab_converter = ttk.Frame(self.notebook)
         self.tab_modifier = ttk.Frame(self.notebook)
         self.tab_settings = ttk.Frame(self.notebook)
         
         self.notebook.add(self.tab_youtube, text="YouTube Downloader")
-        self.notebook.add(self.tab_converter, text="Video to MP3")
         self.notebook.add(self.tab_modifier, text="Audio Modifier")
         self.notebook.add(self.tab_settings, text="Settings")
         
         self.setup_youtube_tab()
-        self.setup_converter_tab()
         self.setup_modifier_tab()
         self.setup_settings_tab()
     
@@ -170,88 +163,6 @@ class StreamDownloadConvertToolsUnifiedGUI(BaseAudioGUI):
         
         self.youtube_log_text = scrolledtext.ScrolledText(download_frame, height=6)
         self.youtube_log_text.pack(fill='both', expand=True)
-    
-    def setup_converter_tab(self):
-        # Video to MP3 Converter Tab
-        top_frame = ttk.LabelFrame(self.tab_converter, text="File Selection", padding=10)
-        top_frame.pack(fill='both', expand=True, padx=10, pady=10)
-        
-        btn_frame = ttk.Frame(top_frame)
-        btn_frame.pack(fill='x', pady=5)
-        
-        ttk.Button(btn_frame, text="Select Video Files", command=self.select_video_files).pack(side='left', padx=5)
-        ttk.Button(btn_frame, text="Clear Selection", command=self.clear_video_selection).pack(side='left', padx=5)
-        
-        self.lbl_video_status = ttk.Label(btn_frame, text="No files selected")
-        self.lbl_video_status.pack(side='left', padx=10)
-        
-        ttk.Label(top_frame, text="Selected Files:").pack(anchor='w', pady=(10, 5))
-        
-        list_frame = ttk.Frame(top_frame)
-        list_frame.pack(fill='both', expand=True)
-        
-        scrollbar_y = ttk.Scrollbar(list_frame, orient='vertical')
-        scrollbar_x = ttk.Scrollbar(list_frame, orient='horizontal')
-        
-        self.video_file_listbox = tk.Listbox(
-            list_frame,
-            yscrollcommand=scrollbar_y.set,
-            xscrollcommand=scrollbar_x.set,
-            height=8,
-            selectmode=tk.EXTENDED
-        )
-        
-        scrollbar_y.config(command=self.video_file_listbox.yview)
-        scrollbar_x.config(command=self.video_file_listbox.xview)
-        
-        self.video_file_listbox.grid(row=0, column=0, sticky='nsew')
-        scrollbar_y.grid(row=0, column=1, sticky='ns')
-        scrollbar_x.grid(row=1, column=0, sticky='ew')
-        
-        list_frame.grid_rowconfigure(0, weight=1)
-        list_frame.grid_columnconfigure(0, weight=1)
-        
-        settings_frame = ttk.LabelFrame(self.tab_converter, text="Conversion Settings", padding=10)
-        settings_frame.pack(fill='x', padx=10, pady=10)
-        
-        ttk.Label(settings_frame, text="Output Folder:").grid(row=0, column=0, sticky='w', pady=5)
-        self.converter_folder_var = tk.StringVar(value=self.file_manager.converted_folder)
-        ttk.Entry(settings_frame, textvariable=self.converter_folder_var, width=50).grid(row=0, column=1, padx=5)
-        ttk.Button(settings_frame, text="Browse", command=self.browse_converter_folder).grid(row=0, column=2)
-        
-        ttk.Label(settings_frame, text="Audio Quality:").grid(row=1, column=0, sticky='w', pady=5)
-        self.converter_quality_var = tk.StringVar(value="192k")
-        quality_combo = ttk.Combobox(settings_frame, textvariable=self.converter_quality_var, width=20, state='readonly')
-        quality_combo['values'] = ('128k', '192k', '256k', '320k')
-        quality_combo.grid(row=1, column=1, sticky='w', padx=5)
-        
-        convert_frame = ttk.Frame(self.tab_converter)
-        convert_frame.pack(fill='x', padx=10, pady=10)
-        
-        # Batch processing buttons
-        batch_frame = ttk.Frame(convert_frame)
-        batch_frame.pack(fill='x', pady=5)
-        
-        ttk.Button(batch_frame, text="Convert Selected Files", command=self.start_conversion).pack(side='left', padx=5)
-        ttk.Button(batch_frame, text="Convert All Files", command=self.convert_all_files).pack(side='left', padx=5)
-        
-        self.converter_progress = ttk.Progressbar(convert_frame, mode='determinate')
-        self.converter_progress.pack(fill='x', pady=5)
-        
-        self.converter_progress_label = ttk.Label(convert_frame, text="")
-        self.converter_progress_label.pack(anchor='w')
-        
-        log_frame = ttk.LabelFrame(self.tab_converter, text="Conversion Log", padding=10)
-        log_frame.pack(fill='both', expand=True, padx=10, pady=10)
-        
-        self.converter_log_text = scrolledtext.ScrolledText(log_frame, height=8)
-        self.converter_log_text.pack(fill='both', expand=True)
-        
-        info_frame = ttk.Frame(self.tab_converter)
-        info_frame.pack(fill='x', padx=10, pady=5)
-        
-        info_text = "Supported formats: MP4, WEBM, M4A, AVI, MOV, MKV, FLV, WMV | Requires FFmpeg installed"
-        ttk.Label(info_frame, text=info_text, font=('Arial', 8)).pack()
     
     def setup_modifier_tab(self):
         # Audio Modifier Tab
@@ -414,17 +325,14 @@ class StreamDownloadConvertToolsUnifiedGUI(BaseAudioGUI):
 
 Features:
 - YouTube Downloader: Download videos from CSV lists
-- Video to MP3 Converter: Convert video files to MP3
 - Audio Modifier: Adjust speed and pitch of audio files
-- Automatic venv management via launcher scripts
-- Cross-platform support (Windows, Linux, Mac)
 
 Workflow:
 1. Use YouTube Downloader to download videos
-2. Use Video to MP3 Converter to extract audio
+2. Use Video Tools (launchers/video_tools_unified.bat) for MP3 and video work
 3. Use Audio Modifier to adjust speed/pitch
 
-Note: All tools require FFmpeg for processing.
+Note: FFmpeg is required for processing.
 """
         info_label = ttk.Label(info_frame, text=info_text, justify='left')
         info_label.pack(anchor='w')
@@ -437,24 +345,18 @@ Note: All tools require FFmpeg for processing.
             if tab == "youtube":
                 self.youtube_progress.start(10)
                 self.youtube_progress_label.config(text=message)
-            elif tab == "converter":
-                self.converter_progress_label.config(text=message)
             elif tab == "modifier":
                 self.modifier_progress_label.config(text=message)
         else:
             self.root.config(cursor="")
             self.youtube_progress.stop()
             self.youtube_progress_label.config(text="")
-            self.converter_progress_label.config(text="")
             self.modifier_progress_label.config(text="")
     
     def log(self, message, tab="youtube"):
         if tab == "youtube":
             self.youtube_log_text.insert(tk.END, f"{message}\n")
             self.youtube_log_text.see(tk.END)
-        elif tab == "converter":
-            self.converter_log_text.insert(tk.END, f"{message}\n")
-            self.converter_log_text.see(tk.END)
         elif tab == "modifier":
             self.modifier_log_text.insert(tk.END, f"{message}\n")
             self.modifier_log_text.see(tk.END)
@@ -914,181 +816,6 @@ Note: All tools require FFmpeg for processing.
         
         self.root.after(0, lambda: self.set_busy(False, tab="youtube"))
     
-    # Video to MP3 Converter methods
-    def select_video_files(self):
-        files = self.select_files(
-            title="Select Video/Audio Files",
-            filetypes=self.file_manager.get_video_filetypes(),
-            initial_dir=self.file_manager.get_folder_path('downloads')
-        )
-        
-        if files:
-            for file in files:
-                if file not in self.selected_video_files:
-                    self.selected_video_files.append(file)
-            
-            self.update_video_file_list()
-            self.log(f"[INFO] Added {len(files)} file(s) to selection", "converter")
-    
-    def clear_video_selection(self):
-        self.selected_video_files.clear()
-        self.update_video_file_list()
-        self.log("[INFO] Selection cleared", "converter")
-    
-    def update_video_file_list(self):
-        self.video_file_listbox.delete(0, tk.END)
-        
-        for file in self.selected_video_files:
-            filename = os.path.basename(file)
-            self.video_file_listbox.insert(tk.END, filename)
-        
-        count = len(self.selected_video_files)
-        self.lbl_video_status.config(text=f"{count} file(s) selected")
-    
-    def browse_converter_folder(self):
-        folder = self.browse_folder(self.converter_folder_var.get())
-        if folder:
-            self.converter_folder_var.set(folder)
-            self.file_manager.set_folder_path('converted', folder)
-    
-    def start_conversion(self):
-        if self.is_busy:
-            messagebox.showwarning("Warning", "Conversion already in progress")
-            return
-        
-        if not self.selected_video_files:
-            messagebox.showwarning("Warning", "Please select at least one video file")
-            return
-        
-        if not self.check_ffmpeg():
-            self.offer_ffmpeg_install()
-            return
-        
-        self.file_manager.set_folder_path('converted', self.converter_folder_var.get())
-        self.ensure_directory(self.file_manager.get_folder_path('converted'))
-        
-        self.conversion_queue = self.selected_video_files.copy()
-        
-        self.log(f"[INFO] Starting conversion of {len(self.conversion_queue)} file(s)", "converter")
-        self.log(f"[INFO] Output folder: {self.file_manager.get_folder_path('converted')}", "converter")
-        self.log(f"[INFO] Audio quality: {self.converter_quality_var.get()}", "converter")
-        
-        self.converter_progress['maximum'] = len(self.conversion_queue)
-        self.converter_progress['value'] = 0
-        
-        self.set_busy(True, "Converting...", "converter")
-        
-        thread = threading.Thread(target=self._conversion_thread)
-        thread.daemon = True
-        thread.start()
-    
-    def _conversion_thread(self):
-        success_count = 0
-        error_count = 0
-        
-        for i, input_file in enumerate(self.conversion_queue):
-            input_path = Path(input_file)
-            output_file = os.path.join(self.file_manager.get_folder_path('converted'), f"{input_path.stem}.mp3")
-            
-            self.root.after(
-                0,
-                lambda idx=i+1, total=len(self.conversion_queue), name=input_path.name:
-                self.set_busy(True, f"Converting {idx}/{total}: {name}", "converter")
-            )
-            
-            self.root.after(
-                0,
-                lambda msg=f"\n[INFO] Converting ({i+1}/{len(self.conversion_queue)}): {input_path.name}":
-                self.log(msg, "converter")
-            )
-            
-            try:
-                cmd = self.build_ffmpeg_command(
-                    input_file, output_file, 
-                    audio_codec='mp3', audio_bitrate=self.converter_quality_var.get()
-                )
-                
-                process = self.run_ffmpeg_command(cmd)
-                
-                if process.returncode == 0:
-                    success_count += 1
-                    self.root.after(
-                        0,
-                        lambda out=output_file:
-                        self.log(f"[SUCCESS] Saved: {os.path.basename(out)}", "converter")
-                    )
-                else:
-                    error_count += 1
-                    error_msg = process.stderr if process.stderr else "Unknown error"
-                    self.root.after(
-                        0,
-                        lambda err=error_msg:
-                        self.log(f"[ERROR] Conversion failed: {err[:200]}", "converter")
-                    )
-                
-            except Exception as e:
-                error_count += 1
-                error_msg = str(e)
-                self.root.after(
-                    0,
-                    lambda msg=error_msg:
-                    self.log(f"[ERROR] Exception: {msg}", "converter")
-                )
-            
-            self.root.after(0, lambda v=i+1: self.converter_progress.config(value=v))
-        
-        self.root.after(
-            0,
-            lambda s=success_count, e=error_count:
-            self.log(f"\n[COMPLETE] Conversion finished: {s} succeeded, {e} failed", "converter")
-        )
-        
-        self.root.after(
-            0,
-            lambda s=success_count, e=error_count:
-            messagebox.showinfo(
-                "Conversion Complete",
-                f"Conversion finished!\n\nSuccessful: {s}\nFailed: {e}"
-            )
-        )
-        
-        self.root.after(0, lambda: self.set_busy(False, tab="converter"))
-    
-    def convert_all_files(self):
-        """Convert all files in the downloads folder"""
-        if self.is_busy:
-            messagebox.showwarning("Warning", "Conversion already in progress")
-            return
-        
-        downloads_folder = self.file_manager.get_folder_path('downloads')
-        if not os.path.exists(downloads_folder):
-            messagebox.showerror("Error", "Downloads folder does not exist")
-            return
-        
-        # Find all video files in downloads folder
-        video_extensions = ['.mp4', '.webm', '.m4a', '.avi', '.mov', '.mkv', '.flv', '.wmv']
-        all_files = []
-        
-        for file in os.listdir(downloads_folder):
-            file_path = os.path.join(downloads_folder, file)
-            if os.path.isfile(file_path):
-                _, ext = os.path.splitext(file.lower())
-                if ext in video_extensions:
-                    all_files.append(file_path)
-        
-        if not all_files:
-            messagebox.showwarning("Warning", "No video files found in downloads folder")
-            return
-        
-        # Update the selected files list
-        self.selected_video_files = all_files
-        self.update_video_file_list()
-        
-        self.log(f"[INFO] Found {len(all_files)} video files in downloads folder", "converter")
-        
-        # Start conversion with all files
-        self.start_conversion()
-    
     # Audio Modifier methods
     def select_audio_files(self):
         files = self.select_files(
@@ -1316,20 +1043,20 @@ Note: All tools require FFmpeg for processing.
         return self.ffmpeg_manager.offer_ffmpeg_install(self.show_message)
     
     def download_ffmpeg_windows(self):
-        self.set_busy(True, "Downloading FFmpeg...", "converter")
+        self.set_busy(True, "Downloading FFmpeg...", "youtube")
         
         def progress_callback(message):
-            self.root.after(0, lambda msg=message: self.log(f"[INFO] {msg}", "converter"))
+            self.root.after(0, lambda msg=message: self.log(f"[INFO] {msg}", "youtube"))
         
         def success_callback(message):
-            self.root.after(0, lambda msg=message: self.log("[SUCCESS] FFmpeg installed successfully!", "converter"))
+            self.root.after(0, lambda msg=message: self.log("[SUCCESS] FFmpeg installed successfully!", "youtube"))
             self.root.after(0, lambda msg=message: self.show_message("info", "Success", msg))
-            self.root.after(0, lambda: self.set_busy(False, tab="converter"))
+            self.root.after(0, lambda: self.set_busy(False, tab="youtube"))
         
         def error_callback(message):
-            self.root.after(0, lambda msg=message: self.log(f"[ERROR] FFmpeg download failed: {msg}", "converter"))
+            self.root.after(0, lambda msg=message: self.log(f"[ERROR] FFmpeg download failed: {msg}", "youtube"))
             self.root.after(0, lambda msg=message: self.show_message("error", "Download Failed", msg))
-            self.root.after(0, lambda: self.set_busy(False, tab="converter"))
+            self.root.after(0, lambda: self.set_busy(False, tab="youtube"))
         
         self.ffmpeg_manager.download_ffmpeg_windows(progress_callback, success_callback, error_callback)
     

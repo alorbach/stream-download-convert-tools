@@ -46,17 +46,25 @@ except ImportError:
     print("[INFO] Install with: pip install tkinterdnd2")
 
 # Import shared libraries
-sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 from lib.base_gui import BaseAudioGUI
 from lib.file_utils import FileManager
 from lib.process_utils import ProcessManager
 from lib.ffmpeg_utils import FFmpegManager
 
 
-class VideoEditorGUI(BaseAudioGUI):
-    def __init__(self, root):
-        super().__init__(root, "Video Editor")
-        self.root.geometry("1280x800")
+class CombineVideosTab:
+    TAB_NAME = 'Combine Videos'
+    _settings_key = 'combine'
+    def __init__(self, app, parent):
+        self.app = app
+        self.parent = parent
+        self.root = app.root
+        self.root_dir = app.root_dir
+        self.file_manager = app.file_manager
+        self.process_manager = app.process_manager
+        self.ffmpeg_manager = app.ffmpeg_manager
+        self.is_busy = False
         
         # Video list (ordered)
         self.video_files = []
@@ -86,25 +94,24 @@ class VideoEditorGUI(BaseAudioGUI):
         self.video_preset = "veryfast"  # Encoding preset
         self.transition_types = [
             ("Fade", "fade"),
-            ("Wipe Left", "wipeleft"),
-            ("Wipe Right", "wiperight"),
-            ("Wipe Up", "wipeup"),
-            ("Wipe Down", "wipedown"),
-            ("Slide Left", "slideleft"),
-            ("Slide Right", "slideright"),
-            ("Slide Up", "slideup"),
-            ("Slide Down", "slidedown"),
-            ("Circle Crop", "circlecrop"),
-            ("Distance", "distance"),
-            ("Fade Black", "fadeblack"),
-            ("Fade White", "fadewhite"),
-            ("Radial", "radial"),
-            ("Dissolve", "dissolve"),
+        ("Wipe Left", "wipeleft"),
+        ("Wipe Right", "wiperight"),
+        ("Wipe Up", "wipeup"),
+        ("Wipe Down", "wipedown"),
+        ("Slide Left", "slideleft"),
+        ("Slide Right", "slideright"),
+        ("Slide Up", "slideup"),
+        ("Slide Down", "slidedown"),
+        ("Circle Crop", "circlecrop"),
+        ("Distance", "distance"),
+        ("Fade Black", "fadeblack"),
+        ("Fade White", "fadewhite"),
+        ("Radial", "radial"),
+        ("Dissolve", "dissolve"),
             ("Pixelize", "pixelize"),
         ]
         
         # Settings file path
-        self.settings_file = os.path.join(self.root_dir, "video_editor_settings.json")
         
         # UI state
         self.drag_start_index = None
@@ -122,6 +129,36 @@ class VideoEditorGUI(BaseAudioGUI):
             self.update_output_size_label()
         self.check_ffmpeg_availability()
     
+
+    def check_ffmpeg(self):
+        return self.app.check_ffmpeg()
+
+    def offer_ffmpeg_install(self):
+        return self.app.offer_ffmpeg_install()
+
+    def get_ffmpeg_command(self):
+        return self.app.get_ffmpeg_command()
+
+    def run_ffmpeg_command(self, cmd):
+        return self.app.run_ffmpeg_command(cmd)
+
+    def build_ffmpeg_command(self, *args, **kwargs):
+        return self.app.build_ffmpeg_command(*args, **kwargs)
+
+    def ensure_directory(self, path):
+        return self.app.ensure_directory(path)
+
+    def browse_folder(self, initial=''):
+        return self.app.browse_folder(initial)
+
+    def select_files(self, **kwargs):
+        return self.app.select_files(**kwargs)
+
+    def show_message(self, *args, **kwargs):
+        return self.app.show_message(*args, **kwargs)
+
+    def download_ffmpeg_windows(self, *args, **kwargs):
+        return self.app.download_ffmpeg_windows(*args, **kwargs)
     def _escape_for_concat(self, file_path: str) -> str:
         """Return a POSIX-style path with quotes escaped for ffmpeg concat demuxer."""
         # Normalize to absolute POSIX path to avoid backslash escaping issues on Windows
@@ -493,31 +530,10 @@ class VideoEditorGUI(BaseAudioGUI):
 
     def setup_ui(self):
         # Main container
-        main_frame = ttk.Frame(self.root)
+        main_frame = ttk.Frame(self.parent)
         main_frame.pack(fill='both', expand=True, padx=10, pady=10)
         
-        # Menu bar
-        menubar = tk.Menu(self.root)
-        self.root.config(menu=menubar)
-        
-        file_menu = tk.Menu(menubar, tearoff=0)
-        menubar.add_cascade(label="File", menu=file_menu)
-        file_menu.add_command(label="Add Videos", command=self.add_videos)
-        file_menu.add_command(label="Remove Selected", command=self.remove_selected)
-        file_menu.add_command(label="Clear All", command=self.clear_all)
-        file_menu.add_separator()
-        file_menu.add_command(label="Save Project", command=self.save_project)
-        file_menu.add_command(label="Load Project", command=self.load_project)
-        file_menu.add_separator()
-        file_menu.add_command(label="Exit", command=self.on_closing)
-        
-        edit_menu = tk.Menu(menubar, tearoff=0)
-        menubar.add_cascade(label="Edit", menu=edit_menu)
-        edit_menu.add_command(label="Set Grid Columns", command=self.set_grid_columns)
-        edit_menu.add_separator()
         self.auto_export_var = tk.BooleanVar(value=self.auto_export_enabled)
-        edit_menu.add_checkbutton(label="Auto-export Last Frame", variable=self.auto_export_var, 
-                                 command=self.toggle_auto_export)
         
         # Toolbar
         toolbar = ttk.Frame(main_frame)
@@ -526,6 +542,8 @@ class VideoEditorGUI(BaseAudioGUI):
         ttk.Button(toolbar, text="Add Videos", command=self.add_videos).pack(side='left', padx=5)
         ttk.Button(toolbar, text="Remove Selected", command=self.remove_selected).pack(side='left', padx=5)
         ttk.Button(toolbar, text="Clear All", command=self.clear_all).pack(side='left', padx=5)
+        ttk.Button(toolbar, text="Save Project", command=self.save_project).pack(side='left', padx=5)
+        ttk.Button(toolbar, text="Load Project", command=self.load_project).pack(side='left', padx=5)
         
         ttk.Separator(toolbar, orient='vertical').pack(side='left', fill='y', padx=10)
         
@@ -2133,10 +2151,10 @@ class VideoEditorGUI(BaseAudioGUI):
             self.log(f"[WARNING] Could not verify FFmpeg: {e}")
     
     def log(self, message):
-        """Log a message."""
-        self.log_text.insert(tk.END, f"{message}\n")
-        self.log_text.see(tk.END)
-    
+        self.app.log(message, self.TAB_NAME)
+        if hasattr(self, 'log_text') and self.log_text.winfo_exists():
+            self.log_text.insert(tk.END, f"{message}\n")
+            self.log_text.see(tk.END)
     def save_settings(self):
         """Save current settings to file."""
         try:
@@ -2157,8 +2175,7 @@ class VideoEditorGUI(BaseAudioGUI):
                 'video_files': self.video_files[:10]  # Save first 10 for quick restore
             }
             
-            with open(self.settings_file, 'w', encoding='utf-8') as f:
-                json.dump(settings, f, indent=2, ensure_ascii=False)
+            self.app.set_tab_settings(self._settings_key, settings)
         
         except Exception as e:
             print(f"[WARNING] Failed to save settings: {e}")
@@ -2166,10 +2183,8 @@ class VideoEditorGUI(BaseAudioGUI):
     def load_settings(self):
         """Load settings from file."""
         try:
-            if os.path.exists(self.settings_file):
-                with open(self.settings_file, 'r', encoding='utf-8') as f:
-                    settings = json.load(f)
-                
+            settings = self.app.get_tab_settings(self._settings_key)
+            if settings:
                 if 'grid_cols' in settings:
                     self.grid_cols = settings['grid_cols']
                     if hasattr(self, 'grid_cols_var'):
@@ -2243,27 +2258,3 @@ class VideoEditorGUI(BaseAudioGUI):
         except Exception as e:
             print(f"[WARNING] Failed to load settings: {e}")
     
-    def on_closing(self):
-        """Handle application closing."""
-        self.save_settings()
-        self.root.destroy()
-
-
-def main():
-    # Use TkinterDnD root if available
-    if DND_AVAILABLE:
-        root = TkinterDnD.Tk()
-    else:
-        root = tk.Tk()
-    
-    app = VideoEditorGUI(root)
-    
-    # Handle window closing
-    root.protocol("WM_DELETE_WINDOW", app.on_closing)
-    
-    root.mainloop()
-
-
-if __name__ == '__main__':
-    main()
-

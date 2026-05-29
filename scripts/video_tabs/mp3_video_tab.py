@@ -18,7 +18,12 @@ limitations under the License.
 
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
-from tkinterdnd2 import DND_FILES, TkinterDnD
+try:
+    from tkinterdnd2 import DND_FILES, TkinterDnD
+    DND_AVAILABLE = True
+except ImportError:
+    DND_FILES = None
+    DND_AVAILABLE = False
 import os
 import sys
 import threading
@@ -30,7 +35,7 @@ from pathlib import Path
 from PIL import Image
 
 # Import shared libraries
-sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 from lib.base_gui import BaseAudioGUI
 from lib.gui_utils import GUIManager, LogManager
 from lib.file_utils import FileManager
@@ -38,10 +43,18 @@ from lib.process_utils import ProcessManager
 from lib.ffmpeg_utils import FFmpegManager
 
 
-class MP3ToVideoConverterGUI(BaseAudioGUI):
-    def __init__(self, root):
-        super().__init__(root, "MP3 to Video Converter")
-        self.root.geometry("900x700")
+class Mp3ToVideoTab:
+    TAB_NAME = 'MP3 to Video'
+    _settings_key = 'mp3_video'
+    def __init__(self, app, parent):
+        self.app = app
+        self.parent = parent
+        self.root = app.root
+        self.root_dir = app.root_dir
+        self.file_manager = app.file_manager
+        self.process_manager = app.process_manager
+        self.ffmpeg_manager = app.ffmpeg_manager
+        self.is_busy = False
         
         # File attributes
         self.selected_mp3_files = []
@@ -91,14 +104,43 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
         ]
         
         # Settings file path
-        self.settings_file = os.path.join(self.root_dir, "mp3_to_video_converter_settings.json")
         
         self.setup_ui()
         self.load_settings()
     
+
+    def check_ffmpeg(self):
+        return self.app.check_ffmpeg()
+
+    def offer_ffmpeg_install(self):
+        return self.app.offer_ffmpeg_install()
+
+    def get_ffmpeg_command(self):
+        return self.app.get_ffmpeg_command()
+
+    def run_ffmpeg_command(self, cmd):
+        return self.app.run_ffmpeg_command(cmd)
+
+    def build_ffmpeg_command(self, *args, **kwargs):
+        return self.app.build_ffmpeg_command(*args, **kwargs)
+
+    def ensure_directory(self, path):
+        return self.app.ensure_directory(path)
+
+    def browse_folder(self, initial=''):
+        return self.app.browse_folder(initial)
+
+    def select_files(self, **kwargs):
+        return self.app.select_files(**kwargs)
+
+    def show_message(self, *args, **kwargs):
+        return self.app.show_message(*args, **kwargs)
+
+    def download_ffmpeg_windows(self, *args, **kwargs):
+        return self.app.download_ffmpeg_windows(*args, **kwargs)
     def setup_ui(self):
         # Main container
-        main_frame = ttk.Frame(self.root)
+        main_frame = ttk.Frame(self.parent)
         main_frame.pack(fill='both', expand=True, padx=10, pady=10)
         
         # MP3 Files Selection
@@ -1419,10 +1461,10 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
         self.root.after(0, lambda: self.set_busy(False))
     
     def log(self, message):
-        """Log a message."""
-        self.log_text.insert(tk.END, f"{message}\n")
-        self.log_text.see(tk.END)
-    
+        self.app.log(message, self.TAB_NAME)
+        if hasattr(self, 'log_text') and self.log_text.winfo_exists():
+            self.log_text.insert(tk.END, f"{message}\n")
+            self.log_text.see(tk.END)
     def _get_audio_duration(self, audio_file):
         """Get audio duration in seconds."""
         try:
@@ -2113,8 +2155,7 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
                 'transition_duration': self.transition_duration
             }
             
-            with open(self.settings_file, 'w', encoding='utf-8') as f:
-                json.dump(settings, f, indent=2, ensure_ascii=False)
+            self.app.set_tab_settings(self._settings_key, settings)
                 
         except Exception as e:
             # Don't show error to user, just log it
@@ -2123,10 +2164,8 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
     def load_settings(self):
         """Load settings from file."""
         try:
-            if os.path.exists(self.settings_file):
-                with open(self.settings_file, 'r', encoding='utf-8') as f:
-                    settings = json.load(f)
-                
+            settings = self.app.get_tab_settings(self._settings_key)
+            if settings:
                 # Restore UI settings
                 if 'output_folder' in settings:
                     self.output_folder_var.set(settings['output_folder'])
@@ -2232,21 +2271,3 @@ class MP3ToVideoConverterGUI(BaseAudioGUI):
             # Don't show error to user, just log it
             print(f"[WARNING] Failed to load settings: {e}")
     
-    def on_closing(self):
-        """Handle application closing."""
-        self.save_settings()
-        self.root.destroy()
-
-
-def main():
-    root = TkinterDnD.Tk()
-    app = MP3ToVideoConverterGUI(root)
-    
-    # Handle window closing
-    root.protocol("WM_DELETE_WINDOW", app.on_closing)
-    
-    root.mainloop()
-
-
-if __name__ == '__main__':
-    main()

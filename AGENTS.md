@@ -40,27 +40,24 @@ stream-download-convert-tools/
 ├── converted_changed/      # Modified audio files (gitignored)
 ├── ffmpeg/                 # FFmpeg portable installation (gitignored)
 ├── scripts/                # Python application scripts
-│   ├── stream_download_convert_tools_unified.py      # Unified application (RECOMMENDED)
-│   ├── youtube_downloader.py      # Individual YouTube downloader
-│   ├── video_to_mp3_converter.py   # Individual Video to MP3 converter
+│   ├── stream_download_convert_tools_unified.py      # Download/audio unified (RECOMMENDED)
+│   ├── video_tools_unified.py      # Video tools unified (RECOMMENDED for video)
+│   ├── video_tabs/                 # Tab modules for video_tools_unified
+│   ├── youtube_downloader.py       # Individual YouTube downloader
 │   ├── audio_modifier.py           # Individual Audio modifier
-│   ├── mp3_to_video_converter.py   # Individual MP3 to Video converter
-│   ├── video_editor.py             # Individual Video Editor
 │   ├── suno_style_browser.py       # Individual Suno Style Browser
 │   └── cover_song_checker.py       # Individual Cover Song Checker
+├── lib/
+│   └── video_utils.py              # Shared video probe/split/chunk helpers
 ├── launchers/              # Launcher scripts
-│   ├── stream_download_convert_tools_unified.bat     # Windows launcher (Unified - RECOMMENDED)
-│   ├── stream_download_convert_tools_unified.sh      # Linux/Mac launcher (Unified - RECOMMENDED)
+│   ├── stream_download_convert_tools_unified.bat     # Windows launcher (Download unified)
+│   ├── stream_download_convert_tools_unified.sh      # Linux/Mac launcher (Download unified)
+│   ├── video_tools_unified.bat     # Windows launcher (Video unified - RECOMMENDED)
+│   ├── video_tools_unified.sh      # Linux/Mac launcher (Video unified)
 │   ├── youtube_downloader.bat     # Windows launcher (Individual)
 │   ├── youtube_downloader.sh       # Linux/Mac launcher (Individual)
-│   ├── video_to_mp3_converter.bat # Windows launcher (Individual)
-│   ├── video_to_mp3_converter.sh  # Linux/Mac launcher (Individual)
 │   ├── audio_modifier.bat          # Windows launcher (Individual)
 │   ├── audio_modifier.sh           # Linux/Mac launcher (Individual)
-│   ├── mp3_to_video_converter.bat  # Windows launcher (Individual)
-│   ├── mp3_to_video_converter.sh   # Linux/Mac launcher (Individual)
-│   ├── video_editor.bat             # Windows launcher (Individual)
-│   ├── video_editor.sh              # Linux/Mac launcher (Individual)
 │   ├── suno_style_browser.bat       # Windows launcher (Individual)
 │   ├── suno_style_browser.sh        # Linux/Mac launcher (Individual)
 │   ├── cover_song_checker.bat       # Windows launcher (Individual)
@@ -103,11 +100,12 @@ The project uses CSV files with YouTube links. Example format from `input/top100
 4. Update README.md with usage instructions
 5. Test launcher on target platform
 
-#### Working with Unified Application
-- **Primary Application**: `stream_download_convert_tools_unified.py` - Contains all three tools in tabbed interface
-- **Launcher**: `stream_download_convert_tools_unified.bat/.sh` - Main launcher for unified application
-- **Individual Tools**: Still available for users who prefer separate applications
-- **Development**: When modifying functionality, update both unified and individual tools if needed
+#### Working with Unified Applications
+- **Download/Audio**: `stream_download_convert_tools_unified.py` - YouTube download, audio modifier, direct link
+- **Video**: `video_tools_unified.py` - MP3 extract, format/crop, MP3 to video, combine, split/chunks
+- **Launchers**: `stream_download_convert_tools_unified.bat/.sh` and `video_tools_unified.bat/.sh`
+- **Video tab code**: `scripts/video_tabs/`; shared FFmpeg helpers in `lib/video_utils.py`
+- **Docs**: `docs/VIDEO_TOOLS_GUIDE.md`
 
 #### Cover Song Checker
 - **Purpose**: Analyze copyright risk of cover songs before YouTube upload
@@ -129,11 +127,11 @@ The project uses CSV files with YouTube links. Example format from `input/top100
 ### External Tools Used
 - **yt-dlp**: YouTube downloading (https://github.com/yt-dlp/yt-dlp)
 - **FFmpeg**: Video/audio conversion and modification (https://ffmpeg.org/)
-  - Windows: Automatically downloaded by video_to_mp3_converter.py, audio_modifier.py, mp3_to_video_converter.py, and video_editor.py
+  - Windows: Automatically downloaded by video_tools_unified.py, audio_modifier.py, and stream unified apps
   - Linux/Mac: User must install manually
 - **tkinter**: GUI framework (included with Python)
-- **tkinterdnd2**: Drag-and-drop support for Tkinter (optional, for video_editor.py)
-- **opencv-python**: Video preview support (optional, for video_editor.py)
+- **tkinterdnd2**: Drag-and-drop support for Tkinter (optional, for video_tools_unified.py)
+- **opencv-python**: Video preview support (optional, for Combine Videos tab)
 - **csv**: CSV parsing (Python standard library)
 
 ## Notes for AI Agents
