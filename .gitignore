@@ -136,3 +136,6 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.temp
+
+# Grok automation run logs and failure screenshots
+private/grok/logs/

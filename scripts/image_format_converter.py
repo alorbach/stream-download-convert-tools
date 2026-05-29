@@ -92,6 +92,7 @@ class ImageFormatConverterGUI(BaseAudioGUI):
         self.video_duration_var = tk.StringVar(value="0")
         self.video_max_duration = 0  # Will be set when video is selected
         self.last_selected_video_file = None  # Track last selected video file
+        self.truncate_only_var = tk.BooleanVar(value=False)
         
         # Settings file path
         root_dir = os.path.dirname(os.path.dirname(__file__))
@@ -247,13 +248,19 @@ class ImageFormatConverterGUI(BaseAudioGUI):
         ttk.Radiobutton(self.video_mode_frame, text="Forward+Reverse", variable=self.video_mode_var, value="forward_reverse").pack(side='left', padx=5)
         self.video_mode_frame.grid_remove()  # Hidden by default
         
-        # Video duration selector (only visible when video file is selected and MP4 is output format)
+        # Video length (visible when a video file is selected)
         self.video_duration_frame = ttk.Frame(settings_frame)
         self.video_duration_frame.grid(row=7, column=0, columnspan=3, sticky='w', pady=5)
-        ttk.Label(self.video_duration_frame, text="Use Duration (seconds):").pack(side='left', padx=5)
+        ttk.Label(self.video_duration_frame, text="Max Length (seconds):").pack(side='left', padx=5)
         self.duration_spinbox = ttk.Spinbox(self.video_duration_frame, from_=0, to=1000, textvariable=self.video_duration_var, width=10)
         self.duration_spinbox.pack(side='left', padx=5)
-        ttk.Label(self.video_duration_frame, text="(0 = use full video)", foreground="gray").pack(side='left', padx=5)
+        self.duration_hint_label = ttk.Label(self.video_duration_frame, text="(0 = full length)", foreground="gray")
+        self.duration_hint_label.pack(side='left', padx=5)
+        ttk.Checkbutton(
+            self.video_duration_frame,
+            text="Truncate only (no crop/resize)",
+            variable=self.truncate_only_var
+        ).pack(side='left', padx=10)
         self.video_duration_frame.grid_remove()  # Hidden by default
         
         # Input format detection display
@@ -267,6 +274,7 @@ class ImageFormatConverterGUI(BaseAudioGUI):
         
         ttk.Button(process_frame, text="Convert Selected Files", command=self.convert_selected).pack(side='left', padx=5)
         ttk.Button(process_frame, text="Convert All Files", command=self.convert_all).pack(side='left', padx=5)
+        ttk.Button(process_frame, text="Truncate Selected", command=self.truncate_selected).pack(side='left', padx=5)
         
         self.progress = ttk.Progressbar(process_frame, mode='determinate')
         self.progress.pack(fill='x', padx=5, pady=5, expand=True)
@@ -284,7 +292,11 @@ class ImageFormatConverterGUI(BaseAudioGUI):
         info_frame = ttk.Frame(self.root)
         info_frame.pack(fill='x', padx=10, pady=5)
         
-        info_text = "Supported formats: Images (JPG, PNG, BMP, GIF, TIFF, WEBP) | Videos (MP4, AVI, MOV, MKV, WEBM, FLV) | Drag and drop files to add them"
+        info_text = (
+            "Images (JPG, PNG, ...) and videos (MP4, AVI, MOV, ...). "
+            "Select a video, set Max Length, then Truncate Selected or Convert. "
+            "Drag and drop to add files."
+        )
         ttk.Label(info_frame, text=info_text, font=('Arial', 8)).pack()
         
         # Bind selection change to update input format display
@@ -295,35 +307,9 @@ class ImageFormatConverterGUI(BaseAudioGUI):
         """Show/hide video mode options based on output format"""
         if self.output_format_var.get() == "MP4":
             self.video_mode_frame.grid()
-            # Show duration selector if we have a video file (either selected or last selected)
-            video_file = None
-            selection = self.file_listbox.curselection()
-            if selection:
-                idx = selection[0]
-                if idx < len(self.selected_files):
-                    file_path = self.selected_files[idx]
-                    if self.is_video_file(file_path):
-                        video_file = file_path
-            elif self.last_selected_video_file:
-                # Use last selected video file even if listbox lost focus
-                video_file = self.last_selected_video_file
-            
-            if video_file:
-                duration = self.get_video_duration(video_file)
-                if duration:
-                    self.video_max_duration = int(duration)
-                    self.duration_spinbox.config(to=self.video_max_duration)
-                    # Only reset if this is a different file
-                    if video_file != self.last_selected_video_file:
-                        self.video_duration_var.set("0")
-                    self.video_duration_frame.grid()
-                else:
-                    self.video_duration_frame.grid_remove()
-            else:
-                self.video_duration_frame.grid_remove()
         else:
             self.video_mode_frame.grid_remove()
-            self.video_duration_frame.grid_remove()
+        self.update_video_duration_ui()
     
     def on_aspect_ratio_change(self, event=None):
         ratio_name = self.aspect_ratio_var.get()
@@ -406,7 +392,69 @@ class ImageFormatConverterGUI(BaseAudioGUI):
             return None
         except Exception as e:
             self.log(f"[WARNING] Could not get duration for {os.path.basename(video_file)}: {e}")
-            return None
+        return None
+
+    def _get_active_video_file(self):
+        """Return the currently selected video file path, if any."""
+        selection = self.file_listbox.curselection()
+        if selection:
+            idx = selection[0]
+            if idx < len(self.selected_files):
+                file_path = self.selected_files[idx]
+                if self.is_video_file(file_path):
+                    return file_path
+        if self.last_selected_video_file and os.path.exists(self.last_selected_video_file):
+            return self.last_selected_video_file
+        return None
+
+    def update_video_duration_ui(self, reset_duration=False):
+        """Show or hide max-length controls for the active video file."""
+        video_file = self._get_active_video_file()
+        if not video_file:
+            self.video_duration_frame.grid_remove()
+            return
+
+        duration = self.get_video_duration(video_file)
+        if not duration:
+            self.video_duration_frame.grid_remove()
+            return
+
+        self.video_max_duration = max(1, int(duration))
+        self.duration_spinbox.config(to=self.video_max_duration)
+        self.duration_hint_label.config(
+            text=f"(max {duration:.1f}s, 0 = full; set >0 to truncate)"
+        )
+        if reset_duration:
+            self.video_duration_var.set("0")
+        self.video_duration_frame.grid()
+
+    def parse_trim_duration(self, require_positive=False):
+        """Parse max-length spinbox. Returns (seconds or None, error_message or None)."""
+        try:
+            value = float(self.video_duration_var.get())
+        except (TypeError, ValueError):
+            value = 0
+        if value <= 0:
+            if require_positive:
+                return None, "Set Max Length to a value greater than 0 seconds."
+            return None, None
+        if self.video_max_duration and value > self.video_max_duration:
+            msg = f"Max Length ({value:g}s) exceeds video duration ({self.video_max_duration}s)."
+            return None, msg if require_positive else (None, None)
+        return value, None
+
+    def get_requested_trim_duration(self):
+        """Return trim seconds from UI, or None to keep full source length."""
+        duration, _ = self.parse_trim_duration(require_positive=False)
+        return duration
+
+    def get_trim_output_path(self, input_path, duration_seconds):
+        """Build output path for a truncated video in the source folder."""
+        source_dir = os.path.dirname(input_path)
+        base_name = os.path.splitext(os.path.basename(input_path))[0]
+        duration_tag = f"{duration_seconds:g}".replace('.', 'p')
+        output_filename = f"{base_name}_trim{duration_tag}s.mp4"
+        return os.path.join(source_dir, output_filename)
     
     def on_file_selection_change(self, event=None):
         selection = self.file_listbox.curselection()
@@ -434,20 +482,11 @@ class ImageFormatConverterGUI(BaseAudioGUI):
                             # Store this as the last selected video file
                             self.last_selected_video_file = file_path
                             
-                            # Update duration selector if MP4 output is selected
-                            if self.output_format_var.get() == "MP4" and duration:
-                                self.video_max_duration = int(duration)
-                                self.duration_spinbox.config(to=self.video_max_duration)
-                                # Only reset duration if this is a different video file
-                                if is_different_file:
-                                    self.video_duration_var.set("0")  # Reset to full video
-                                self.video_duration_frame.grid()
-                            else:
-                                self.video_duration_frame.grid_remove()
+                            self.update_video_duration_ui(reset_duration=is_different_file)
                         else:
                             self.input_format_label.config(text=f"Video - Unable to read resolution", foreground="orange")
                             self.last_selected_video_file = None
-                            self.video_duration_frame.grid_remove()
+                            self.update_video_duration_ui()
                     else:
                         # Handle image file
                         with Image.open(file_path) as img:
@@ -466,12 +505,8 @@ class ImageFormatConverterGUI(BaseAudioGUI):
                     self.last_selected_video_file = None
                     self.video_duration_frame.grid_remove()
         else:
-            # No selection in listbox - but keep duration selector visible if we have a video file and MP4 output
-            if self.last_selected_video_file and self.output_format_var.get() == "MP4":
-                # Keep the duration selector visible - don't hide it when listbox loses focus
-                # Only update the label if it's not already showing video info
+            if self.last_selected_video_file:
                 if "Video" not in self.input_format_label.cget("text"):
-                    # Try to get info from last selected video file
                     try:
                         if os.path.exists(self.last_selected_video_file):
                             width, height = self.get_video_resolution(self.last_selected_video_file)
@@ -484,8 +519,9 @@ class ImageFormatConverterGUI(BaseAudioGUI):
                                     text=f"Video ({ext}) - {width}x{height} ({aspect_ratio:.2f}:1){duration_text}",
                                     foreground="black"
                                 )
-                    except:
+                    except Exception:
                         pass
+                self.update_video_duration_ui()
             else:
                 self.input_format_label.config(text="No file selected", foreground="gray")
                 self.video_duration_frame.grid_remove()
@@ -524,7 +560,7 @@ class ImageFormatConverterGUI(BaseAudioGUI):
         self.last_selected_video_file = None
         self.update_file_list()
         self.input_format_label.config(text="No file selected", foreground="gray")
-        self.video_duration_frame.grid_remove()
+        self.update_video_duration_ui()
         self.log("[INFO] Selection cleared")
     
     def update_file_list(self):
@@ -869,13 +905,7 @@ class ImageFormatConverterGUI(BaseAudioGUI):
             # Get video mode for MP4 output
             video_mode = self.video_mode_var.get() if output_format == "MP4" else "forward"
             
-            # Get selected duration (0 means use full video)
-            try:
-                selected_duration = float(self.video_duration_var.get())
-                if selected_duration <= 0:
-                    selected_duration = None  # Use full video
-            except:
-                selected_duration = None
+            selected_duration = self.get_requested_trim_duration()
             
             if video_mode == "forward_reverse":
                 # Create forward-reverse video
@@ -966,6 +996,126 @@ class ImageFormatConverterGUI(BaseAudioGUI):
             return False, "FFmpeg operation timed out"
         except Exception as e:
             return False, str(e)
+
+    def truncate_video(self, input_path, duration_seconds):
+        """Shorten a video to the first N seconds without cropping or resizing."""
+        try:
+            ffmpeg_cmd = self.ffmpeg_manager.get_ffmpeg_command()
+            if not ffmpeg_cmd or not self.ffmpeg_manager.check_ffmpeg():
+                return False, "FFmpeg not available. Please install FFmpeg."
+
+            output_path = self.get_trim_output_path(input_path, duration_seconds)
+            cmd = [
+                ffmpeg_cmd, '-y', '-i', input_path,
+                '-t', str(duration_seconds),
+                '-c:v', 'libx264', '-preset', 'medium', '-crf', '23',
+                '-c:a', 'aac', '-b:a', '192k',
+                '-movflags', '+faststart',
+                output_path
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            if result.returncode == 0 and os.path.exists(output_path):
+                return True, None
+            error_msg = result.stderr[-500:] if result.stderr else "Unknown FFmpeg error"
+            return False, error_msg
+        except subprocess.TimeoutExpired:
+            return False, "FFmpeg operation timed out"
+        except Exception as e:
+            return False, str(e)
+
+    def truncate_selected(self):
+        selection = self.file_listbox.curselection()
+        if not selection:
+            messagebox.showwarning("No Selection", "Please select one or more video files to truncate.")
+            return
+
+        files_to_truncate = []
+        for idx in selection:
+            file_path = self.selected_files[idx]
+            if self.is_video_file(file_path):
+                files_to_truncate.append(file_path)
+
+        if not files_to_truncate:
+            messagebox.showwarning("No Videos", "Please select at least one video file.")
+            return
+
+        duration, error = self.parse_trim_duration(require_positive=True)
+        if error:
+            messagebox.showwarning("Invalid Length", error)
+            return
+
+        self.truncate_files(files_to_truncate, duration)
+
+    def truncate_files(self, files_to_truncate, duration_seconds):
+        if self.is_busy:
+            messagebox.showwarning("Busy", "Another operation is already in progress.")
+            return
+
+        existing_files = []
+        files_to_process = []
+        for input_path in files_to_truncate:
+            output_path = self.get_trim_output_path(input_path, duration_seconds)
+            if os.path.exists(output_path):
+                existing_files.append(os.path.basename(output_path))
+            files_to_process.append((input_path, output_path))
+
+        if existing_files:
+            file_list = "\n".join(existing_files[:5])
+            if len(existing_files) > 5:
+                file_list += f"\n... and {len(existing_files) - 5} more"
+            result = messagebox.askyesno(
+                "Files Will Be Overwritten",
+                f"The following {len(existing_files)} file(s) already exist:\n\n{file_list}\n\n"
+                f"Overwrite these files?"
+            )
+            if not result:
+                self.log("[INFO] Truncate cancelled by user (overwrite declined)")
+                return
+
+        thread = threading.Thread(
+            target=self._truncate_files_thread,
+            args=(files_to_process, duration_seconds)
+        )
+        thread.daemon = True
+        thread.start()
+
+    def _truncate_files_thread(self, files_to_process, duration_seconds):
+        self.is_busy = True
+        self.set_busy(True, "Truncating videos...")
+
+        total = len(files_to_process)
+        success_count = 0
+        error_count = 0
+
+        self.progress['maximum'] = total
+        self.progress['value'] = 0
+
+        for idx, (input_path, expected_output_path) in enumerate(files_to_process):
+            self.progress['value'] = idx + 1
+            self.progress_label.config(
+                text=f"Truncating {idx + 1}/{total}: {os.path.basename(input_path)}"
+            )
+            self.root.update_idletasks()
+
+            success, result = self.truncate_video(input_path, duration_seconds)
+            if success:
+                success_count += 1
+                output_name = os.path.basename(expected_output_path)
+                self.log(
+                    f"[SUCCESS] Truncated to {duration_seconds:g}s: "
+                    f"{os.path.basename(input_path)} -> {output_name}"
+                )
+            else:
+                error_count += 1
+                self.log(f"[ERROR] Failed to truncate {os.path.basename(input_path)}: {result}")
+
+        self.is_busy = False
+        self.set_busy(False)
+        self.progress_label.config(text=f"Truncate done: {success_count} ok, {error_count} errors")
+        messagebox.showinfo(
+            "Truncate Complete",
+            f"Truncation finished!\n\nSuccess: {success_count}\nErrors: {error_count}"
+        )
     
     def convert_selected(self):
         selection = self.file_listbox.curselection()
@@ -995,6 +1145,12 @@ class ImageFormatConverterGUI(BaseAudioGUI):
         crop_position = self.crop_position_var.get()
         output_format = self.output_format_var.get()
         aspect_suffix = self.get_aspect_ratio_suffix(target_ratio)
+        truncate_duration = None
+        if self.truncate_only_var.get():
+            truncate_duration, error = self.parse_trim_duration(require_positive=True)
+            if error:
+                messagebox.showwarning("Invalid Length", error)
+                return
         
         # Check for overwrites first
         existing_files = []
@@ -1004,6 +1160,13 @@ class ImageFormatConverterGUI(BaseAudioGUI):
             # Get source file directory and base name
             source_dir = os.path.dirname(input_path)
             base_name = os.path.splitext(os.path.basename(input_path))[0]
+            
+            if truncate_duration is not None and self.is_video_file(input_path):
+                output_path = self.get_trim_output_path(input_path, truncate_duration)
+                if os.path.exists(output_path):
+                    existing_files.append(os.path.basename(output_path))
+                files_to_process.append((input_path, output_path))
+                continue
             
             # Determine output extension based on input type and format selection
             if self.is_video_file(input_path):
@@ -1048,12 +1211,12 @@ class ImageFormatConverterGUI(BaseAudioGUI):
         # Start conversion in thread
         thread = threading.Thread(
             target=self._convert_files_thread,
-            args=(files_to_process, target_ratio, crop_position, output_format)
+            args=(files_to_process, target_ratio, crop_position, output_format, truncate_duration)
         )
         thread.daemon = True
         thread.start()
     
-    def _convert_files_thread(self, files_to_process, target_ratio, crop_position, output_format):
+    def _convert_files_thread(self, files_to_process, target_ratio, crop_position, output_format, truncate_duration=None):
         self.is_busy = True
         self.set_busy(True, "Converting files...")
         
@@ -1069,8 +1232,9 @@ class ImageFormatConverterGUI(BaseAudioGUI):
             self.progress_label.config(text=f"Processing {idx + 1}/{total}: {os.path.basename(input_path)}")
             self.root.update_idletasks()
             
-            # Determine if file is video or image and call appropriate conversion method
-            if self.is_video_file(input_path):
+            if truncate_duration is not None and self.is_video_file(input_path):
+                success, error = self.truncate_video(input_path, truncate_duration)
+            elif self.is_video_file(input_path):
                 success, error = self.convert_video(input_path, output_path, target_ratio, crop_position, output_format)
             else:
                 success, error = self.convert_image(input_path, output_path, target_ratio, crop_position, output_format)
@@ -1138,12 +1302,16 @@ class ImageFormatConverterGUI(BaseAudioGUI):
                 # Load video duration
                 if 'video_duration' in settings:
                     self.video_duration_var.set(str(settings['video_duration']))
+
+                if 'truncate_only' in settings:
+                    self.truncate_only_var.set(bool(settings['truncate_only']))
                 
                 self.log("[INFO] Settings loaded from file")
         except Exception as e:
             self.log(f"[WARNING] Could not load settings: {e}")
         finally:
             self.settings_loaded = True
+            self.update_video_duration_ui()
     
     def save_settings(self):
         """Save current settings to JSON file"""
@@ -1159,7 +1327,8 @@ class ImageFormatConverterGUI(BaseAudioGUI):
                 'crop_position': self.crop_position_var.get(),
                 'output_format': self.output_format_var.get(),
                 'video_mode': self.video_mode_var.get(),
-                'video_duration': self.video_duration_var.get()
+                'video_duration': self.video_duration_var.get(),
+                'truncate_only': self.truncate_only_var.get()
             }
             
             with open(self.settings_file, 'w', encoding='utf-8') as f:
@@ -1177,6 +1346,7 @@ class ImageFormatConverterGUI(BaseAudioGUI):
         self.output_format_var.trace('w', lambda *args: self.save_settings())
         self.video_mode_var.trace('w', lambda *args: self.save_settings())
         self.video_duration_var.trace('w', lambda *args: self.save_settings())
+        self.truncate_only_var.trace('w', lambda *args: self.save_settings())
     
     def on_closing(self):
         """Handle window closing - save settings and destroy window"""
