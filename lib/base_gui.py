@@ -25,6 +25,7 @@ import sys
 from pathlib import Path
 
 from .ffmpeg_utils import FFmpegManager
+from .realesrgan_utils import RealESRGANManager
 from .gui_utils import GUIManager, LogManager
 from .file_utils import FileManager
 from .process_utils import ProcessManager
@@ -54,6 +55,7 @@ class BaseAudioGUI:
         self.file_manager = FileManager(self.root_dir)
         self.process_manager = ProcessManager(self.log_callback)
         self.ffmpeg_manager = FFmpegManager(self.root_dir, self.log_callback)
+        self.realesrgan_manager = RealESRGANManager(self.root_dir, self.log_callback)
         self.legal_manager = LegalManager(self.root_dir)
         self.security_manager = SecurityManager()
         
@@ -123,7 +125,29 @@ class BaseAudioGUI:
     def download_ffmpeg_windows(self, progress_callback=None, success_callback=None, error_callback=None):
         """Download FFmpeg for Windows."""
         return self.ffmpeg_manager.download_ffmpeg_windows(progress_callback, success_callback, error_callback)
-    
+
+    def check_realesrgan(self, custom_path=None):
+        """Check if Real-ESRGAN ncnn-vulkan is available."""
+        return self.realesrgan_manager.check_realesrgan(custom_path)
+
+    def get_realesrgan_exe(self):
+        """Path to realesrgan-ncnn-vulkan executable, or None."""
+        return self.realesrgan_manager.get_exe_path()
+
+    def offer_realesrgan_install(self):
+        """Offer to download Real-ESRGAN portable build."""
+        return self.realesrgan_manager.offer_realesrgan_install(self.show_message)
+
+    def download_realesrgan(
+        self, progress_callback=None, success_callback=None, error_callback=None
+    ):
+        """Download Real-ESRGAN for current platform."""
+        return self.realesrgan_manager.download_portable(
+            progress_callback=progress_callback,
+            success_callback=success_callback,
+            error_callback=error_callback,
+        )
+
     def get_ffmpeg_command(self):
         """Get FFmpeg command."""
         return self.ffmpeg_manager.get_ffmpeg_command()

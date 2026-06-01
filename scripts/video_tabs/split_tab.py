@@ -16,13 +16,17 @@ except ImportError:
 from lib.video_utils import (
     CHUNK_PLAN_SAMPLE,
     apply_chunk_plan,
+    companion_mp3_path,
     export_visual_segments,
     extract_segment,
+    extract_segment_mp3,
+    extract_mp3_from_file,
     parse_chunk_plan_json,
     parse_dropped_paths,
     probe_duration,
     segment_bounds,
     segments_to_plan,
+    source_output_dir,
     split_fixed_interval,
 )
 from .visual_trim_panel import VisualTrimPanel
@@ -99,19 +103,14 @@ class SplitChunksTab:
 
         out_frame = ttk.LabelFrame(self.parent, text='Output', padding=10)
         out_frame.pack(fill='x', padx=10, pady=5)
-        ttk.Label(out_frame, text='Output folder:').grid(row=0, column=0, sticky='w')
-        self.output_var = tk.StringVar(value=self.app.get_setting('split_output', 'chunks'))
-        self.output_entry = ttk.Entry(out_frame, textvariable=self.output_var, width=50)
-        self.output_entry.grid(row=0, column=1, padx=5)
-        self.output_browse_btn = ttk.Button(out_frame, text='Browse', command=self.browse_output)
-        self.output_browse_btn.grid(row=0, column=2)
-        self.output_visual_hint = ttk.Label(
+        ttk.Label(
             out_frame,
-            text='Visual trim: MP4 + MP3 chunks are saved next to each source video.',
+            text=(
+                'All modes: for each chunk, MP4 and MP3 are saved in the same folder as the '
+                'source video (e.g. mysong_part_001.mp4 and mysong_part_001.mp3).'
+            ),
             wraplength=700,
-        )
-        self.output_visual_hint.grid(row=1, column=0, columnspan=3, sticky='w', pady=(6, 0))
-        self.output_visual_hint.grid_remove()
+        ).pack(anchor='w')
 
         self.on_mode_change()
 
@@ -185,18 +184,6 @@ class SplitChunksTab:
         elif m == 'visual' and self._visual_available:
             self.visual_frame.pack(fill='both', expand=True)
             self._load_selected_video_into_visual()
-        self._update_output_controls()
-
-    def _update_output_controls(self):
-        visual = self.mode_var.get() == 'visual' and self._visual_available
-        if visual:
-            self.output_visual_hint.grid()
-            self.output_entry.config(state='disabled')
-            self.output_browse_btn.config(state='disabled')
-        else:
-            self.output_visual_hint.grid_remove()
-            self.output_entry.config(state='normal')
-            self.output_browse_btn.config(state='normal')
 
     def on_file_select(self, event=None):
         if self.mode_var.get() == 'visual':
@@ -226,10 +213,7 @@ class SplitChunksTab:
         if not segments:
             messagebox.showwarning('Warning', 'No cut regions to sync')
             return
-        path = self._get_selected_video_path()
-        folder = os.path.dirname(os.path.abspath(path)) if path else self.output_var.get()
         plan = segments_to_plan(segments, output_folder='.', name_pattern='{basename}_{id}.mp4')
-        plan['output']['folder'] = folder if os.path.isabs(folder) else '.'
         self.json_text.delete('1.0', tk.END)
         self.json_text.insert('1.0', json.dumps(plan, indent=2))
         self.mode_var.set('json')
@@ -244,6 +228,8 @@ class SplitChunksTab:
         guide = os.path.join(self.app.root_dir, 'docs', 'VIDEO_TOOLS_GUIDE.md')
         msg = (
             'Modes: fixed interval, single segment, JSON plan, or visual trim.\n\n'
+            'Every chunk exports MP4 + MP3 next to the source video file '
+            '(same basename, e.g. mysong_part_001.mp4 and mysong_part_001.mp3).\n\n'
             'Visual trim: select a video, drag In/Out handles, Add cut, Run Split.\n'
             'Shortcuts: I = In, O = Out, Space = Play/Pause.\n\n'
             'See docs/VIDEO_TOOLS_GUIDE.md for chunk JSON format.'
@@ -297,12 +283,6 @@ class SplitChunksTab:
                 self.selected_files.append(p)
         self.refresh_list()
 
-    def browse_output(self):
-        folder = self.app.browse_folder(self.output_var.get())
-        if folder:
-            self.output_var.set(folder)
-            self.app.set_setting('split_output', folder)
-
     def run_split(self):
         if self.app.is_busy:
             messagebox.showwarning('Warning', 'Operation in progress')
@@ -325,7 +305,6 @@ class SplitChunksTab:
         if not self.app.check_ffmpeg():
             self.app.offer_ffmpeg_install()
             return
-        self.app.set_setting('split_output', self.output_var.get())
         self.app.set_busy(True, 'Splitting...')
         self.progress['maximum'] = len(videos)
         self.progress['value'] = 0
@@ -333,21 +312,18 @@ class SplitChunksTab:
 
     def _split_thread(self, videos, mode):
         ffmpeg = self.app.get_ffmpeg_command()
-        out_base = self.output_var.get()
-        if not os.path.isabs(out_base):
-            out_base = os.path.join(self.app.root_dir, out_base)
         total_out = 0
         for idx, video in enumerate(videos):
             self.root.after(0, lambda i=idx, v=video: self.log(f'\n[INFO] Processing: {os.path.basename(v)}'))
             try:
                 if mode == 'interval':
-                    total_out += self._do_interval(ffmpeg, video, out_base)
+                    total_out += self._do_interval(ffmpeg, video)
                 elif mode == 'single':
-                    total_out += self._do_single(ffmpeg, video, out_base)
+                    total_out += self._do_single(ffmpeg, video)
                 elif mode == 'visual':
-                    total_out += self._do_visual(ffmpeg, video, out_base)
+                    total_out += self._do_visual(ffmpeg, video)
                 else:
-                    total_out += self._do_json(ffmpeg, video, out_base)
+                    total_out += self._do_json(ffmpeg, video)
             except Exception as e:
                 self.root.after(0, lambda m=str(e): self.log(f'[ERROR] {m}'))
             self.root.after(0, lambda v=idx + 1: self.progress.config(value=v))
@@ -355,8 +331,7 @@ class SplitChunksTab:
         self.root.after(0, lambda: messagebox.showinfo('Done', f'Created {total_out} output file(s)'))
         self.root.after(0, lambda: self.app.set_busy(False))
 
-    def _do_visual(self, ffmpeg, video, out_base):
-        del out_base
+    def _do_visual(self, ffmpeg, video):
         segments = self.visual_panel.get_segments()
         outs, errs = export_visual_segments(ffmpeg, video, segments)
         for e in errs:
@@ -365,13 +340,12 @@ class SplitChunksTab:
             self.root.after(0, lambda p=o: self.log(f'[SUCCESS] {p}'))
         return len(outs)
 
-    def _do_interval(self, ffmpeg, video, out_base):
+    def _do_interval(self, ffmpeg, video):
         chunk = float(self.chunk_sec_var.get())
         max_c = int(self.max_chunks_var.get() or 0)
         max_chunks = max_c if max_c > 0 else None
-        per_video_out = os.path.join(out_base, Path(video).stem)
         outs, errs = split_fixed_interval(
-            ffmpeg, video, per_video_out, chunk,
+            ffmpeg, video, source_output_dir(video), chunk,
             name_pattern=self.interval_pattern_var.get(),
             max_chunks=max_chunks,
         )
@@ -381,7 +355,7 @@ class SplitChunksTab:
             self.root.after(0, lambda p=o: self.log(f'[SUCCESS] {p}'))
         return len(outs)
 
-    def _do_single(self, ffmpeg, video, out_base):
+    def _do_single(self, ffmpeg, video):
         duration = probe_duration(ffmpeg, video)
         if not duration:
             raise ValueError('Could not read video duration')
@@ -401,18 +375,30 @@ class SplitChunksTab:
                 pass
             start, end = segment_bounds(duration, start_spec, duration_sec=dur)
         seg_dur = end - start
-        os.makedirs(out_base, exist_ok=True)
+        out_dir = source_output_dir(video)
+        os.makedirs(out_dir, exist_ok=True)
         suffix = self.single_suffix_var.get() or '_clip'
-        out = os.path.join(out_base, f'{Path(video).stem}{suffix}.mp4')
+        out = os.path.join(out_dir, f'{Path(video).stem}{suffix}.mp4')
         ok, err = extract_segment(ffmpeg, video, out, start, seg_dur)
-        if ok:
-            self.root.after(0, lambda p=out: self.log(f'[SUCCESS] {p}'))
-            return 1
-        raise ValueError(err)
+        if not ok:
+            raise ValueError(err)
+        count = 1
+        mp3_out = companion_mp3_path(out)
+        ok_mp3, err_mp3 = extract_segment_mp3(ffmpeg, video, mp3_out, start, seg_dur)
+        if not ok_mp3:
+            ok_mp3, err_mp3 = extract_mp3_from_file(ffmpeg, out, mp3_out)
+        if ok_mp3:
+            count += 1
+            self.root.after(0, lambda p=mp3_out: self.log(f'[SUCCESS] {p}'))
+        elif err_mp3:
+            self.root.after(0, lambda m=err_mp3: self.log(f'[WARN] mp3: {m}'))
+        self.root.after(0, lambda p=out: self.log(f'[SUCCESS] {p}'))
+        return count
 
-    def _do_json(self, ffmpeg, video, out_base):
+    def _do_json(self, ffmpeg, video):
         plan = parse_chunk_plan_json(self.json_text.get('1.0', tk.END))
-        outs, errs = apply_chunk_plan(ffmpeg, video, plan, out_base)
+        plan.setdefault('output', {})['folder'] = '.'
+        outs, errs = apply_chunk_plan(ffmpeg, video, plan, source_output_dir(video))
         for w in errs:
             self.root.after(0, lambda m=w: self.log(f'[WARN] {m}'))
         for o in outs:

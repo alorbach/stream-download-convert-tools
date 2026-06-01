@@ -5,6 +5,7 @@ from .format_tab import FormatCropTab
 from .mp3_video_tab import Mp3ToVideoTab
 from .combine_tab import CombineVideosTab
 from .split_tab import SplitChunksTab
+from .upscale_tab import UpscaleTab
 
 __all__ = [
     'VideoToMp3Tab',
@@ -12,4 +13,5 @@ __all__ = [
     'Mp3ToVideoTab',
     'CombineVideosTab',
     'SplitChunksTab',
+    'UpscaleTab',
 ]

@@ -27,6 +27,7 @@ from video_tabs import (
     Mp3ToVideoTab,
     CombineVideosTab,
     SplitChunksTab,
+    UpscaleTab,
 )
 
 SETTINGS_FILE = 'video_tools_unified_settings.json'
@@ -61,6 +62,7 @@ class VideoToolsUnifiedGUI(BaseAudioGUI):
         self.tab_mp3_video = ttk.Frame(self.notebook)
         self.tab_combine = ttk.Frame(self.notebook)
         self.tab_split = ttk.Frame(self.notebook)
+        self.tab_upscale = ttk.Frame(self.notebook)
         self.tab_settings = ttk.Frame(self.notebook)
 
         self.notebook.add(self.tab_v2m, text='Video to MP3')
@@ -68,6 +70,7 @@ class VideoToolsUnifiedGUI(BaseAudioGUI):
         self.notebook.add(self.tab_mp3_video, text='MP3 to Video')
         self.notebook.add(self.tab_combine, text='Combine Videos')
         self.notebook.add(self.tab_split, text='Split and Chunks')
+        self.notebook.add(self.tab_upscale, text='Upscale Video')
         self.notebook.add(self.tab_settings, text='Settings')
 
         self._tabs['v2m'] = VideoToMp3Tab(self, self.tab_v2m)
@@ -75,6 +78,7 @@ class VideoToolsUnifiedGUI(BaseAudioGUI):
         self._tabs['mp3_video'] = Mp3ToVideoTab(self, self.tab_mp3_video)
         self._tabs['combine'] = CombineVideosTab(self, self.tab_combine)
         self._tabs['split'] = SplitChunksTab(self, self.tab_split)
+        self._tabs['upscale'] = UpscaleTab(self, self.tab_upscale)
         self.setup_settings_tab()
 
         log_frame = ttk.LabelFrame(main, text='Log', padding=5)

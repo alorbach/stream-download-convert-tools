@@ -11,6 +11,7 @@ Video Tools Unified combines former standalone tools into one application:
 | MP3 to Video | mp3_to_video_converter | Create video from MP3 + image or looped video |
 | Combine Videos | video_editor | Multi-clip grid, transitions, export |
 | Split and Chunks | (new) | Fixed intervals, single segments, JSON plans, visual trim |
+| Upscale Video | (new) | High-quality resize (e.g. 672x448 to 1168x768), optional Real-ESRGAN |
 
 **Launcher:** `launchers/video_tools_unified.bat` (Windows) or `launchers/video_tools_unified.sh` (Linux/Mac)
 
@@ -61,6 +62,8 @@ Output: MP3 files in the converted folder.
 
 ## Split and Chunks
 
+All modes write **MP4 + matching MP3** files **next to each source video** (same folder as the input file). The JSON plan `output.folder` field is ignored at export time; use `"."` in samples.
+
 ### Mode: Visual trim (embedded editor)
 
 Use when you want to pick cuts by watching the video (not a full NLE, but in-tab preview + timeline).
@@ -87,7 +90,7 @@ Splits into equal-length segments (e.g. 6 seconds for short-form platforms).
 
 - **Chunk length:** seconds per segment.
 - **Max chunks:** 0 = no limit.
-- **Name pattern:** `{basename}_part_{index:03d}.mp4`
+- **Name pattern:** `{basename}_part_{index:03d}.mp4` (plus matching `.mp3` per part).
 
 ### Mode: Single segment
 
@@ -106,7 +109,7 @@ Paste or load a JSON file. Example:
 {
   "version": 1,
   "output": {
-    "folder": "chunks",
+    "folder": ".",
     "name_pattern": "{basename}_{id}.mp4"
   },
   "segments": [
@@ -133,6 +136,53 @@ Validation: segments are clamped to video duration; zero-length segments are ski
 
 ---
 
+## Upscale Video
+
+Batch-upscale videos to an exact width and height. Useful for raising Grok or other low-resolution exports (e.g. **672x448** to **1168x768**).
+
+### Steps
+
+1. Add videos (select or drag-and-drop).
+2. Choose a **target resolution** preset or set width/height (even dimensions enforced).
+3. Pick an **upscale method** (see below).
+4. Outputs go **next to each source file** by default (`_upscaled` suffix). Uncheck that option to use a separate output folder.
+5. Click **Upscale Selected** or **Upscale All Listed**.
+
+While processing, the tab shows **file batch** progress and a **current file encode** bar with percent and time (from FFmpeg). AI mode also shows stage labels during frame extract and Real-ESRGAN.
+
+### Methods
+
+| Method | Description |
+|--------|-------------|
+| Standard (bicubic) | Fast FFmpeg `scale`; baseline quality |
+| High (Lanczos) | Lanczos with accurate rounding; good default for ~1.5-2x upscale |
+| Maximum | Two-step Lanczos when scale factor > 1.25x, plus light unsharp |
+| AI (Real-ESRGAN) | Frame extract, ncnn-vulkan 2x/4x upscale, then Lanczos to exact target |
+
+FFmpeg modes re-encode with **libx264**, default **CRF 18** and **slow** preset. Audio is copied when possible; otherwise AAC fallback.
+
+### Presets
+
+- **Grok HD (1168 x 768)** - common target for Grok clips
+- **720p**, **1080p**, or **Custom**
+
+### AI mode (Real-ESRGAN)
+
+1. Click **Auto Install** on the Upscale tab (or confirm when prompted on first AI upscale). This downloads the portable Windows build (~45 MB) into `realesrgan/` in the project folder.
+2. Or download manually from [Real-ESRGAN releases](https://github.com/xinntao/Real-ESRGAN/releases/tag/v0.2.5.0) and browse to `realesrgan-ncnn-vulkan.exe`.
+3. Choose a model; **realesr-animevideov3** is a good starting point for AI-generated video.
+4. Expect slow processing (many PNG frames per clip). Temp frames live under `%TEMP%\video_upscale_*`; uncheck **Remove temp frames** to keep them for inspection.
+
+AI upscale uses integer **2x** or **4x** first, then FFmpeg scales to your exact target size. It cannot invent real detail at fractional scales, but it often improves soft generative footage.
+
+### Limitations
+
+- Upscaling cannot add true detail beyond interpolation / AI enhancement.
+- AI mode requires a separate executable (not bundled with this project).
+- Very long videos consume large temp disk space in AI mode.
+
+---
+
 ## Requirements
 
 - Python 3.7+
@@ -149,6 +199,8 @@ Validation: segments are clamped to video duration; zero-length segments are ski
 | Segment copy fails | Tool retries with re-encode (libx264 + AAC) |
 | No drag-and-drop | `pip install tkinterdnd2` and restart |
 | No preview window | `pip install opencv-python` or use OS default player |
+| AI upscale fails | Verify exe path; check log for frame extract or encode errors |
+| Output not exact size | Width/height are rounded down to even values for H.264 |
 
 ---
 

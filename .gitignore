@@ -112,6 +112,8 @@ downloads/
 converted/
 converted_changed/
 ffmpeg/
+realesrgan/
+realesrgan_temp.zip
 
 # Node.js dependencies
 node_modules/
