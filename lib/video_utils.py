@@ -17,6 +17,7 @@ limitations under the License.
 """
 
 import json
+import math
 import os
 import platform
 import re
@@ -251,11 +252,14 @@ def probe_fps(
     ffmpeg_cmd: str,
     input_path: str,
     ffprobe_cmd: Optional[str] = None,
+    *,
+    prefer_avg: bool = False,
 ) -> Optional[float]:
-    """Return average video frame rate or None."""
+    """Return video frame rate (nominal r_frame_rate first, unless prefer_avg)."""
     probe = ffprobe_cmd or resolve_ffprobe_cmd(ffmpeg_cmd)
     if probe:
-        for field in ('avg_frame_rate', 'r_frame_rate'):
+        fields = ('avg_frame_rate', 'r_frame_rate') if prefer_avg else ('r_frame_rate', 'avg_frame_rate')
+        for field in fields:
             try:
                 result = subprocess.run(
                     [
@@ -1103,6 +1107,7 @@ def build_segment_command(
     duration_sec: float,
     use_copy: bool = True,
     encode_opts: Optional[Dict[str, str]] = None,
+    target_fps: Optional[float] = None,
 ) -> List[str]:
     """Build ffmpeg command to extract one segment."""
     opts = {**DEFAULT_ENCODE_OPTS, **(encode_opts or {})}
@@ -1115,6 +1120,9 @@ def build_segment_command(
     if use_copy:
         cmd.extend(['-c', 'copy', '-avoid_negative_ts', 'make_zero'])
     else:
+        if target_fps and target_fps > 0:
+            fps_str = _format_fps_for_ffmpeg(target_fps)
+            cmd.extend(['-vf', f'fps={fps_str}', '-r', fps_str, '-fps_mode', 'cfr'])
         cmd.extend([
             '-c:v', opts['video_codec'],
             '-preset', opts['preset'],
@@ -1251,17 +1259,25 @@ def extract_segment(
     start_sec: float,
     duration_sec: float,
     use_copy: bool = True,
+    target_fps: Optional[float] = None,
 ) -> Tuple[bool, str]:
     os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
+    cfr_fps = target_fps
+    if cfr_fps is None and not use_copy:
+        cfr_fps = probe_fps(ffmpeg_cmd, input_path) or 24.0
     cmd = build_segment_command(
-        ffmpeg_cmd, input_path, output_path, start_sec, duration_sec, use_copy=use_copy
+        ffmpeg_cmd, input_path, output_path, start_sec, duration_sec,
+        use_copy=use_copy, target_fps=cfr_fps,
     )
     ok, err = run_ffmpeg(cmd)
     if ok and os.path.exists(output_path):
         return True, ''
     if use_copy:
+        if cfr_fps is None:
+            cfr_fps = probe_fps(ffmpeg_cmd, input_path) or 24.0
         cmd = build_segment_command(
-            ffmpeg_cmd, input_path, output_path, start_sec, duration_sec, use_copy=False
+            ffmpeg_cmd, input_path, output_path, start_sec, duration_sec,
+            use_copy=False, target_fps=cfr_fps,
         )
         ok, err = run_ffmpeg(cmd)
         if ok and os.path.exists(output_path):
@@ -1357,54 +1373,47 @@ def split_fixed_interval(
 ) -> Tuple[List[str], List[str]]:
     """
     Split video into fixed-length chunks. Returns (output_paths, errors).
+
+    Uses per-segment extract with constant frame rate (from source) so each chunk
+    keeps the same fps as the input. The old segment-muxer + stream-copy path cut
+    on keyframes and often produced ~23.3-23.8 fps averages on some chunks.
     """
     os.makedirs(output_dir, exist_ok=True)
     basename = Path(input_path).stem
-    input_abs = os.path.abspath(input_path)
-    if '{index' in name_pattern or '{basename}' in name_pattern:
-        out_template = pattern_to_segment_template(name_pattern, basename, output_dir)
-    else:
-        out_template = os.path.join(output_dir, f'{basename}_part_%03d.mp4')
+    duration = probe_duration(ffmpeg_cmd, input_path)
+    if duration is None or duration <= 0:
+        return [], ['Could not determine video duration']
 
-    def _collect_segment_outputs() -> List[Path]:
-        found = sorted(Path(output_dir).glob('*.mp4'))
-        return [p for p in found if os.path.abspath(str(p)) != input_abs]
+    target_fps = probe_fps(ffmpeg_cmd, input_path) or 24.0
+    chunk_count = max(1, int(math.ceil(duration / chunk_seconds)))
+    if max_chunks:
+        chunk_count = min(chunk_count, max_chunks)
 
-    cmd = [
-        ffmpeg_cmd, '-y', '-i', input_path,
-        '-f', 'segment', '-segment_time', str(chunk_seconds),
-        '-reset_timestamps', '1', '-c', 'copy',
-        '-map', '0', out_template,
-    ]
-    ok, err = run_ffmpeg(cmd, timeout=1800)
-    outputs = _collect_segment_outputs()
+    mp4_paths: List[str] = []
+    errors: List[str] = []
+    for i in range(chunk_count):
+        start = i * chunk_seconds
+        seg_dur = min(chunk_seconds, duration - start)
+        if seg_dur < 0.05:
+            break
+        seg_id = f'{i:03d}'
+        out_name = format_output_name(name_pattern, basename, seg_id, i + 1)
+        out_path = os.path.join(output_dir, out_name)
+        ok, err = extract_segment(
+            ffmpeg_cmd, input_path, out_path, start, seg_dur,
+            use_copy=False, target_fps=target_fps,
+        )
+        if ok:
+            mp4_paths.append(out_path)
+        else:
+            errors.append(f'{out_name}: {err or "segment export failed"}')
 
-    if not ok or not outputs:
-        cmd = [
-            ffmpeg_cmd, '-y', '-i', input_path,
-            '-f', 'segment', '-segment_time', str(chunk_seconds),
-            '-reset_timestamps', '1',
-            '-c:v', 'libx264', '-preset', 'medium', '-crf', '23',
-            '-c:a', 'aac', '-b:a', '192k',
-            '-map', '0', out_template,
-        ]
-        ok, err = run_ffmpeg(cmd, timeout=1800)
-        outputs = _collect_segment_outputs()
-
-    if max_chunks and len(outputs) > max_chunks:
-        for extra in outputs[max_chunks:]:
-            try:
-                extra.unlink()
-            except OSError:
-                pass
-        outputs = outputs[:max_chunks]
-
-    mp4_paths = [str(p) for p in outputs]
     all_outputs = list(mp4_paths)
-    errors = [] if mp4_paths else [err or 'No segment files created']
+    if not mp4_paths:
+        errors.append('No segment files created')
 
     if also_mp3 and mp4_paths:
-        for i, mp4_path in enumerate(mp4_paths):
+        for mp4_path in mp4_paths:
             mp3_path = companion_mp3_path(mp4_path)
             ok_mp3, err_mp3 = extract_mp3_from_file(ffmpeg_cmd, mp4_path, mp3_path)
             if ok_mp3:
@@ -1516,3 +1525,374 @@ def export_visual_segments(
     return apply_chunk_plan(
         ffmpeg_cmd, input_path, plan, output_base_dir, also_mp3=also_mp3,
     )
+
+
+VIDEO_EXTENSIONS = {'.mp4', '.webm', '.avi', '.mov', '.mkv', '.flv', '.wmv', '.m4v'}
+
+# scene_sub: storyboard_scene_004_000.mp4
+_SPLIT_PART_INDEX_RE = re.compile(r'_(\d+)_(\d+)(?:\.\w+)?$')
+_SPLIT_PART_FILE_RE = re.compile(r'_\d+_\d+\.', re.I)
+
+
+def escape_for_concat(file_path: str) -> str:
+    """POSIX path with quotes escaped for ffmpeg concat demuxer."""
+    posix_path = Path(file_path).resolve().as_posix()
+    return posix_path.replace("'", r"'\''")
+
+
+def list_videos_in_folder(folder: str, recursive: bool = False) -> List[str]:
+    """List video files in a folder (top-level only unless recursive)."""
+    if not folder or not os.path.isdir(folder):
+        return []
+    paths: List[str] = []
+    if recursive:
+        for root, _dirs, files in os.walk(folder):
+            for name in files:
+                if os.path.splitext(name)[1].lower() in VIDEO_EXTENSIONS:
+                    paths.append(os.path.join(root, name))
+    else:
+        for name in os.listdir(folder):
+            full = os.path.join(folder, name)
+            if os.path.isfile(full) and os.path.splitext(name)[1].lower() in VIDEO_EXTENSIONS:
+                paths.append(full)
+    return paths
+
+
+def is_split_part_video(path: str) -> bool:
+    """True for chunk files like name_004_000.mp4 (not combined exports)."""
+    name = os.path.basename(path)
+    if 'combined' in name.lower():
+        return False
+    return bool(_SPLIT_PART_FILE_RE.search(name))
+
+
+def split_part_sort_key(path: str) -> Tuple[int, int, str]:
+    """Sort key for split part filenames (scene, sub-index, then name)."""
+    stem = Path(path).stem.lower()
+    m = _SPLIT_PART_INDEX_RE.search(stem)
+    if m:
+        return int(m.group(1)), int(m.group(2)), stem
+    nums = [int(x) for x in re.findall(r'\d+', stem)]
+    if len(nums) >= 2:
+        return nums[-2], nums[-1], stem
+    if nums:
+        return nums[0], 0, stem
+    return 999999, 999999, stem
+
+
+def find_lipsync_match(split_path: str, lipsync_dir: str) -> Optional[str]:
+    """
+    Find LatentSync output for a split part: {stem}__*.mp4 in lipsync_dir.
+    If multiple matches exist, return the newest by mtime.
+    """
+    if not lipsync_dir or not os.path.isdir(lipsync_dir):
+        return None
+    stem = Path(split_path).stem
+    pattern = os.path.join(lipsync_dir, f'{stem}__*.mp4')
+    matches = [p for p in Path(lipsync_dir).glob(f'{stem}__*.mp4') if p.is_file()]
+    if not matches:
+        return None
+    best = max(matches, key=lambda p: p.stat().st_mtime)
+    return str(best.resolve())
+
+
+def build_merge_clip_list(
+    split_dir: str,
+    lipsync_dir: str,
+) -> List[Tuple[str, str, str]]:
+    """
+    Build ordered clip list for merge export.
+
+    Returns list of (split_basename, chosen_path, source_label)
+    where source_label is 'lipsync' or 'split'.
+    """
+    split_videos = [
+        p for p in list_videos_in_folder(split_dir, recursive=False)
+        if is_split_part_video(p)
+    ]
+    split_videos.sort(key=split_part_sort_key)
+    rows: List[Tuple[str, str, str]] = []
+    for split_path in split_videos:
+        basename = os.path.basename(split_path)
+        sync_path = find_lipsync_match(split_path, lipsync_dir)
+        if sync_path:
+            rows.append((basename, sync_path, 'lipsync'))
+        else:
+            rows.append((basename, split_path, 'split'))
+    return rows
+
+
+def write_concat_list(video_paths: List[str], dest_path: str) -> None:
+    """Write ffmpeg concat demuxer list file."""
+    os.makedirs(os.path.dirname(os.path.abspath(dest_path)) or '.', exist_ok=True)
+    with open(dest_path, 'w', encoding='utf-8', newline='\n') as f:
+        for vf in video_paths:
+            if not os.path.isfile(vf):
+                continue
+            safe_path = escape_for_concat(vf)
+            f.write(f"file '{safe_path}'\n")
+
+
+def resolve_target_fps(ffmpeg_cmd: str, reference_path: str) -> float:
+    """Nominal fps for CFR export (from first clip)."""
+    fps = probe_fps(ffmpeg_cmd, reference_path)
+    if not fps or fps <= 0:
+        return 24.0
+    if abs(fps - round(fps)) < 0.05:
+        return float(int(round(fps)))
+    return fps
+
+
+def _concat_external_audio_cmd(
+    ffmpeg_cmd: str,
+    concat_file: str,
+    audio_path: str,
+    output_path: str,
+    *,
+    copy_video: bool = True,
+    audio_bitrate: str = '192k',
+    target_fps: Optional[float] = None,
+    encode_opts: Optional[Dict[str, str]] = None,
+) -> List[str]:
+    cmd = [
+        ffmpeg_cmd, '-f', 'concat', '-safe', '0', '-i', concat_file,
+        '-i', audio_path,
+        '-map', '0:v:0', '-map', '1:a:0', '-shortest',
+    ]
+    if copy_video:
+        cmd.extend(['-c:v', 'copy', '-c:a', 'aac', '-b:a', audio_bitrate, '-movflags', '+faststart'])
+    else:
+        opts = {**DEFAULT_ENCODE_OPTS, **(encode_opts or {})}
+        if target_fps and target_fps > 0:
+            fps_str = _format_fps_for_ffmpeg(target_fps)
+            cmd.extend(['-vf', f'fps={fps_str}', '-r', fps_str, '-fps_mode', 'cfr'])
+        cmd.extend([
+            '-c:v', opts['video_codec'],
+            '-crf', opts['crf'],
+            '-preset', opts['preset'],
+            '-c:a', 'aac',
+            '-b:a', audio_bitrate,
+            '-movflags', '+faststart',
+        ])
+    cmd.extend(['-y', output_path])
+    return cmd
+
+
+def _concat_video_only_cfr_cmd(
+    ffmpeg_cmd: str,
+    concat_file: str,
+    output_path: str,
+    target_fps: float,
+    encode_opts: Optional[Dict[str, str]] = None,
+    audio_bitrate: str = '192k',
+) -> List[str]:
+    opts = {**DEFAULT_ENCODE_OPTS, **(encode_opts or {})}
+    fps_str = _format_fps_for_ffmpeg(target_fps)
+    return [
+        ffmpeg_cmd, '-f', 'concat', '-safe', '0', '-i', concat_file,
+        '-vf', f'fps={fps_str}', '-r', fps_str, '-fps_mode', 'cfr',
+        '-c:v', opts['video_codec'],
+        '-crf', opts['crf'],
+        '-preset', opts['preset'],
+        '-c:a', opts['audio_codec'],
+        '-b:a', audio_bitrate or opts['audio_bitrate'],
+        '-movflags', '+faststart',
+        '-y', output_path,
+    ]
+
+
+def concat_videos_cfr(
+    ffmpeg_cmd: str,
+    video_paths: List[str],
+    output_path: str,
+    *,
+    external_audio_path: Optional[str] = None,
+    constant_fps: Optional[float] = None,
+    encode_opts: Optional[Dict[str, str]] = None,
+    audio_bitrate: str = '192k',
+    concat_list_path: Optional[str] = None,
+    timeout: int = 3600,
+) -> Tuple[bool, str]:
+    """Concatenate clips at constant frame rate; optional external audio track."""
+    if not video_paths:
+        return False, 'No video clips to combine'
+    target_fps = constant_fps or resolve_target_fps(ffmpeg_cmd, video_paths[0])
+    if external_audio_path:
+        return concat_videos_with_external_audio(
+            ffmpeg_cmd, video_paths, external_audio_path, output_path,
+            concat_list_path=concat_list_path,
+            audio_bitrate=audio_bitrate,
+            timeout=timeout,
+            constant_fps=target_fps,
+            encode_opts=encode_opts,
+        )
+    cleanup_concat = False
+    concat_file = concat_list_path
+    if not concat_file:
+        fd, concat_file = tempfile.mkstemp(suffix='_concat.txt', prefix='combine_')
+        os.close(fd)
+        cleanup_concat = True
+    try:
+        write_concat_list(video_paths, concat_file)
+        cmd = _concat_video_only_cfr_cmd(
+            ffmpeg_cmd, concat_file, output_path, target_fps,
+            encode_opts=encode_opts, audio_bitrate=audio_bitrate,
+        )
+        ok, err = run_ffmpeg(cmd, timeout=timeout)
+        if ok and os.path.isfile(output_path):
+            return True, ''
+        return False, err or 'Combine export failed'
+    finally:
+        if cleanup_concat and concat_file and os.path.isfile(concat_file):
+            try:
+                os.remove(concat_file)
+            except OSError:
+                pass
+
+
+def concat_videos_with_external_audio(
+    ffmpeg_cmd: str,
+    video_paths: List[str],
+    audio_path: str,
+    output_path: str,
+    *,
+    concat_list_path: Optional[str] = None,
+    audio_bitrate: str = '192k',
+    timeout: int = 3600,
+    constant_fps: Optional[float] = None,
+    encode_opts: Optional[Dict[str, str]] = None,
+) -> Tuple[bool, str]:
+    """
+    Concatenate videos then mux external audio (MP3/WAV -> AAC).
+
+    When constant_fps is set (recommended for split + lip-sync merges), video is
+    re-encoded at that CFR so mixed clip lengths (e.g. LatentSync 144f vs split 145f)
+    do not produce ~23.97 fps average with stream copy.
+    Otherwise tries stream copy first, then re-encode without fps normalization.
+    """
+    if not video_paths:
+        return False, 'No video clips to merge'
+    if not audio_path or not os.path.isfile(audio_path):
+        return False, 'Audio file not found'
+    target_fps = constant_fps
+    if target_fps is None:
+        target_fps = probe_fps(ffmpeg_cmd, video_paths[0])
+    if not target_fps or target_fps <= 0:
+        target_fps = 24.0
+    cleanup_concat = False
+    concat_file = concat_list_path
+    if not concat_file:
+        fd, concat_file = tempfile.mkstemp(suffix='_concat.txt', prefix='merge_split_')
+        os.close(fd)
+        cleanup_concat = True
+    try:
+        write_concat_list(video_paths, concat_file)
+        if constant_fps is not None:
+            cmd = _concat_external_audio_cmd(
+                ffmpeg_cmd, concat_file, audio_path, output_path,
+                copy_video=False, audio_bitrate=audio_bitrate, target_fps=target_fps,
+                encode_opts=encode_opts,
+            )
+            ok, err = run_ffmpeg(cmd, timeout=timeout)
+            if ok and os.path.isfile(output_path):
+                return True, ''
+            return False, err or 'Merge export failed'
+        cmd = _concat_external_audio_cmd(
+            ffmpeg_cmd, concat_file, audio_path, output_path,
+            copy_video=True, audio_bitrate=audio_bitrate,
+        )
+        ok, err = run_ffmpeg(cmd, timeout=timeout)
+        if ok and os.path.isfile(output_path):
+            return True, ''
+        retry_cmd = _concat_external_audio_cmd(
+            ffmpeg_cmd, concat_file, audio_path, output_path,
+            copy_video=False, audio_bitrate=audio_bitrate, target_fps=target_fps,
+            encode_opts=encode_opts,
+        )
+        ok2, err2 = run_ffmpeg(retry_cmd, timeout=timeout)
+        if ok2 and os.path.isfile(output_path):
+            return True, ''
+        return False, err2 or err or 'Merge export failed'
+    finally:
+        if cleanup_concat and concat_file and os.path.isfile(concat_file):
+            try:
+                os.remove(concat_file)
+            except OSError:
+                pass
+
+
+def normalize_video_constant_fps(
+    ffmpeg_cmd: str,
+    input_path: str,
+    output_path: str,
+    target_fps: Optional[float] = None,
+    encode_opts: Optional[Dict[str, str]] = None,
+    timeout: int = 600,
+) -> Tuple[bool, str]:
+    """Re-encode video to constant frame rate (keeps audio)."""
+    if target_fps is None:
+        target_fps = probe_fps(ffmpeg_cmd, input_path) or 24.0
+        if abs(target_fps - round(target_fps)) < 0.05:
+            target_fps = float(int(round(target_fps)))
+    fps_str = _format_fps_for_ffmpeg(target_fps)
+    opts = {**DEFAULT_ENCODE_OPTS, **(encode_opts or {})}
+    cmd = [
+        ffmpeg_cmd, '-y', '-i', input_path,
+        '-vf', f'fps={fps_str}', '-r', fps_str, '-fps_mode', 'cfr',
+        '-c:v', opts['video_codec'], '-preset', opts['preset'], '-crf', opts['crf'],
+        '-c:a', opts['audio_codec'], '-b:a', opts['audio_bitrate'],
+        '-movflags', '+faststart', output_path,
+    ]
+    return run_ffmpeg(cmd, timeout=timeout)
+
+
+def normalize_video_constant_fps_inplace(
+    ffmpeg_cmd: str,
+    input_path: str,
+    target_fps: Optional[float] = None,
+) -> Tuple[bool, str]:
+    """Normalize CFR in place via a temp file next to the source."""
+    directory = os.path.dirname(input_path) or '.'
+    base = os.path.basename(input_path)
+    temp_path = os.path.join(directory, f'.{base}.cfr_tmp.mp4')
+    ok, err = normalize_video_constant_fps(
+        ffmpeg_cmd, input_path, temp_path, target_fps=target_fps,
+    )
+    if not ok:
+        if os.path.isfile(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+        return False, err
+    try:
+        os.replace(temp_path, input_path)
+    except OSError as e:
+        return False, str(e)
+    return True, ''
+
+
+def suggest_full_song_mp3(split_dir: str) -> Optional[str]:
+    """Guess full-song MP3 in split folder (not per-part chunk MP3s)."""
+    if not split_dir or not os.path.isdir(split_dir):
+        return None
+    candidates = []
+    for name in os.listdir(split_dir):
+        if not name.lower().endswith('.mp3'):
+            continue
+        if re.search(r'_\d+_\d+\.mp3$', name, re.I):
+            continue
+        full = os.path.join(split_dir, name)
+        if os.path.isfile(full):
+            candidates.append(full)
+    if len(candidates) == 1:
+        return candidates[0]
+    for path in candidates:
+        if not re.search(r'_\d{3}\.mp3$', os.path.basename(path), re.I):
+            return path
+    return candidates[0] if candidates else None
+
+
+def default_lipsync_folder(split_dir: str) -> str:
+    """Default LatentSync output subfolder next to split parts."""
+    return os.path.join(split_dir, 'latentsync_synced')

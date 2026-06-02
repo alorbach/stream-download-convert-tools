@@ -51,6 +51,7 @@ from lib.base_gui import BaseAudioGUI
 from lib.file_utils import FileManager
 from lib.process_utils import ProcessManager
 from lib.ffmpeg_utils import FFmpegManager
+from lib.video_utils import concat_videos_cfr, resolve_target_fps
 
 
 class CombineVideosTab:
@@ -1295,32 +1296,11 @@ class CombineVideosTab:
                     self.root.after(0, lambda: self.root.config(cursor=''))
                     self.root.after(0, lambda: messagebox.showerror("Error", f"Failed to create preview:\n{error_msg}"))
             else:
-                # Use simple concat for preview
-                concat_file = self._write_concat_file()
-                
-                # Use concat demuxer with faster encoding for preview (preview uses lower quality for speed)
-                preview_encoding = self._get_video_encoding_args()
-                preview_encoding = [arg for arg in preview_encoding if arg != '-preset']
-                preview_encoding.extend(['-preset', 'ultrafast'])
-                encoding_str = ' '.join(preview_encoding)
-                if self._use_external_audio():
-                    self.root.after(0, lambda: self.log('[INFO] Preview: copying video, encoding external audio only'))
-                    cmd = ' '.join(self._build_concat_external_audio_cmd(
-                        ffmpeg_cmd, concat_file, preview_file, audio_bitrate='128k',
-                    ))
-                else:
-                    cmd = f'{ffmpeg_cmd} -f concat -safe 0 -i "{concat_file}" {encoding_str} -c:a aac -b:a 128k -y "{preview_file}"'
-                
-                self.root.after(0, lambda: self.log(f"[DEBUG] Preview FFmpeg command: {cmd}"))
-                
-                result = subprocess.run(cmd, capture_output=True, text=True, cwd=self.root_dir, shell=True)
-                
-                # Clean up concat file
-                if concat_file:
-                    try:
-                        os.remove(concat_file)
-                    except:
-                        pass
+                preview_opts = {**self._get_encode_opts_dict(), 'preset': 'ultrafast', 'crf': '28'}
+                ok, err = self._run_concat_cfr(
+                    ffmpeg_cmd, preview_file, audio_bitrate='128k', encode_opts=preview_opts,
+                )
+                result = type('R', (), {'returncode': 0 if ok else 1, 'stderr': err})()
                 
                 if result.returncode == 0 and os.path.exists(preview_file):
                     self.root.after(0, lambda: self.log(f"[SUCCESS] Preview created"))
@@ -1489,62 +1469,25 @@ class CombineVideosTab:
     
     def _create_final_video(self, output_file):
         """Create final high-quality video."""
-        concat_file = None
         try:
             ffmpeg_cmd = self.get_ffmpeg_command()
-            
-            # Create concat file
-            concat_file = self._write_concat_file()
-            
-            if self._use_external_audio():
-                self.root.after(0, lambda: self.log('[INFO] Copying video streams, encoding external audio only'))
-                cmd = ' '.join(self._build_concat_external_audio_cmd(
-                    ffmpeg_cmd, concat_file, output_file, audio_bitrate='192k',
+            ok, err = self._run_concat_cfr(ffmpeg_cmd, output_file, audio_bitrate='192k')
+            if ok:
+                self.root.after(0, lambda: self.log(
+                    f"[SUCCESS] Final video saved: {os.path.basename(output_file)}",
                 ))
-            else:
-                # Use concat demuxer for lossless combination
-                cmd = f'{ffmpeg_cmd} -f concat -safe 0 -i "{concat_file}" -c copy -y "{output_file}"'
-            
-            result = subprocess.run(cmd, capture_output=True, text=True, cwd=self.root_dir, shell=True)
-            
-            if result.returncode == 0:
-                self.root.after(0, lambda: self.log(f"[SUCCESS] Final video saved: {os.path.basename(output_file)}"))
                 self.root.after(0, lambda: self.root.config(cursor=''))
             else:
-                # Retry with re-encode if stream copy fails
-                error_msg = result.stderr[:2000] if result.stderr else "Unknown error"
-                self.root.after(0, lambda: self.log(f"[WARNING] Copy combine failed, retrying with re-encode..."))
-                encoding_args = self._get_video_encoding_args()
-                encoding_str = ' '.join(encoding_args)
-                reencode_cmd = f"{ffmpeg_cmd} -f concat -safe 0 -i \"{concat_file}\" {encoding_str} -c:a aac -b:a 192k -movflags +faststart -y \"{output_file}\""
-                if self._use_external_audio():
-                    reencode_cmd = ' '.join(self._build_concat_external_audio_cmd(
-                        ffmpeg_cmd, concat_file, output_file, audio_bitrate='192k',
-                    ))
-                self.root.after(0, lambda: self.log(f"[DEBUG] FFmpeg reencode command: {reencode_cmd}"))
-                retry = subprocess.run(reencode_cmd, capture_output=True, text=True, cwd=self.root_dir, shell=True)
-                if retry.returncode == 0:
-                    self.root.after(0, lambda: self.log(f"[SUCCESS] Final video saved (re-encoded): {os.path.basename(output_file)}"))
-                    self.root.after(0, lambda: self.root.config(cursor=''))
-                else:
-                    error_msg2 = retry.stderr[:4000] if retry.stderr else "Unknown error"
-                    self.root.after(0, lambda: self.log(f"[ERROR] Failed to save: {error_msg2}"))
-                    self.root.after(0, lambda: self.root.config(cursor=''))
-                    self.root.after(0, lambda: messagebox.showerror("Error", f"Failed to save:\n{error_msg2}"))
+                error_msg = err or 'Unknown error'
+                self.root.after(0, lambda: self.log(f"[ERROR] Failed to save: {error_msg}"))
+                self.root.after(0, lambda: self.root.config(cursor=''))
+                self.root.after(0, lambda: messagebox.showerror("Error", f"Failed to save:\n{error_msg}"))
         
         except Exception as e:
             error_msg = str(e)
             self.root.after(0, lambda msg=error_msg: self.log(f"[ERROR] Exception: {msg}"))
             self.root.after(0, lambda: self.root.config(cursor=''))
             self.root.after(0, lambda msg=error_msg: messagebox.showerror("Error", f"Exception:\n{msg}"))
-        
-        finally:
-            # Clean up concat file after both attempts are complete
-            if concat_file:
-                try:
-                    os.remove(concat_file)
-                except:
-                    pass
     
     def export_combined_video(self):
         """Export combined video without preview."""
@@ -1780,44 +1723,18 @@ class CombineVideosTab:
                         self.root.after(0, lambda msg=error_msg: self.log(f"[ERROR] Failed to combine videos with transitions: {msg}"))
                         self.root.after(0, lambda msg=error_msg: messagebox.showerror("Error", f"Failed to combine videos:\n{msg}"))
             else:
-                # Use simple concat (no transitions)
-                concat_file = self._write_concat_file()
-                
-                if self._use_external_audio():
-                    self.root.after(0, lambda: self.log('[INFO] Copying video streams, encoding external audio only'))
-                    self.root.after(0, lambda cf=concat_file: self.log(
-                        f"[DEBUG] FFmpeg command: {' '.join(self._build_concat_external_audio_cmd(ffmpeg_cmd, cf, output_file))}"
-                    ))
-                    result = self._run_concat_external_audio(
-                        ffmpeg_cmd, concat_file, output_file, audio_bitrate='192k',
-                    )
-                else:
-                    cmd = [ffmpeg_cmd, '-f', 'concat', '-safe', '0', '-i', concat_file,
-                           '-c', 'copy', '-y', output_file]
-                    self.root.after(0, lambda: self.log(f"[DEBUG] FFmpeg command: {' '.join(cmd)}"))
-                    result = subprocess.run(cmd, capture_output=True, text=True, cwd=self.root_dir)
-                
-                if result.returncode == 0:
+                ok, err = self._run_concat_cfr(ffmpeg_cmd, output_file, audio_bitrate='192k')
+                if ok:
                     self._update_operation_progress(1, 1, 'Export complete')
-                    self.root.after(0, lambda: self.log(f"[SUCCESS] Combined video saved: {os.path.basename(output_file)}"))
-                elif not self._use_external_audio():
-                    # Retry with re-encode fallback
-                    error_msg = result.stderr[:2000] if result.stderr else "Unknown error"
-                    self.root.after(0, lambda: self.log(f"[WARNING] Copy combine failed, retrying with re-encode..."))
-                    reencode_cmd = f"{ffmpeg_cmd} -f concat -safe 0 -i \"{concat_file}\" -c:v libx264 -preset veryfast -crf 18 -c:a aac -b:a 192k -movflags +faststart -y \"{output_file}\""
-                    self.root.after(0, lambda: self.log(f"[DEBUG] FFmpeg reencode command: {reencode_cmd}"))
-                    retry = subprocess.run(reencode_cmd, capture_output=True, text=True, cwd=self.root_dir, shell=True)
-                    if retry.returncode == 0:
-                        self._update_operation_progress(1, 1, 'Export complete')
-                        self.root.after(0, lambda: self.log(f"[SUCCESS] Combined video saved (re-encoded): {os.path.basename(output_file)}"))
-                    else:
-                        error_msg2 = retry.stderr[:4000] if retry.stderr else "Unknown error"
-                        self.root.after(0, lambda: self.log(f"[ERROR] Failed to combine videos: {error_msg2}"))
-                        self.root.after(0, lambda: messagebox.showerror("Error", f"Failed to combine videos:\n{error_msg2}"))
+                    self.root.after(0, lambda: self.log(
+                        f"[SUCCESS] Combined video saved: {os.path.basename(output_file)}",
+                    ))
                 else:
-                    error_msg = result.stderr[:4000] if result.stderr else "Unknown error"
+                    error_msg = err or 'Unknown error'
                     self.root.after(0, lambda msg=error_msg: self.log(f"[ERROR] Failed to combine videos: {msg}"))
-                    self.root.after(0, lambda msg=error_msg: messagebox.showerror("Error", f"Failed to combine videos:\n{msg}"))
+                    self.root.after(0, lambda msg=error_msg: messagebox.showerror(
+                        "Error", f"Failed to combine videos:\n{msg}",
+                    ))
         
         except Exception as e:
             error_msg = str(e)
@@ -1886,6 +1803,14 @@ class CombineVideosTab:
         else:
             return base_crf
     
+    def _get_encode_opts_dict(self):
+        """Encoding options for shared CFR concat helpers."""
+        return {
+            'video_codec': self.video_codec,
+            'crf': str(self._get_crf_value(self.video_bitrate, self.video_codec)),
+            'preset': self.video_preset,
+        }
+
     def _get_video_encoding_args(self):
         """Get video encoding arguments based on current settings."""
         args = []
@@ -1991,23 +1916,29 @@ class CombineVideosTab:
         cmd.extend(['-y', output_file])
         return cmd
     
-    def _run_concat_external_audio(self, ffmpeg_cmd, concat_file, output_file, audio_bitrate='192k', shell=False):
-        """Concat with external audio: copy video, encode audio; re-encode video only on failure."""
-        cmd = self._build_concat_external_audio_cmd(ffmpeg_cmd, concat_file, output_file, audio_bitrate)
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, cwd=self.root_dir, shell=shell,
+    def _run_concat_cfr(self, ffmpeg_cmd, output_file, audio_bitrate='192k', encode_opts=None):
+        """Concat clips at constant fps (avoids ~23.9 fps drift from stream copy)."""
+        target_fps = resolve_target_fps(ffmpeg_cmd, self.video_files[0])
+        fps_label = int(target_fps) if abs(target_fps - round(target_fps)) < 0.01 else round(target_fps, 3)
+        n = len(self.video_files)
+        ext_name = os.path.basename(self.external_audio_file) if self._use_external_audio() else ''
+        self.root.after(0, lambda: self.log(
+            f'[INFO] Combining {n} clips at {fps_label} fps (constant, re-encode video)',
+        ))
+        if self._use_external_audio():
+            self.root.after(0, lambda: self.log(f'[INFO] External audio: {ext_name}'))
+        opts = encode_opts if encode_opts is not None else self._get_encode_opts_dict()
+        ext_audio = self.external_audio_file if self._use_external_audio() else None
+        return concat_videos_cfr(
+            ffmpeg_cmd,
+            self.video_files,
+            output_file,
+            external_audio_path=ext_audio,
+            constant_fps=target_fps,
+            encode_opts=opts,
+            audio_bitrate=audio_bitrate,
+            timeout=7200,
         )
-        if result.returncode == 0:
-            return result
-        self.root.after(0, lambda: self.log('[WARNING] Video stream copy failed, retrying with video re-encode...'))
-        encoding_args = self._get_video_encoding_args()
-        retry_cmd = [
-            ffmpeg_cmd, '-f', 'concat', '-safe', '0', '-i', concat_file,
-            '-i', self.external_audio_file,
-            '-map', '0:v:0', '-map', '1:a:0', '-shortest',
-        ]
-        retry_cmd.extend(encoding_args + ['-c:a', 'aac', '-b:a', audio_bitrate, '-movflags', '+faststart', '-y', output_file])
-        return subprocess.run(retry_cmd, capture_output=True, text=True, cwd=self.root_dir, shell=shell)
     
     def toggle_external_audio(self):
         self.external_audio_enabled = self.external_audio_enabled_var.get()

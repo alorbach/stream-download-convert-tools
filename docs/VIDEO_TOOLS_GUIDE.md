@@ -11,6 +11,7 @@ Video Tools Unified combines former standalone tools into one application:
 | MP3 to Video | mp3_to_video_converter | Create video from MP3 + image or looped video |
 | Combine Videos | video_editor | Multi-clip grid, transitions, export |
 | Split and Chunks | (new) | Fixed intervals, single segments, JSON plans, visual trim |
+| Merge Split + Lip Sync | (new) | Combine split parts with optional LatentSync clips + full song MP3 |
 | Upscale Video | (new) | High-quality resize (e.g. 672x448 to 1168x768), optional Real-ESRGAN |
 
 **Launcher:** `launchers/video_tools_unified.bat` (Windows) or `launchers/video_tools_unified.sh` (Linux/Mac)
@@ -58,6 +59,8 @@ Output: MP3 files in the converted folder.
 - Save/load project JSON.
 - Export first/last frame as PNG.
 
+Simple concat (no transitions) **re-encodes video at constant frame rate** from the first clip (usually 24 fps), then muxes clip or external audio. Stream copy is no longer used for export, because many short clips otherwise show ~23.9 fps average in the combined file.
+
 ---
 
 ## Split and Chunks
@@ -91,6 +94,8 @@ Splits into equal-length segments (e.g. 6 seconds for short-form platforms).
 - **Chunk length:** seconds per segment.
 - **Max chunks:** 0 = no limit.
 - **Name pattern:** `{basename}_part_{index:03d}.mp4` (plus matching `.mp3` per part).
+
+Each chunk is exported at **constant frame rate** matching the source (probed from the input file). Older builds used FFmpeg segment + stream copy, which cut on keyframes and could yield ~23.3-23.8 fps on some chunks even when the source was labeled 24 fps.
 
 ### Mode: Single segment
 
@@ -133,6 +138,41 @@ Paste or load a JSON file. Example:
 | `segments[].end` | Alternative to duration (end time in seconds) |
 
 Validation: segments are clamped to video duration; zero-length segments are skipped with a warning.
+
+---
+
+## Merge Split + Lip Sync
+
+Use after **Split and Chunks** and optional LatentSync lip-sync on selected parts. Builds one combined MP4 in scene order; the **original song MP3** replaces all clip audio (same idea as Combine Videos with external audio enabled).
+
+### Typical workflow
+
+1. Split a storyboard video into parts (e.g. `storyboard_scene_004_000.mp4` in a `split` folder).
+2. Run LatentSync on some parts; outputs often land in `split/latentsync_synced/`.
+3. Open this tab, set folders and the full song MP3 (e.g. `storyboard_scene.mp3`).
+4. Click **Scan / Refresh** to preview which clips use lip-sync vs original split.
+5. Click **Export Combined Video**.
+
+### Lip-sync file matching
+
+For each split file `storyboard_scene_004_000.mp4`, the tool looks in the lip-sync folder for:
+
+`storyboard_scene_004_000__*.mp4`
+
+If several files match (re-runs), the **newest** file (by modification time) is used. Parts with no match keep the original split MP4.
+
+### Fields
+
+| Field | Description |
+|-------|-------------|
+| Split parts folder | Folder containing split MP4s (top-level only; subfolders such as `latentsync_synced` are not scanned as split input) |
+| Lip-sync folder | LatentSync output folder (defaults to `{split}/latentsync_synced` when that path exists) |
+| Original song (MP3) | Full track muxed as the output audio (`-shortest` trims to shorter of video or song) |
+| Output MP4 | Combined export path |
+
+Export **re-encodes video at constant frame rate** (from the first split clip, usually 24 fps). Stream-copy concat was avoided because LatentSync clips often differ slightly in frame count (e.g. 144 frames vs 145 per segment), which makes Windows report ~23.95 fps average even when each source is labeled 24 fps.
+
+Settings are stored under `tabs.merge_split` in `video_tools_unified_settings.json`.
 
 ---
 
