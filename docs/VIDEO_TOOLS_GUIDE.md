@@ -157,7 +157,27 @@ While processing, the tab shows **file batch** progress and a **current file enc
 | Standard (bicubic) | Fast FFmpeg `scale`; baseline quality |
 | High (Lanczos) | Lanczos with accurate rounding; good default for ~1.5-2x upscale |
 | Maximum | Two-step Lanczos when scale factor > 1.25x, plus light unsharp |
-| AI (Real-ESRGAN) | Frame extract, ncnn-vulkan 2x/4x upscale, then Lanczos to exact target |
+| AI (Real-ESRGAN) | Frame extract, AI 2x/4x upscale, then Lanczos to exact target |
+
+### AI backends
+
+| Backend | Description |
+|---------|-------------|
+| **PyTorch (venv, default)** | Official `realesrgan` Python package in the project venv. Supports all models below including **general v3**. Best quality; first run downloads weights to `realesrgan/weights/`. |
+| **ncnn-vulkan (portable exe)** | Small ~45 MB portable build (2022). Fewer models; x4plus may show tile seams on video. Use **Auto Install** or browse to `realesrgan-ncnn-vulkan.exe`. |
+
+**PyTorch models (dropdown when PyTorch backend selected):**
+
+| Model | Best for |
+|-------|----------|
+| realesr-animevideov3 | AI/Grok/stylized video (default) |
+| realesr-general-x4v3 | General scenes (balanced denoise) |
+| realesr-general-wdn-x4v3 | General scenes (stronger denoise) |
+| realesrgan-x4plus-anime | Anime stills / art |
+| realesrgan-x4plus | Photos |
+| realesrnet-x4plus | Softer than x4plus GAN |
+
+**ncnn models:** subset of the above (no general v3). Prefer PyTorch for Grok storyboard clips.
 
 FFmpeg modes re-encode with **libx264**, default **CRF 18** and **slow** preset. Audio is copied when possible; otherwise AAC fallback.
 
@@ -168,25 +188,43 @@ FFmpeg modes re-encode with **libx264**, default **CRF 18** and **slow** preset.
 
 ### AI mode (Real-ESRGAN)
 
-1. Click **Auto Install** on the Upscale tab (or confirm when prompted on first AI upscale). This downloads the portable Windows build (~45 MB) into `realesrgan/` in the project folder.
-2. Or download manually from [Real-ESRGAN releases](https://github.com/xinntao/Real-ESRGAN/releases/tag/v0.2.5.0) and browse to `realesrgan-ncnn-vulkan.exe`.
-3. Choose a model; **realesr-animevideov3** is a good starting point for AI-generated video.
-4. Expect slow processing (many PNG frames per clip). Temp frames live under `%TEMP%\video_upscale_*`; uncheck **Remove temp frames** to keep them for inspection.
+**PyTorch (recommended):**
 
-AI upscale uses integer **2x** or **4x** first, then FFmpeg scales to your exact target size. It cannot invent real detail at fractional scales, but it often improves soft generative footage.
+1. Run `launchers/video_tools_unified.bat` once so the venv installs `torch` from `requirements.txt` and runs `scripts/install_ai_upscale_deps.py` for patched `basicsr` + `realesrgan` (large download). If that script fails, run it manually: `venv\Scripts\python scripts\install_ai_upscale_deps.py`.
+2. On the Upscale tab, set **AI backend** to **PyTorch (venv, recommended)**. Status should show CUDA if an NVIDIA GPU is available.
+3. For **GPU speed** on Windows/NVIDIA (e.g. RTX 3060), install CUDA-enabled PyTorch in the venv (one-time):
+
+   ```bat
+   venv\Scripts\activate
+   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+   ```
+
+4. Choose a model; **realesr-animevideov3** for Grok clips. First use of each model downloads weights into `realesrgan/weights/`.
+5. Set **GPU id** to `0` for the primary NVIDIA card if you have multiple GPUs.
+
+**ncnn-vulkan (optional):**
+
+1. Set **AI backend** to **ncnn-vulkan (portable exe)**.
+2. Click **Auto Install** or download from [Real-ESRGAN releases](https://github.com/xinntao/Real-ESRGAN/releases/tag/v0.2.5.0).
+
+Expect slow processing (many PNG frames per clip). Temp frames live under `%TEMP%\video_upscale_*`; uncheck **Remove temp frames** to keep them for inspection.
+
+AI upscale uses integer **2x** or **4x** first, then FFmpeg scales to your exact target size.
 
 ### Limitations
 
 - Upscaling cannot add true detail beyond interpolation / AI enhancement.
-- AI mode requires a separate executable (not bundled with this project).
+- PyTorch mode needs sufficient GPU VRAM; CPU mode works but is very slow.
+- ncnn mode uses a separate executable (optional fallback).
 - Very long videos consume large temp disk space in AI mode.
 
 ---
 
 ## Requirements
 
-- Python 3.7+
+- Python 3.10+ recommended (3.7+ minimum)
 - FFmpeg (auto-install offered on Windows in Settings tab)
+- AI PyTorch mode: `torch`, `realesrgan`, `basicsr` (installed via launcher); NVIDIA GPU + CUDA PyTorch recommended
 - Optional: `tkinterdnd2` (drag-and-drop), `opencv-python` (in-app preview), Pillow (thumbnails)
 
 ---

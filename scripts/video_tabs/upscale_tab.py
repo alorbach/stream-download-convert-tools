@@ -12,6 +12,7 @@ try:
 except ImportError:
     DND_FILES = None
 
+from lib.realesrgan_pytorch import PYTORCH_UI_MODELS
 from lib.video_utils import (
     UPSCALE_METHOD_AI,
     UPSCALE_METHOD_HIGH,
@@ -23,6 +24,7 @@ from lib.video_utils import (
     resolve_ffprobe_cmd,
     upscale_video_ffmpeg,
     upscale_video_realesrgan,
+    upscale_video_realesrgan_pytorch,
 )
 
 VIDEO_EXTENSIONS = {'.mp4', '.webm', '.avi', '.mov', '.mkv', '.flv', '.wmv', '.m4v'}
@@ -41,12 +43,22 @@ METHOD_CHOICES = [
     (UPSCALE_METHOD_AI, 'AI (Real-ESRGAN)'),
 ]
 
-AI_MODELS = [
+AI_BACKEND_PYTORCH = 'pytorch'
+AI_BACKEND_NCNN = 'ncnn'
+
+AI_BACKEND_CHOICES = [
+    (AI_BACKEND_PYTORCH, 'PyTorch (venv, recommended)'),
+    (AI_BACKEND_NCNN, 'ncnn-vulkan (portable exe)'),
+]
+
+AI_MODELS_NCNN = [
     'realesr-animevideov3',
-    'realesrgan-x4plus',
     'realesrgan-x4plus-anime',
+    'realesrgan-x4plus',
     'realesrnet-x4plus',
 ]
+
+AI_MODELS_PYTORCH = list(PYTORCH_UI_MODELS)
 
 PRESET_VALUES = [15, 16, 17, 18, 19, 20, 21, 22, 23]
 X264_PRESETS = ['ultrafast', 'fast', 'medium', 'slow', 'veryslow']
@@ -83,6 +95,7 @@ class UpscaleTab:
         self.root = app.root
         self.selected_files = []
         self._probe_after_id = None
+        self._ai_backend_internal = AI_BACKEND_PYTORCH
         self.setup_ui()
         self.load_settings()
         self._apply_local_realesrgan_exe()
@@ -161,27 +174,50 @@ class UpscaleTab:
 
         self.ai_frame = ttk.Frame(method_frame)
         self.ai_frame.pack(fill='x', pady=(6, 0))
-        ttk.Label(self.ai_frame, text='Real-ESRGAN exe:').grid(row=0, column=0, sticky='w')
-        self.ai_exe_var = tk.StringVar(value='')
-        ttk.Entry(self.ai_frame, textvariable=self.ai_exe_var, width=48).grid(
-            row=0, column=1, padx=5, sticky='ew',
+        ttk.Label(self.ai_frame, text='AI backend:').grid(row=0, column=0, sticky='w')
+        self.ai_backend_var = tk.StringVar(value=AI_BACKEND_CHOICES[0][1])
+        backend_cb = ttk.Combobox(
+            self.ai_frame, textvariable=self.ai_backend_var, width=28, state='readonly',
         )
-        ttk.Button(self.ai_frame, text='Browse', command=self.browse_ai_exe).grid(row=0, column=2)
-        ttk.Button(
-            self.ai_frame, text='Auto Install', command=self.install_realesrgan,
-        ).grid(row=0, column=3, padx=(4, 0))
-        ttk.Label(self.ai_frame, text='Model:').grid(row=1, column=0, sticky='w', pady=4)
-        self.ai_model_var = tk.StringVar(value=AI_MODELS[0])
-        model_cb = ttk.Combobox(
+        backend_cb['values'] = [label for _val, label in AI_BACKEND_CHOICES]
+        backend_cb.grid(row=0, column=1, sticky='w', padx=5)
+        backend_cb.bind('<<ComboboxSelected>>', self._on_ai_backend_selected)
+
+        self.pytorch_status_var = tk.StringVar(value='')
+        self.lbl_pytorch_status = ttk.Label(
+            self.ai_frame, textvariable=self.pytorch_status_var, wraplength=520,
+        )
+        self.lbl_pytorch_status.grid(row=1, column=0, columnspan=4, sticky='w', pady=(2, 0))
+
+        ttk.Label(self.ai_frame, text='GPU id:').grid(row=2, column=0, sticky='w', pady=4)
+        self.ai_gpu_var = tk.StringVar(value='0')
+        self.ai_gpu_entry = ttk.Entry(self.ai_frame, textvariable=self.ai_gpu_var, width=6)
+        self.ai_gpu_entry.grid(row=2, column=1, sticky='w', padx=5, pady=4)
+
+        self.ncnn_row = ttk.Frame(self.ai_frame)
+        self.ncnn_row.grid(row=3, column=0, columnspan=4, sticky='ew')
+        ttk.Label(self.ncnn_row, text='Real-ESRGAN exe:').grid(row=0, column=0, sticky='w')
+        self.ai_exe_var = tk.StringVar(value='')
+        self.ai_exe_entry = ttk.Entry(self.ncnn_row, textvariable=self.ai_exe_var, width=48)
+        self.ai_exe_entry.grid(row=0, column=1, padx=5, sticky='ew')
+        ttk.Button(self.ncnn_row, text='Browse', command=self.browse_ai_exe).grid(row=0, column=2)
+        self.btn_ncnn_install = ttk.Button(
+            self.ncnn_row, text='Auto Install', command=self.install_realesrgan,
+        )
+        self.btn_ncnn_install.grid(row=0, column=3, padx=(4, 0))
+        self.ncnn_row.grid_columnconfigure(1, weight=1)
+
+        ttk.Label(self.ai_frame, text='Model:').grid(row=4, column=0, sticky='w', pady=4)
+        self.ai_model_var = tk.StringVar(value=AI_MODELS_PYTORCH[0])
+        self.model_cb = ttk.Combobox(
             self.ai_frame, textvariable=self.ai_model_var, width=28, state='readonly',
         )
-        model_cb['values'] = AI_MODELS
-        model_cb.grid(row=1, column=1, sticky='w', padx=5, pady=4)
+        self.model_cb['values'] = AI_MODELS_PYTORCH
+        self.model_cb.grid(row=4, column=1, sticky='w', padx=5, pady=4)
+        self.ai_help_var = tk.StringVar(value='')
         ttk.Label(
-            self.ai_frame,
-            text='Auto Install downloads the portable build into realesrgan/ (~45 MB).',
-            wraplength=520,
-        ).grid(row=2, column=0, columnspan=4, sticky='w')
+            self.ai_frame, textvariable=self.ai_help_var, wraplength=520,
+        ).grid(row=5, column=0, columnspan=4, sticky='w')
         self.ai_frame.grid_columnconfigure(1, weight=1)
 
         enc_frame = ttk.LabelFrame(self.parent, text='Encode and Output', padding=8)
@@ -238,10 +274,66 @@ class UpscaleTab:
         self.progress_label = ttk.Label(run_frame, text='')
         self.progress_label.pack(anchor='w')
 
+        self._sync_ai_backend_combo()
         self.on_method_change()
 
     def log(self, message):
         self.app.log(message, self.TAB_NAME)
+
+    def _backend_value(self) -> str:
+        internal = getattr(self, '_ai_backend_internal', None)
+        if internal in (AI_BACKEND_PYTORCH, AI_BACKEND_NCNN):
+            return internal
+        label = self.ai_backend_var.get()
+        for val, lbl in AI_BACKEND_CHOICES:
+            if lbl == label:
+                return val
+        return AI_BACKEND_PYTORCH
+
+    def _sync_ai_backend_combo(self) -> None:
+        for val, lbl in AI_BACKEND_CHOICES:
+            if val == self._ai_backend_internal:
+                self.ai_backend_var.set(lbl)
+                return
+
+    def _on_ai_backend_selected(self, event=None):
+        label = self.ai_backend_var.get()
+        for val, lbl in AI_BACKEND_CHOICES:
+            if lbl == label:
+                self._ai_backend_internal = val
+                break
+        else:
+            self._ai_backend_internal = AI_BACKEND_PYTORCH
+        self._apply_ai_backend_ui()
+        self.save_settings()
+
+    def _apply_ai_backend_ui(self) -> None:
+        backend = getattr(self, '_ai_backend_internal', self._backend_value())
+        if backend == AI_BACKEND_PYTORCH:
+            models = AI_MODELS_PYTORCH
+            self.ai_help_var.set(
+                'PyTorch uses venv packages; weights download to realesrgan/weights/ on first run.',
+            )
+            self.ncnn_row.grid_remove()
+            self.ai_gpu_entry.grid()
+            self._refresh_pytorch_status()
+        else:
+            models = AI_MODELS_NCNN
+            self.ai_help_var.set(
+                'Auto Install downloads the portable ncnn build into realesrgan/ (~45 MB).',
+            )
+            self.ncnn_row.grid()
+            self.pytorch_status_var.set('')
+        if self.ai_model_var.get() not in models:
+            self.ai_model_var.set(models[0])
+        self.model_cb['values'] = models
+
+    def _refresh_pytorch_status(self) -> None:
+        if self._backend_value() != AI_BACKEND_PYTORCH:
+            return
+        ok, msg = self.app.check_realesrgan_pytorch()
+        prefix = '[OK] ' if ok else '[!] '
+        self.pytorch_status_var.set(prefix + msg)
 
     def on_method_change(self):
         is_ai = self.method_var.get() == UPSCALE_METHOD_AI
@@ -250,6 +342,8 @@ class UpscaleTab:
                 child.configure(state='normal' if is_ai else 'disabled')
             except tk.TclError:
                 pass
+        if is_ai:
+            self._apply_ai_backend_ui()
 
     def on_preset_change(self, event=None):
         name = self.preset_var.get()
@@ -320,7 +414,18 @@ class UpscaleTab:
                 return local
         return ''
 
-    def _ensure_ai_exe(self, files) -> bool:
+    def _ensure_ai_ready(self, files) -> bool:
+        if self._backend_value() == AI_BACKEND_PYTORCH:
+            ok, msg = self.app.check_realesrgan_pytorch()
+            self._refresh_pytorch_status()
+            if ok:
+                return True
+            messagebox.showerror(
+                'PyTorch Real-ESRGAN',
+                f'{msg}\n\nRun launchers/video_tools_unified.bat to install dependencies.\n'
+                'For GPU speed on NVIDIA, install CUDA PyTorch (see docs).',
+            )
+            return False
         if self._resolve_ai_exe_path():
             return True
         self._prompt_realesrgan_download(pending_files=files)
@@ -498,7 +603,7 @@ class UpscaleTab:
             return
         method = self.method_var.get()
         if method == UPSCALE_METHOD_AI:
-            if not self._ensure_ai_exe(files):
+            if not self._ensure_ai_ready(files):
                 return
         self.save_settings()
         self.progress['maximum'] = len(files)
@@ -552,20 +657,42 @@ class UpscaleTab:
             progress_cb = self._make_progress_callback(i, len(files))
 
             if method == UPSCALE_METHOD_AI:
-                ok, err = upscale_video_realesrgan(
-                    ffmpeg,
-                    input_path,
-                    output_path,
-                    tw,
-                    th,
-                    ai_exe=self.ai_exe_var.get().strip(),
-                    ai_model=self.ai_model_var.get(),
-                    encode_opts=encode_opts,
-                    remove_temp=self.remove_temp_var.get(),
-                    log_callback=lambda m, self=self: self.root.after(0, lambda msg=m: self.log(msg)),
-                    progress_callback=progress_cb,
-                    timeout=7200,
-                )
+                log_cb = lambda m, self=self: self.root.after(0, lambda msg=m: self.log(msg))
+                if self._backend_value() == AI_BACKEND_PYTORCH:
+                    try:
+                        gpu_id = int(self.ai_gpu_var.get().strip() or '0')
+                    except ValueError:
+                        gpu_id = 0
+                    ok, err = upscale_video_realesrgan_pytorch(
+                        ffmpeg,
+                        input_path,
+                        output_path,
+                        tw,
+                        th,
+                        ai_model=self.ai_model_var.get(),
+                        gpu_id=gpu_id,
+                        encode_opts=encode_opts,
+                        remove_temp=self.remove_temp_var.get(),
+                        log_callback=log_cb,
+                        progress_callback=progress_cb,
+                        timeout=7200,
+                        root_dir=self.app.root_dir,
+                    )
+                else:
+                    ok, err = upscale_video_realesrgan(
+                        ffmpeg,
+                        input_path,
+                        output_path,
+                        tw,
+                        th,
+                        ai_exe=self.ai_exe_var.get().strip(),
+                        ai_model=self.ai_model_var.get(),
+                        encode_opts=encode_opts,
+                        remove_temp=self.remove_temp_var.get(),
+                        log_callback=log_cb,
+                        progress_callback=progress_cb,
+                        timeout=7200,
+                    )
             else:
                 ok, err = upscale_video_ffmpeg(
                     ffmpeg,
@@ -636,10 +763,23 @@ class UpscaleTab:
             self.same_dir_var.set(bool(data['same_dir']))
         if 'ai_exe' in data:
             self.ai_exe_var.set(data['ai_exe'])
+        if 'ai_backend' in data:
+            self._ai_backend_internal = data['ai_backend']
+            for val, lbl in AI_BACKEND_CHOICES:
+                if val == data['ai_backend']:
+                    self.ai_backend_var.set(lbl)
+                    break
+        if 'ai_gpu_id' in data:
+            self.ai_gpu_var.set(str(data['ai_gpu_id']))
         if 'ai_model' in data:
-            self.ai_model_var.set(data['ai_model'])
+            model = data['ai_model']
+            allowed = AI_MODELS_PYTORCH + [m for m in AI_MODELS_NCNN if m not in AI_MODELS_PYTORCH]
+            if model not in allowed:
+                model = AI_MODELS_PYTORCH[0]
+            self.ai_model_var.set(model)
         if 'remove_temp' in data:
             self.remove_temp_var.set(bool(data['remove_temp']))
+        self._apply_ai_backend_ui()
         self.on_method_change()
         self._update_scale_label()
 
@@ -654,6 +794,8 @@ class UpscaleTab:
             'output_dir': self.output_dir_var.get(),
             'suffix': self.suffix_var.get(),
             'same_dir': self.same_dir_var.get(),
+            'ai_backend': getattr(self, '_ai_backend_internal', self._backend_value()),
+            'ai_gpu_id': self.ai_gpu_var.get(),
             'ai_exe': self.ai_exe_var.get(),
             'ai_model': self.ai_model_var.get(),
             'remove_temp': self.remove_temp_var.get(),

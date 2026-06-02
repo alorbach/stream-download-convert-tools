@@ -26,6 +26,10 @@ if not exist "%VENV_DIR%" (
 call "%VENV_DIR%\Scripts\activate.bat"
 python -m pip install --upgrade pip --quiet
 pip install -r requirements.txt --quiet
+python "%PROJECT_ROOT%\scripts\install_ai_upscale_deps.py"
+if errorlevel 1 (
+    echo [WARNING] AI upscale deps install failed; PyTorch upscale may be unavailable.
+)
 
 echo [INFO] Launching Video Tools - Unified...
 python "%PYTHON_SCRIPT%"

@@ -148,6 +148,11 @@ class BaseAudioGUI:
             error_callback=error_callback,
         )
 
+    def check_realesrgan_pytorch(self):
+        """Return (ok, status_message) for PyTorch Real-ESRGAN backend."""
+        from lib.realesrgan_pytorch import is_available
+        return is_available()
+
     def get_ffmpeg_command(self):
         """Get FFmpeg command."""
         return self.ffmpeg_manager.get_ffmpeg_command()

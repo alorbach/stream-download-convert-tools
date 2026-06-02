@@ -18,12 +18,14 @@ limitations under the License.
 
 import json
 import os
+import platform
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import threading
+import uuid
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
@@ -269,6 +271,72 @@ def probe_fps(
     return None
 
 
+def probe_video_stream_ok(
+    ffmpeg_cmd: str,
+    input_path: str,
+    ffprobe_cmd: Optional[str] = None,
+    min_duration: float = 0.05,
+) -> bool:
+    """Return True if file has a video stream with positive duration."""
+    dur = probe_duration(ffmpeg_cmd, input_path, ffprobe_cmd)
+    if dur is None or dur < min_duration:
+        return False
+    if os.path.isfile(input_path) and os.path.getsize(input_path) < 1024:
+        return False
+    probe = ffprobe_cmd or resolve_ffprobe_cmd(ffmpeg_cmd)
+    if probe:
+        try:
+            result = subprocess.run(
+                [
+                    probe, '-v', 'error', '-select_streams', 'v:0',
+                    '-show_entries', 'stream=codec_type',
+                    '-of', 'csv=p=0', input_path,
+                ],
+                capture_output=True, text=True,
+                creationflags=_subprocess_flags(), timeout=60,
+            )
+            return result.returncode == 0 and 'video' in (result.stdout or '').lower()
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            pass
+    return dur >= min_duration
+
+
+def _format_fps_for_ffmpeg(fps: float) -> str:
+    if fps <= 0:
+        return '24'
+    if abs(fps - round(fps)) < 0.01:
+        return str(int(round(fps)))
+    return f'{fps:.3f}'.rstrip('0').rstrip('.')
+
+
+def _normalize_frame_sequence(source_dir: str, dest_dir: str) -> int:
+    """
+    Copy PNG frames into dest_dir as contiguous 000001.png .. N.png.
+    Returns frame count.
+    """
+    if os.path.isdir(dest_dir):
+        shutil.rmtree(dest_dir, ignore_errors=True)
+    os.makedirs(dest_dir, exist_ok=True)
+    def _png_sort_key(p: Path) -> int:
+        m = re.search(r'(\d+)', p.stem)
+        return int(m.group(1)) if m else 0
+
+    pngs = sorted(Path(source_dir).glob('*.png'), key=_png_sort_key)
+    if not pngs:
+        pngs = sorted(Path(source_dir).rglob('*.png'))
+    count = 0
+    for i, src in enumerate(pngs, start=1):
+        dest = os.path.join(dest_dir, f'{i:06d}.png')
+        shutil.copy2(src, dest)
+        count += 1
+    return count
+
+
+def _vf_chain_for_encode(vf: str) -> str:
+    """filter_complex chain for image sequence input stream 0."""
+    return f'[0:v]{vf},format=yuv420p[vout]'
+
+
 def probe_has_audio(
     ffmpeg_cmd: str,
     input_path: str,
@@ -451,6 +519,308 @@ def _cleanup_temp_dir(temp_dir: str, remove: bool) -> None:
             pass
 
 
+def _upscale_video_extract_frames(
+    ffmpeg_cmd: str,
+    input_path: str,
+    target_w: int,
+    target_h: int,
+    log_callback: Optional[Any],
+    progress_callback: Optional[ProgressCallback],
+    timeout: int,
+) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
+    """Extract PNG frames; return (ok, err, context dict) for AI upscale + encode."""
+    def _log(msg: str) -> None:
+        if log_callback:
+            log_callback(msg)
+
+    def _stage(pct: float, msg: str) -> None:
+        if progress_callback:
+            progress_callback(pct, msg)
+
+    ffprobe = resolve_ffprobe_cmd(ffmpeg_cmd)
+    src = probe_resolution(ffmpeg_cmd, input_path, ffprobe)
+    if not src:
+        return False, 'Could not read source video resolution', None
+    src_w, src_h = src
+    tw, th = align_even(target_w, target_h)
+    ai_scale = pick_realesrgan_scale(src_w, src_h, tw, th)
+    fps = probe_fps(ffmpeg_cmd, input_path, ffprobe) or 24.0
+    duration = probe_duration(ffmpeg_cmd, input_path, ffprobe)
+    has_audio = probe_has_audio(ffmpeg_cmd, input_path, ffprobe)
+
+    basename = Path(input_path).stem
+    temp_dir = os.path.join(
+        tempfile.gettempdir(),
+        f'video_upscale_{basename}_{uuid.uuid4().hex[:8]}',
+    )
+    in_frames = os.path.join(temp_dir, 'in')
+    out_frames = os.path.join(temp_dir, 'out')
+    seq_frames = os.path.join(temp_dir, 'seq')
+    os.makedirs(in_frames, exist_ok=True)
+    os.makedirs(out_frames, exist_ok=True)
+    _log(f'[INFO] Temp frames: {temp_dir}')
+
+    fps_str = _format_fps_for_ffmpeg(fps)
+    in_pattern = os.path.join(in_frames, '%06d.png')
+    extract_cmd = [
+        ffmpeg_cmd, '-y', '-i', input_path,
+        '-vf', f'fps={fps_str}',
+        '-start_number', '1', in_pattern,
+    ]
+
+    def _extract_progress(inner_pct: float, msg: str) -> None:
+        _stage(min(14.0, inner_pct * 0.14), msg)
+
+    _stage(0.0, 'Extracting frames...')
+    ok, err = run_ffmpeg_with_progress(
+        extract_cmd, duration_sec=duration, progress_callback=_extract_progress, timeout=timeout,
+    )
+    if not ok:
+        _cleanup_temp_dir(temp_dir, True)
+        return False, f'Frame extract failed: {err}', None
+
+    frame_files = sorted(Path(in_frames).glob('*.png'))
+    if not frame_files:
+        _cleanup_temp_dir(temp_dir, True)
+        return False, 'No frames extracted from video', None
+
+    ctx = {
+        'temp_dir': temp_dir,
+        'in_frames': in_frames,
+        'out_frames': out_frames,
+        'seq_frames': seq_frames,
+        'src_w': src_w,
+        'src_h': src_h,
+        'tw': tw,
+        'th': th,
+        'ai_scale': ai_scale,
+        'fps': fps,
+        'fps_str': fps_str,
+        'duration': duration,
+        'has_audio': has_audio,
+        'frame_files': frame_files,
+        'ffprobe': ffprobe,
+        '_log': _log,
+        '_stage': _stage,
+    }
+    return True, '', ctx
+
+
+def _upscale_video_encode_from_frames(
+    ffmpeg_cmd: str,
+    input_path: str,
+    output_path: str,
+    ctx: Dict[str, Any],
+    encode_opts: Optional[Dict[str, str]],
+    audio_copy: bool,
+    remove_temp: bool,
+    progress_callback: Optional[ProgressCallback],
+    timeout: int,
+) -> Tuple[bool, str]:
+    """Normalize upscaled frames and FFmpeg-encode to output_path."""
+    _log = ctx['_log']
+    _stage = ctx['_stage']
+    out_frames = ctx['out_frames']
+    seq_frames = ctx['seq_frames']
+    frame_files = ctx['frame_files']
+    src_w = ctx['src_w']
+    src_h = ctx['src_h']
+    tw = ctx['tw']
+    th = ctx['th']
+    ai_scale = ctx['ai_scale']
+    fps = ctx['fps']
+    fps_str = ctx['fps_str']
+    duration = ctx['duration']
+    has_audio = ctx['has_audio']
+    temp_dir = ctx['temp_dir']
+    ffprobe = ctx['ffprobe']
+
+    _stage(85.0, 'Encoding upscaled video...')
+    upscaled = list(Path(out_frames).rglob('*.png'))
+    if not upscaled:
+        _cleanup_temp_dir(temp_dir, remove_temp)
+        return False, 'Real-ESRGAN produced no output frames'
+
+    seq_count = _normalize_frame_sequence(out_frames, seq_frames)
+    if seq_count < 1:
+        _cleanup_temp_dir(temp_dir, remove_temp)
+        return False, 'No upscaled frames to encode'
+    if seq_count != len(frame_files):
+        _log(
+            f'[WARNING] Frame count mismatch: extracted {len(frame_files)}, '
+            f'upscaled {seq_count}',
+        )
+
+    final_vf = build_upscale_vf(
+        tw, th, UPSCALE_METHOD_HIGH, src_w=src_w * ai_scale, src_h=src_h * ai_scale,
+    )
+    filter_complex = _vf_chain_for_encode(final_vf)
+    opts = {**DEFAULT_UPSCALE_ENCODE_OPTS, **(encode_opts or {})}
+    os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
+
+    seq_pattern = os.path.join(seq_frames, '%06d.png')
+    encode_duration = seq_count / fps if fps > 0 else duration
+
+    def _build_encode_cmd(use_audio_copy: bool) -> List[str]:
+        cmd = [
+            ffmpeg_cmd, '-y',
+            '-framerate', fps_str,
+            '-start_number', '1',
+            '-i', seq_pattern,
+            '-i', input_path,
+            '-filter_complex', filter_complex,
+            '-map', '[vout]',
+        ]
+        if has_audio:
+            cmd.append('-map')
+            cmd.append('1:a:0')
+        cmd.extend([
+            '-c:v', opts['video_codec'],
+            '-preset', opts['preset'],
+            '-crf', opts['crf'],
+        ])
+        if has_audio:
+            if use_audio_copy:
+                cmd.extend(['-c:a', 'copy'])
+            else:
+                cmd.extend(['-c:a', opts['audio_codec'], '-b:a', opts['audio_bitrate']])
+        else:
+            cmd.append('-an')
+        cmd.extend(['-shortest', '-movflags', '+faststart', output_path])
+        return cmd
+
+    def _encode_progress(inner_pct: float, msg: str) -> None:
+        _stage(85.0 + min(14.0, inner_pct * 0.14), msg)
+
+    if os.path.isfile(output_path):
+        try:
+            os.remove(output_path)
+        except OSError:
+            pass
+
+    ok, err = run_ffmpeg_with_progress(
+        _build_encode_cmd(audio_copy),
+        duration_sec=encode_duration,
+        progress_callback=_encode_progress,
+        timeout=timeout,
+    )
+    if not ok and has_audio and audio_copy:
+        ok, err = run_ffmpeg_with_progress(
+            _build_encode_cmd(False),
+            duration_sec=encode_duration,
+            progress_callback=_encode_progress,
+            timeout=timeout,
+        )
+
+    if ok and probe_video_stream_ok(ffmpeg_cmd, output_path, ffprobe):
+        _stage(100.0, 'Complete')
+        _cleanup_temp_dir(temp_dir, remove_temp)
+        return True, ''
+
+    if ok:
+        err = 'Encoded file is missing a valid video stream'
+    _cleanup_temp_dir(temp_dir, remove_temp)
+    return False, err or 'Upscale encode failed'
+
+
+def upscale_video_realesrgan_pytorch(
+    ffmpeg_cmd: str,
+    input_path: str,
+    output_path: str,
+    target_w: int,
+    target_h: int,
+    ai_model: str = 'realesr-animevideov3',
+    gpu_id: int = 0,
+    encode_opts: Optional[Dict[str, str]] = None,
+    audio_copy: bool = True,
+    remove_temp: bool = True,
+    log_callback: Optional[Any] = None,
+    progress_callback: Optional[ProgressCallback] = None,
+    timeout: int = 7200,
+    root_dir: Optional[str] = None,
+) -> Tuple[bool, str]:
+    """Upscale via frame extract -> Real-ESRGAN PyTorch -> FFmpeg encode."""
+    from lib.realesrgan_pytorch import (
+        is_available,
+        pytorch_tile_attempts,
+        upscale_frame_dir,
+    )
+
+    ok, status = is_available()
+    if not ok:
+        return False, status
+
+    def _log(msg: str) -> None:
+        if log_callback:
+            log_callback(msg)
+
+    _log(f'[INFO] PyTorch backend: {status}')
+
+    ok, err, ctx = _upscale_video_extract_frames(
+        ffmpeg_cmd, input_path, target_w, target_h,
+        log_callback, progress_callback, timeout,
+    )
+    if not ok or not ctx:
+        return False, err
+
+    _stage = ctx['_stage']
+    ai_scale = ctx['ai_scale']
+    in_frames = ctx['in_frames']
+    out_frames = ctx['out_frames']
+    frame_count = len(ctx['frame_files'])
+
+    _stage(15.0, f'AI upscaling {frame_count} frames ({ai_scale}x)...')
+    _log(f'[INFO] Extracted {frame_count} frames; running PyTorch Real-ESRGAN {ai_scale}x...')
+
+    import torch
+    cuda_ok = torch.cuda.is_available()
+    tile_attempts = pytorch_tile_attempts(ai_model, cuda_ok)
+    last_err = 'PyTorch Real-ESRGAN failed'
+    esr_ok = False
+
+    def _clear_out_frames() -> None:
+        for p in Path(out_frames).glob('*.png'):
+            try:
+                p.unlink()
+            except OSError:
+                pass
+
+    def _ai_progress(inner_pct: float, msg: str) -> None:
+        _stage(15.0 + min(70.0, inner_pct * 0.70), msg)
+
+    for tile in tile_attempts:
+        _clear_out_frames()
+        if tile:
+            _log(f'[INFO] PyTorch tile size: {tile}')
+        else:
+            _log('[INFO] PyTorch tile size: none (full frame)')
+        pt_ok, pt_err = upscale_frame_dir(
+            in_frames,
+            out_frames,
+            ai_model,
+            outscale=float(ai_scale),
+            gpu_id=gpu_id,
+            tile=tile,
+            root_dir=root_dir,
+            log_callback=_log,
+            progress_callback=_ai_progress,
+        )
+        if pt_ok:
+            esr_ok = True
+            break
+        last_err = pt_err
+        _log(f'[WARNING] Tile {tile or "none"} failed: {pt_err}')
+
+    if not esr_ok:
+        _cleanup_temp_dir(ctx['temp_dir'], remove_temp)
+        return False, last_err
+
+    return _upscale_video_encode_from_frames(
+        ffmpeg_cmd, input_path, output_path, ctx,
+        encode_opts, audio_copy, remove_temp, progress_callback, timeout,
+    )
+
+
 def upscale_video_realesrgan(
     ffmpeg_cmd: str,
     input_path: str,
@@ -474,158 +844,128 @@ def upscale_video_realesrgan(
         if log_callback:
             log_callback(msg)
 
-    def _stage(pct: float, msg: str) -> None:
-        if progress_callback:
-            progress_callback(pct, msg)
-
     if not ai_exe or not os.path.isfile(ai_exe):
         return False, f'Real-ESRGAN executable not found: {ai_exe}'
 
-    ffprobe = resolve_ffprobe_cmd(ffmpeg_cmd)
-    src = probe_resolution(ffmpeg_cmd, input_path, ffprobe)
-    if not src:
-        return False, 'Could not read source video resolution'
-    src_w, src_h = src
-    tw, th = align_even(target_w, target_h)
-    ai_scale = pick_realesrgan_scale(src_w, src_h, tw, th)
-    fps = probe_fps(ffmpeg_cmd, input_path, ffprobe) or 24.0
-    duration = probe_duration(ffmpeg_cmd, input_path, ffprobe)
-    has_audio = probe_has_audio(ffmpeg_cmd, input_path, ffprobe)
-
-    basename = Path(input_path).stem
-    temp_dir = os.path.join(
-        tempfile.gettempdir(),
-        f'video_upscale_{basename}_{os.getpid()}',
+    ok, err, ctx = _upscale_video_extract_frames(
+        ffmpeg_cmd, input_path, target_w, target_h,
+        log_callback, progress_callback, timeout,
     )
-    in_frames = os.path.join(temp_dir, 'in')
-    out_frames = os.path.join(temp_dir, 'out')
-    os.makedirs(in_frames, exist_ok=True)
-    os.makedirs(out_frames, exist_ok=True)
-    _log(f'[INFO] Temp frames: {temp_dir}')
+    if not ok or not ctx:
+        return False, err
 
-    in_pattern = os.path.join(in_frames, '%06d.png')
-    extract_cmd = [
-        ffmpeg_cmd, '-y', '-i', input_path,
-        '-vsync', '0', in_pattern,
-    ]
-    def _extract_progress(inner_pct: float, msg: str) -> None:
-        _stage(min(14.0, inner_pct * 0.14), msg)
-
-    _stage(0.0, 'Extracting frames...')
-    ok, err = run_ffmpeg_with_progress(
-        extract_cmd, duration_sec=duration, progress_callback=_extract_progress, timeout=timeout,
-    )
-    if not ok:
-        _cleanup_temp_dir(temp_dir, remove_temp)
-        return False, f'Frame extract failed: {err}'
-
-    frame_files = sorted(Path(in_frames).glob('*.png'))
-    if not frame_files:
-        _cleanup_temp_dir(temp_dir, remove_temp)
-        return False, 'No frames extracted from video'
+    _log = ctx['_log']
+    _stage = ctx['_stage']
+    temp_dir = ctx['temp_dir']
+    in_frames = ctx['in_frames']
+    out_frames = ctx['out_frames']
+    src_w = ctx['src_w']
+    src_h = ctx['src_h']
+    ai_scale = ctx['ai_scale']
+    frame_files = ctx['frame_files']
 
     _stage(15.0, f'AI upscaling {len(frame_files)} frames ({ai_scale}x)...')
     _log(f'[INFO] Extracted {len(frame_files)} frames; running Real-ESRGAN {ai_scale}x...')
-    esr_cmd = [
-        ai_exe,
-        '-i', in_frames,
-        '-o', out_frames,
-        '-n', ai_model,
-        '-s', str(ai_scale),
-    ]
-    try:
-        result = subprocess.run(
-            esr_cmd,
-            capture_output=True, text=True,
-            creationflags=_subprocess_flags(),
-            timeout=timeout,
-        )
-    except subprocess.TimeoutExpired:
-        _cleanup_temp_dir(temp_dir, remove_temp)
-        return False, 'Real-ESRGAN timed out'
-    except FileNotFoundError:
-        _cleanup_temp_dir(temp_dir, remove_temp)
-        return False, f'Could not run: {ai_exe}'
-
-    if result.returncode != 0:
-        err_text = (result.stderr or result.stdout or 'Real-ESRGAN failed')[-500:]
-        _cleanup_temp_dir(temp_dir, remove_temp)
-        return False, err_text
-
-    _stage(85.0, 'Encoding upscaled video...')
-    upscaled = sorted(Path(out_frames).glob('*.png'))
-    if not upscaled:
-        _cleanup_temp_dir(temp_dir, remove_temp)
-        return False, 'Real-ESRGAN produced no output frames'
-
-    out_pattern = os.path.join(out_frames, '%06d.png')
-    if not os.path.isfile(os.path.join(out_frames, '000001.png')):
-        for i, fp in enumerate(upscaled, start=1):
-            dest = os.path.join(out_frames, f'{i:06d}.png')
-            if str(fp) != dest:
-                try:
-                    shutil.copy2(fp, dest)
-                except OSError as copy_err:
-                    _cleanup_temp_dir(temp_dir, remove_temp)
-                    return False, str(copy_err)
-
-    final_vf = build_upscale_vf(tw, th, UPSCALE_METHOD_HIGH, src_w=src_w * ai_scale, src_h=src_h * ai_scale)
-    opts = {**DEFAULT_UPSCALE_ENCODE_OPTS, **(encode_opts or {})}
-    os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
-
-    encode_cmd = [
-        ffmpeg_cmd, '-y',
-        '-framerate', str(fps),
-        '-i', out_pattern,
-        '-i', input_path,
-        '-map', '0:v:0',
-    ]
-    if has_audio:
-        encode_cmd.extend(['-map', '1:a:0'])
-    encode_cmd.extend(['-vf', final_vf, '-c:v', opts['video_codec'],
-                       '-preset', opts['preset'], '-crf', opts['crf']])
-    if has_audio:
-        if audio_copy:
-            encode_cmd.extend(['-c:a', 'copy'])
-        else:
-            encode_cmd.extend(['-c:a', opts['audio_codec'], '-b:a', opts['audio_bitrate']])
-    else:
-        encode_cmd.append('-an')
-    encode_cmd.extend(['-movflags', '+faststart', output_path])
-
-    encode_duration = len(frame_files) / fps if fps > 0 else duration
-
-    def _encode_progress(inner_pct: float, msg: str) -> None:
-        _stage(85.0 + min(14.0, inner_pct * 0.14), msg)
-
-    ok, err = run_ffmpeg_with_progress(
-        encode_cmd, duration_sec=encode_duration,
-        progress_callback=_encode_progress, timeout=timeout,
+    exe_dir = os.path.dirname(os.path.abspath(ai_exe))
+    models_dir = os.path.join(exe_dir, 'models')
+    from lib.realesrgan_utils import (
+        ensure_ncnn_model_for_exe,
+        realesrgan_stderr_indicates_failure,
+        realesrgan_tile_attempts,
+        unsupported_ncnn_model_message,
+        validate_realesrgan_frames,
     )
-    if not ok and has_audio and audio_copy:
-        encode_cmd = [
-            ffmpeg_cmd, '-y',
-            '-framerate', str(fps),
-            '-i', out_pattern,
-            '-i', input_path,
-            '-map', '0:v:0', '-map', '1:a:0',
-            '-vf', final_vf,
-            '-c:v', opts['video_codec'], '-preset', opts['preset'], '-crf', opts['crf'],
-            '-c:a', opts['audio_codec'], '-b:a', opts['audio_bitrate'],
-            '-movflags', '+faststart', output_path,
-        ]
-        ok, err = run_ffmpeg_with_progress(
-            encode_cmd, duration_sec=encode_duration,
-            progress_callback=_encode_progress, timeout=timeout,
-        )
 
-    if ok and os.path.exists(output_path):
-        _stage(100.0, 'Complete')
+    if not ensure_ncnn_model_for_exe(ai_exe, ai_model, log_callback=_log):
         _cleanup_temp_dir(temp_dir, remove_temp)
-        return True, ''
+        return False, unsupported_ncnn_model_message(ai_model)
 
-    _cleanup_temp_dir(temp_dir, remove_temp)
-    return False, err or 'Upscale encode failed'
+    expected_up_w = src_w * ai_scale
+    expected_up_h = src_h * ai_scale
+    tile_attempts = realesrgan_tile_attempts(src_w, src_h, ai_model)
+    esr_ok = False
+    last_err = 'Real-ESRGAN failed'
+
+    def _clear_out_frames() -> None:
+        for p in Path(out_frames).rglob('*.png'):
+            try:
+                p.unlink()
+            except OSError:
+                pass
+
+    for tile_t in tile_attempts:
+        _clear_out_frames()
+        esr_cmd = [
+            ai_exe,
+            '-i', in_frames,
+            '-o', out_frames,
+            '-n', ai_model,
+            '-s', str(ai_scale),
+        ]
+        if tile_t:
+            esr_cmd.extend(['-t', tile_t])
+            _log(f'[INFO] Real-ESRGAN tile size: {tile_t}')
+        else:
+            _log('[INFO] Real-ESRGAN tile size: auto')
+        if os.path.isdir(models_dir):
+            esr_cmd.extend(['-m', models_dir])
+        if platform.system() == 'Windows':
+            esr_cmd.extend(['-g', '0'])
+        try:
+            result = subprocess.run(
+                esr_cmd,
+                capture_output=True, text=True,
+                creationflags=_subprocess_flags(),
+                cwd=exe_dir,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            _cleanup_temp_dir(temp_dir, remove_temp)
+            return False, 'Real-ESRGAN timed out'
+        except FileNotFoundError:
+            _cleanup_temp_dir(temp_dir, remove_temp)
+            return False, f'Could not run: {ai_exe}'
+
+        stderr = result.stderr or ''
+        stdout = result.stdout or ''
+        if result.returncode != 0 or realesrgan_stderr_indicates_failure(stderr, stdout):
+            last_err = (stderr + stdout or 'Real-ESRGAN failed')[-500:]
+            continue
+        check_seams = ai_model in (
+            'realesrgan-x4plus',
+            'realesrgan-x4plus-anime',
+            'realesrnet-x4plus',
+        )
+        valid, reason = validate_realesrgan_frames(
+            out_frames,
+            expected_up_w,
+            expected_up_h,
+            src_w=src_w,
+            ai_scale=ai_scale,
+            tile_t=tile_t,
+            check_tile_seams=check_seams,
+        )
+        if valid:
+            esr_ok = True
+            break
+        last_err = reason
+        _log(f'[WARNING] Tile {tile_t or "auto"} rejected: {reason}')
+
+    if not esr_ok:
+        _cleanup_temp_dir(temp_dir, remove_temp)
+        hint = ''
+        if ai_model in (
+            'realesrgan-x4plus',
+            'realesrgan-x4plus-anime',
+            'realesrnet-x4plus',
+        ):
+            hint = ' For Grok/AI clips use realesr-animevideov3 or PyTorch backend.'
+        return False, (last_err + hint).strip()
+
+    return _upscale_video_encode_from_frames(
+        ffmpeg_cmd, input_path, output_path, ctx,
+        encode_opts, audio_copy, remove_temp, progress_callback, timeout,
+    )
 
 
 def resolve_start_time(duration: float, start_spec: Union[str, int, float]) -> float:

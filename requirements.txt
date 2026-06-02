@@ -11,3 +11,7 @@ matplotlib>=3.7.0
 sounddevice>=0.4.6
 PyOpenGL>=3.1.7
 pyopengltk>=0.0.3
+# PyTorch AI upscale: torch here; basicsr/realesrgan via scripts/install_ai_upscale_deps.py
+# (PyPI basicsr breaks on Python 3.11+ during setup.py metadata)
+torch>=2.0.0
+torchvision>=0.15.0

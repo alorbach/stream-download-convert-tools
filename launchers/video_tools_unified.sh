@@ -20,6 +20,8 @@ fi
 source "$VENV_DIR/bin/activate"
 python -m pip install --upgrade pip --quiet
 pip install -r requirements.txt --quiet
+python "$PROJECT_ROOT/scripts/install_ai_upscale_deps.py" || \
+    echo "[WARNING] AI upscale deps install failed; PyTorch upscale may be unavailable."
 
 echo "[INFO] Launching Video Tools - Unified..."
 python "$PYTHON_SCRIPT"
