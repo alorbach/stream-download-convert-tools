@@ -26,7 +26,7 @@ from lib.video_utils import (
     probe_duration,
     segment_bounds,
     segments_to_plan,
-    source_output_dir,
+    split_output_dir,
     split_fixed_interval,
 )
 from .visual_trim_panel import VisualTrimPanel
@@ -106,8 +106,8 @@ class SplitChunksTab:
         ttk.Label(
             out_frame,
             text=(
-                'All modes: for each chunk, MP4 and MP3 are saved in the same folder as the '
-                'source video (e.g. mysong_part_001.mp4 and mysong_part_001.mp3).'
+                'All modes: chunks are saved in a subfolder named after each source file '
+                '(e.g. mysong/mysong_part_001.mp4 and mysong/mysong_part_001.mp3).'
             ),
             wraplength=700,
         ).pack(anchor='w')
@@ -121,6 +121,8 @@ class SplitChunksTab:
         ttk.Button(btn_frame, text='Chunk Plan Help', command=self.show_help).pack(side='left', padx=5)
         self.progress = ttk.Progressbar(btn_frame, mode='determinate')
         self.progress.pack(fill='x', pady=5, padx=0)
+        self.progress_label = ttk.Label(btn_frame, text='')
+        self.progress_label.pack(anchor='w')
 
     def _build_interval_opts(self):
         self.interval_frame = ttk.LabelFrame(self.opts_frame, text='Fixed Interval', padding=8)
@@ -228,8 +230,8 @@ class SplitChunksTab:
         guide = os.path.join(self.app.root_dir, 'docs', 'VIDEO_TOOLS_GUIDE.md')
         msg = (
             'Modes: fixed interval, single segment, JSON plan, or visual trim.\n\n'
-            'Every chunk exports MP4 + MP3 next to the source video file '
-            '(same basename, e.g. mysong_part_001.mp4 and mysong_part_001.mp3).\n\n'
+            'Every chunk exports MP4 + one matching MP3 into a subfolder named after the '
+            'source file (e.g. mysong/mysong_part_001.mp4 and mysong/mysong_part_001.mp3).\n\n'
             'Visual trim: select a video, drag In/Out handles, Add cut, Run Split.\n'
             'Shortcuts: I = In, O = Out, Space = Play/Pause.\n\n'
             'See docs/VIDEO_TOOLS_GUIDE.md for chunk JSON format.'
@@ -306,8 +308,11 @@ class SplitChunksTab:
             self.app.offer_ffmpeg_install()
             return
         self.app.set_busy(True, 'Splitting...')
-        self.progress['maximum'] = len(videos)
+        total = len(videos)
+        self.progress['maximum'] = total
         self.progress['value'] = 0
+        self.progress_label.config(text='Splitting...')
+        self.app.set_progress(value=0, maximum=total, message='Splitting...')
         threading.Thread(target=self._split_thread, args=(videos, mode), daemon=True).start()
 
     def _split_thread(self, videos, mode):
@@ -326,10 +331,15 @@ class SplitChunksTab:
                     total_out += self._do_json(ffmpeg, video)
             except Exception as e:
                 self.root.after(0, lambda m=str(e): self.log(f'[ERROR] {m}'))
-            self.root.after(0, lambda v=idx + 1: self.progress.config(value=v))
+            self.root.after(0, lambda v=idx + 1, t=len(videos), name=os.path.basename(video): (
+                self.progress.config(value=v),
+                self.progress_label.config(text=f'Processing {v}/{t}: {name}'),
+                self.app.set_progress(value=v, maximum=t, message=f'Processing {v}/{t}: {name}'),
+            ))
         self.root.after(0, lambda: self.log(f'\n[COMPLETE] Created {total_out} output file(s)'))
         self.root.after(0, lambda: messagebox.showinfo('Done', f'Created {total_out} output file(s)'))
         self.root.after(0, lambda: self.app.set_busy(False))
+        self.root.after(0, lambda: self.progress_label.config(text=''))
 
     def _do_visual(self, ffmpeg, video):
         segments = self.visual_panel.get_segments()
@@ -345,7 +355,7 @@ class SplitChunksTab:
         max_c = int(self.max_chunks_var.get() or 0)
         max_chunks = max_c if max_c > 0 else None
         outs, errs = split_fixed_interval(
-            ffmpeg, video, source_output_dir(video), chunk,
+            ffmpeg, video, split_output_dir(video), chunk,
             name_pattern=self.interval_pattern_var.get(),
             max_chunks=max_chunks,
         )
@@ -375,7 +385,7 @@ class SplitChunksTab:
                 pass
             start, end = segment_bounds(duration, start_spec, duration_sec=dur)
         seg_dur = end - start
-        out_dir = source_output_dir(video)
+        out_dir = split_output_dir(video)
         os.makedirs(out_dir, exist_ok=True)
         suffix = self.single_suffix_var.get() or '_clip'
         out = os.path.join(out_dir, f'{Path(video).stem}{suffix}.mp4')
@@ -397,8 +407,7 @@ class SplitChunksTab:
 
     def _do_json(self, ffmpeg, video):
         plan = parse_chunk_plan_json(self.json_text.get('1.0', tk.END))
-        plan.setdefault('output', {})['folder'] = '.'
-        outs, errs = apply_chunk_plan(ffmpeg, video, plan, source_output_dir(video))
+        outs, errs = apply_chunk_plan(ffmpeg, video, plan, split_output_dir(video))
         for w in errs:
             self.root.after(0, lambda m=w: self.log(f'[WARN] {m}'))
         for o in outs:

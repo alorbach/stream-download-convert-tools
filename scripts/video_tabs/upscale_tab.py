@@ -669,6 +669,7 @@ class UpscaleTab:
         self.progress['value'] = 0
         self.encode_progress['value'] = 0
         self.progress_label.config(text='')
+        self.app.set_progress(value=0, maximum=len(files), message='Upscaling...')
         self.app.set_busy(True, 'Upscaling...')
         threading.Thread(target=self._batch_thread, args=(files,), daemon=True).start()
 
@@ -676,9 +677,9 @@ class UpscaleTab:
         def on_progress(percent: float, message: str) -> None:
             def update() -> None:
                 self.encode_progress['value'] = percent
-                self.progress_label.config(
-                    text=f'File {file_index + 1}/{total_files}: {message}',
-                )
+                msg = f'File {file_index + 1}/{total_files}: {message}'
+                self.progress_label.config(text=msg)
+                self.app.set_progress(value=percent, maximum=100, message=msg)
             self.root.after(0, update)
         return on_progress
 
@@ -706,8 +707,10 @@ class UpscaleTab:
             name = os.path.basename(input_path)
             self.root.after(
                 0,
-                lambda n=i + 1, t=len(files), f=name: self.app.set_busy(
-                    True, f'Upscaling {n}/{t}: {f}',
+                lambda n=i + 1, t=len(files), f=name: self.app.set_progress(
+                    value=n - 1,
+                    maximum=t,
+                    message=f'Upscaling {n}/{t}: {f}',
                 ),
             )
             self.root.after(0, lambda f=name: self.log(f'[INFO] Processing: {f}'))
@@ -780,7 +783,10 @@ class UpscaleTab:
                 fail_count += 1
                 self.root.after(0, lambda e=err: self.log(f'[ERROR] {e}'))
 
-            self.root.after(0, lambda v=i + 1: self.progress.config(value=v))
+            self.root.after(0, lambda v=i + 1, t=len(files): (
+                self.progress.config(value=v),
+                self.app.set_progress(value=v, maximum=t, message=f'Completed {v}/{t} file(s)'),
+            ))
             self.root.after(0, lambda: self.encode_progress.configure(value=0))
 
         self.root.after(

@@ -74,6 +74,11 @@ def source_output_dir(input_path: str) -> str:
     return os.path.dirname(os.path.abspath(input_path))
 
 
+def split_output_dir(input_path: str) -> str:
+    """Subfolder named after the source file stem (default split export location)."""
+    return os.path.join(source_output_dir(input_path), Path(input_path).stem)
+
+
 def parse_dropped_paths(data: str) -> List[str]:
     """Parse DND event data (supports {path with spaces})."""
     if not data:
@@ -1037,6 +1042,14 @@ def format_output_name(pattern: str, basename: str, seg_id: str, index: int) -> 
     return name
 
 
+def pattern_to_segment_template(name_pattern: str, basename: str, output_dir: str) -> str:
+    """Convert a name pattern with {index} placeholders to an ffmpeg segment template."""
+    template = name_pattern.replace('{basename}', basename)
+    template = re.sub(r'\{index(?::0\d+d)?\}', '%03d', template)
+    template = template.replace('{id}', 'part')
+    return os.path.join(output_dir, template)
+
+
 def validate_chunk_plan(plan: Dict[str, Any], video_duration: float) -> Tuple[List[Dict], List[str]]:
     """
     Validate plan and return list of segment dicts with start, end, id, warnings.
@@ -1347,12 +1360,15 @@ def split_fixed_interval(
     """
     os.makedirs(output_dir, exist_ok=True)
     basename = Path(input_path).stem
-    pattern_path = os.path.join(output_dir, name_pattern)
-    if '{basename}' not in name_pattern and '{index' not in name_pattern:
-        out_template = os.path.join(output_dir, f'{basename}_part_%03d.mp4')
+    input_abs = os.path.abspath(input_path)
+    if '{index' in name_pattern or '{basename}' in name_pattern:
+        out_template = pattern_to_segment_template(name_pattern, basename, output_dir)
     else:
-        first_name = format_output_name(name_pattern, basename, 'part', 0)
-        out_template = os.path.join(output_dir, first_name.replace('part', '%03d'))
+        out_template = os.path.join(output_dir, f'{basename}_part_%03d.mp4')
+
+    def _collect_segment_outputs() -> List[Path]:
+        found = sorted(Path(output_dir).glob('*.mp4'))
+        return [p for p in found if os.path.abspath(str(p)) != input_abs]
 
     cmd = [
         ffmpeg_cmd, '-y', '-i', input_path,
@@ -1361,9 +1377,7 @@ def split_fixed_interval(
         '-map', '0', out_template,
     ]
     ok, err = run_ffmpeg(cmd, timeout=1800)
-    outputs = sorted(Path(output_dir).glob(f'{basename}*.mp4'))
-    if not outputs:
-        outputs = sorted(Path(output_dir).glob('*.mp4'))
+    outputs = _collect_segment_outputs()
 
     if not ok or not outputs:
         cmd = [
@@ -1375,9 +1389,7 @@ def split_fixed_interval(
             '-map', '0', out_template,
         ]
         ok, err = run_ffmpeg(cmd, timeout=1800)
-        outputs = sorted(Path(output_dir).glob(f'{basename}*.mp4'))
-        if not outputs:
-            outputs = sorted(Path(output_dir).glob('*.mp4'))
+        outputs = _collect_segment_outputs()
 
     if max_chunks and len(outputs) > max_chunks:
         for extra in outputs[max_chunks:]:
@@ -1416,9 +1428,14 @@ def apply_chunk_plan(
         return [], ['Could not determine video duration']
 
     out_cfg = plan.get('output') or {}
-    folder = out_cfg.get('folder', 'chunks')
+    folder = out_cfg.get('folder', '.')
     name_pattern = out_cfg.get('name_pattern', '{basename}_{id}.mp4')
-    output_dir = folder if os.path.isabs(folder) else os.path.join(output_base_dir, folder)
+    if folder in ('.', ''):
+        output_dir = output_base_dir
+    elif os.path.isabs(folder):
+        output_dir = folder
+    else:
+        output_dir = os.path.join(output_base_dir, folder)
     os.makedirs(output_dir, exist_ok=True)
 
     basename = Path(input_path).stem
@@ -1490,11 +1507,12 @@ def export_visual_segments(
     name_pattern: str = '{basename}_{id}.mp4',
     also_mp3: bool = True,
 ) -> Tuple[List[str], List[str]]:
-    """Export cuts next to the source video (MP4 + matching MP3 per cut)."""
+    """Export cuts into a subfolder named after the source file (MP4 + MP3 per cut)."""
     if not segments:
         return [], ['No cut regions defined']
-    source_dir = os.path.dirname(os.path.abspath(input_path))
+    if not output_base_dir:
+        output_base_dir = split_output_dir(input_path)
     plan = segments_to_plan(segments, output_folder='.', name_pattern=name_pattern)
     return apply_chunk_plan(
-        ffmpeg_cmd, input_path, plan, source_dir, also_mp3=also_mp3,
+        ffmpeg_cmd, input_path, plan, output_base_dir, also_mp3=also_mp3,
     )

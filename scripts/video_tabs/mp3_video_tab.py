@@ -845,6 +845,8 @@ class Mp3ToVideoTab:
         
         self.progress['maximum'] = len(self.conversion_queue)
         self.progress['value'] = 0
+        self.progress_label.config(text='Converting...')
+        self.app.set_progress(value=0, maximum=len(self.conversion_queue), message='Converting...')
         
         self.set_busy(True, "Converting...")
         
@@ -929,7 +931,12 @@ class Mp3ToVideoTab:
                     self.log(f"[ERROR] Exception: {msg}")
                 )
             
-            self.root.after(0, lambda v=i+1: self.progress.config(value=v))
+            total = len(self.conversion_queue)
+            self.root.after(0, lambda v=i+1, t=total, name=input_path.name: (
+                self.progress.config(value=v),
+                self.progress_label.config(text=f'Converting {v}/{t}: {name}'),
+                self.app.set_progress(value=v, maximum=t, message=f'Converting {v}/{t}: {name}'),
+            ))
         
         self.root.after(
             0,
@@ -1310,6 +1317,12 @@ class Mp3ToVideoTab:
         
         self.progress['maximum'] = len(self.selected_mp3_files) + 1  # +1 for merge step
         self.progress['value'] = 0
+        self.progress_label.config(text='Converting...')
+        self.app.set_progress(
+            value=0,
+            maximum=len(self.selected_mp3_files) + 1,
+            message='Converting and merging...',
+        )
         
         self.set_busy(True, "Converting and merging...")
         
@@ -1381,7 +1394,12 @@ class Mp3ToVideoTab:
                     self.log(f"[ERROR] Exception: {msg}")
                 )
             
-            self.root.after(0, lambda v=i+1: self.progress.config(value=v))
+            total = len(self.selected_mp3_files)
+            self.root.after(0, lambda v=i+1, t=total, name=input_path.name: (
+                self.progress.config(value=v),
+                self.progress_label.config(text=f'Converting {v}/{t}: {name}'),
+                self.app.set_progress(value=v, maximum=total + 1, message=f'Converting {v}/{t}: {name}'),
+            ))
         
         # Step 2: Merge videos with transitions if enabled
         self.root.after(0, lambda: self.log(f"[DEBUG] Transition enabled state: {self.transition_enabled}"))
@@ -1399,6 +1417,11 @@ class Mp3ToVideoTab:
                 self.root.after(0, lambda: self.log(f"\n[INFO] Merging {len(converted_videos)} videos with transitions"))
             
             self.root.after(0, lambda: self.set_busy(True, "Merging videos..."))
+            self.root.after(0, lambda t=len(self.selected_mp3_files): self.app.set_progress(
+                value=t,
+                maximum=t + 1,
+                message='Merging videos...',
+            ))
             
             merged_output = os.path.join(
                 self.file_manager.get_folder_path('output'),
@@ -1408,6 +1431,12 @@ class Mp3ToVideoTab:
             try:
                 self._merge_videos_with_transitions(video_files_for_transitions, merged_output)
                 self.root.after(0, lambda: self.progress.config(value=len(self.selected_mp3_files) + 1))
+                self.root.after(0, lambda: self.progress_label.config(text='Merge complete'))
+                self.root.after(0, lambda: self.app.set_progress(
+                    value=len(self.selected_mp3_files) + 1,
+                    maximum=len(self.selected_mp3_files) + 1,
+                    message='Merge complete',
+                ))
                 self.root.after(
                     0,
                     lambda:
@@ -1430,6 +1459,12 @@ class Mp3ToVideoTab:
             try:
                 self._merge_videos_simple(converted_videos, merged_output)
                 self.root.after(0, lambda: self.progress.config(value=len(self.selected_mp3_files) + 1))
+                self.root.after(0, lambda: self.progress_label.config(text='Merge complete'))
+                self.root.after(0, lambda: self.app.set_progress(
+                    value=len(self.selected_mp3_files) + 1,
+                    maximum=len(self.selected_mp3_files) + 1,
+                    message='Merge complete',
+                ))
                 self.root.after(
                     0,
                     lambda:
@@ -1459,6 +1494,18 @@ class Mp3ToVideoTab:
         )
         
         self.root.after(0, lambda: self.set_busy(False))
+    
+    def set_busy(self, busy=True, message=""):
+        self.is_busy = busy
+        if busy:
+            self.root.config(cursor="wait")
+            if hasattr(self, 'progress_label'):
+                self.progress_label.config(text=message)
+        else:
+            self.root.config(cursor="")
+            if hasattr(self, 'progress_label'):
+                self.progress_label.config(text="")
+            self.app.reset_progress()
     
     def log(self, message):
         self.app.log(message, self.TAB_NAME)

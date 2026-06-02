@@ -81,6 +81,13 @@ class VideoToolsUnifiedGUI(BaseAudioGUI):
         self._tabs['upscale'] = UpscaleTab(self, self.tab_upscale)
         self.setup_settings_tab()
 
+        progress_frame = ttk.Frame(main)
+        progress_frame.pack(fill='x', pady=(5, 0))
+        self.global_progress = ttk.Progressbar(progress_frame, mode='determinate', maximum=100)
+        self.global_progress.pack(fill='x')
+        self.global_progress_label = ttk.Label(progress_frame, text='')
+        self.global_progress_label.pack(anchor='w')
+
         log_frame = ttk.LabelFrame(main, text='Log', padding=5)
         log_frame.pack(fill='x', pady=(5, 0))
         self.log_text = scrolledtext.ScrolledText(log_frame, height=8)
@@ -126,6 +133,36 @@ class VideoToolsUnifiedGUI(BaseAudioGUI):
 
     def log_callback(self, message):
         self.log(message)
+
+    def set_progress(self, value=None, maximum=100, message='', indeterminate=False):
+        def _apply():
+            bar = self.global_progress
+            label = self.global_progress_label
+            bar.stop()
+            if indeterminate:
+                bar.configure(mode='indeterminate', maximum=100, value=0)
+                label.config(text=message or 'Processing...')
+                bar.start(10)
+            else:
+                bar.configure(mode='determinate')
+                if maximum is not None:
+                    bar['maximum'] = max(int(maximum), 1)
+                if value is not None:
+                    bar['value'] = value
+                label.config(text=message or '')
+        self.root.after(0, _apply)
+
+    def reset_progress(self):
+        def _apply():
+            self.global_progress.stop()
+            self.global_progress.configure(mode='determinate', maximum=100, value=0)
+            self.global_progress_label.config(text='')
+        self.root.after(0, _apply)
+
+    def set_busy(self, busy=True, message='', progress_bar=None, progress_label=None):
+        super().set_busy(busy, message, progress_bar, progress_label)
+        if not busy:
+            self.reset_progress()
 
     def get_setting(self, key, default=None):
         return self._settings.get(key, default)

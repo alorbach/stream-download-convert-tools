@@ -154,8 +154,11 @@ class VideoToMp3Tab:
     self.app.set_setting('v2m_output', out)
     self.app.set_setting('v2m_quality', self.quality_var.get())
     self.conversion_queue = list(self.selected_files)
-    self.progress['maximum'] = len(self.conversion_queue)
+    total = len(self.conversion_queue)
+    self.progress['maximum'] = total
     self.progress['value'] = 0
+    self.progress_label.config(text='Converting...')
+    self.app.set_progress(value=0, maximum=total, message='Converting...')
     self.app.set_busy(True, 'Converting...')
     threading.Thread(target=self._conversion_thread, args=(out,), daemon=True).start()
 
@@ -180,7 +183,11 @@ class VideoToMp3Tab:
       except Exception as e:
         fail += 1
         self.root.after(0, lambda m=str(e): self.log(f'[ERROR] {m}'))
-      self.root.after(0, lambda v=i + 1: self.progress.config(value=v))
+      self.root.after(0, lambda v=i + 1, t=len(self.conversion_queue), name=Path(input_file).name: (
+          self.progress.config(value=v),
+          self.progress_label.config(text=f'Converting {v}/{t}: {name}'),
+          self.app.set_progress(value=v, maximum=t, message=f'Converting {v}/{t}: {name}'),
+      ))
     self.root.after(0, lambda: self.log(f'\n[COMPLETE] {ok} succeeded, {fail} failed'))
     self.root.after(0, lambda: messagebox.showinfo('Done', f'Successful: {ok}\nFailed: {fail}'))
     self.root.after(0, lambda: self.app.set_busy(False))

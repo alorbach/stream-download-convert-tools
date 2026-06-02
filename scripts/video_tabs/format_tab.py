@@ -1062,12 +1062,13 @@ class FormatCropTab:
 
         self.progress['maximum'] = total
         self.progress['value'] = 0
+        self.app.set_progress(value=0, maximum=total, message='Truncating videos...')
 
         for idx, (input_path, expected_output_path) in enumerate(files_to_process):
             self.progress['value'] = idx + 1
-            self.progress_label.config(
-                text=f"Truncating {idx + 1}/{total}: {os.path.basename(input_path)}"
-            )
+            msg = f"Truncating {idx + 1}/{total}: {os.path.basename(input_path)}"
+            self.progress_label.config(text=msg)
+            self.app.set_progress(value=idx + 1, maximum=total, message=msg)
             self.root.update_idletasks()
 
             success, result = self.truncate_video(input_path, duration_seconds)
@@ -1199,10 +1200,13 @@ class FormatCropTab:
         
         self.progress['maximum'] = total
         self.progress['value'] = 0
+        self.app.set_progress(value=0, maximum=total, message='Converting files...')
         
         for idx, (input_path, output_path) in enumerate(files_to_process):
             self.progress['value'] = idx + 1
-            self.progress_label.config(text=f"Processing {idx + 1}/{total}: {os.path.basename(input_path)}")
+            msg = f"Processing {idx + 1}/{total}: {os.path.basename(input_path)}"
+            self.progress_label.config(text=msg)
+            self.app.set_progress(value=idx + 1, maximum=total, message=msg)
             self.root.update_idletasks()
             
             if truncate_duration is not None and self.is_video_file(input_path):
@@ -1235,6 +1239,7 @@ class FormatCropTab:
         else:
             self.root.config(cursor="")
             self.progress_label.config(text="")
+            self.app.reset_progress()
     
     def load_settings(self):
         """Load saved settings from JSON file"""

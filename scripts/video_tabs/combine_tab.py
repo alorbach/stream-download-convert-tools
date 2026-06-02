@@ -92,6 +92,10 @@ class CombineVideosTab:
         self.video_codec = "libx264"  # libx264, libx265, libvpx-vp9
         self.video_bitrate = "Medium Quality (CRF 23)"  # Quality preset
         self.video_preset = "veryfast"  # Encoding preset
+        
+        # Optional external audio track (MP3/WAV)
+        self.external_audio_enabled = False
+        self.external_audio_file = None
         self.transition_types = [
             ("Fade", "fade"),
         ("Wipe Left", "wipeleft"),
@@ -635,6 +639,41 @@ class CombineVideosTab:
         self.status_var = tk.StringVar(value="Ready")
         status_label = ttk.Label(toolbar, textvariable=self.status_var)
         status_label.pack(side='right', padx=10)
+        
+        # External audio track (optional)
+        audio_frame = ttk.LabelFrame(main_frame, text="External Audio Track (optional)", padding=5)
+        audio_frame.pack(fill='x', pady=(0, 10))
+        
+        audio_row = ttk.Frame(audio_frame)
+        audio_row.pack(fill='x')
+        
+        self.external_audio_enabled_var = tk.BooleanVar(value=self.external_audio_enabled)
+        ttk.Checkbutton(
+            audio_row,
+            text="Use external MP3/WAV instead of clip audio",
+            variable=self.external_audio_enabled_var,
+            command=self.toggle_external_audio,
+        ).pack(side='left', padx=5)
+        ttk.Button(audio_row, text="Select Audio...", command=self.select_external_audio).pack(side='left', padx=5)
+        ttk.Button(audio_row, text="Clear", command=self.clear_external_audio).pack(side='left', padx=5)
+        self.lbl_external_audio_status = ttk.Label(audio_row, text="No audio file selected")
+        self.lbl_external_audio_status.pack(side='left', padx=10)
+        
+        if DND_AVAILABLE:
+            try:
+                audio_frame.drop_target_register(DND_FILES)
+                audio_frame.dnd_bind('<<Drop>>', self.on_drop_external_audio)
+                audio_row.drop_target_register(DND_FILES)
+                audio_row.dnd_bind('<<Drop>>', self.on_drop_external_audio)
+            except Exception:
+                pass
+        
+        progress_frame = ttk.Frame(main_frame)
+        progress_frame.pack(fill='x', pady=(0, 10))
+        self.progress = ttk.Progressbar(progress_frame, mode='determinate')
+        self.progress.pack(fill='x')
+        self.progress_label = ttk.Label(progress_frame, text='')
+        self.progress_label.pack(anchor='w')
         
         # Video grid area
         grid_frame = ttk.LabelFrame(main_frame, text="Video Grid - Drag to Reorder", padding=10)
@@ -1187,9 +1226,18 @@ class CombineVideosTab:
             self.log("[WARNING] No videos to combine")
             return
         
+        if not self._validate_external_audio():
+            return
+        
+        if self.is_busy:
+            messagebox.showwarning("Warning", "Operation already in progress")
+            return
+        
         if not self.check_ffmpeg():
             self.offer_ffmpeg_install()
             return
+        
+        self._start_operation_progress(message='Creating preview...', indeterminate=True)
         
         # Create temporary preview file
         preview_file = os.path.join(self.root_dir, 'temp_preview.mp4')
@@ -1217,9 +1265,7 @@ class CombineVideosTab:
                 self.root.after(0, lambda: self.log(f"[INFO] Creating preview with {self.transition_type} transitions ({self.transition_duration}s)"))
                 
                 # Build input arguments
-                input_args = []
-                for vf in self.video_files:
-                    input_args.extend(['-i', vf])
+                input_args = self._append_video_inputs(self.video_files)
                 
                 # Build command with filter complex (faster encoding for preview)
                 # For preview, use faster preset but still respect codec choice
@@ -1229,9 +1275,7 @@ class CombineVideosTab:
                 preview_encoding.extend(['-preset', 'ultrafast', '-crf', '28'])
                 cmd = [ffmpeg_cmd] + input_args + [
                     '-filter_complex', filter_complex,
-                    '-map', '[vout]',
-                    '-map', '[aout]'
-                ] + preview_encoding + [
+                ] + self._get_filter_output_map_args(len(self.video_files)) + preview_encoding + [
                     '-c:a', 'aac',
                     '-b:a', '128k',
                     '-y', preview_file
@@ -1255,13 +1299,17 @@ class CombineVideosTab:
                 concat_file = self._write_concat_file()
                 
                 # Use concat demuxer with faster encoding for preview (preview uses lower quality for speed)
-                # For preview, use faster preset but still respect codec choice
                 preview_encoding = self._get_video_encoding_args()
-                # Override preset to ultrafast for preview speed
                 preview_encoding = [arg for arg in preview_encoding if arg != '-preset']
                 preview_encoding.extend(['-preset', 'ultrafast'])
                 encoding_str = ' '.join(preview_encoding)
-                cmd = f'{ffmpeg_cmd} -f concat -safe 0 -i "{concat_file}" {encoding_str} -c:a aac -b:a 128k -y "{preview_file}"'
+                if self._use_external_audio():
+                    self.root.after(0, lambda: self.log('[INFO] Preview: copying video, encoding external audio only'))
+                    cmd = ' '.join(self._build_concat_external_audio_cmd(
+                        ffmpeg_cmd, concat_file, preview_file, audio_bitrate='128k',
+                    ))
+                else:
+                    cmd = f'{ffmpeg_cmd} -f concat -safe 0 -i "{concat_file}" {encoding_str} -c:a aac -b:a 128k -y "{preview_file}"'
                 
                 self.root.after(0, lambda: self.log(f"[DEBUG] Preview FFmpeg command: {cmd}"))
                 
@@ -1290,6 +1338,8 @@ class CombineVideosTab:
             self.root.after(0, lambda msg=error_msg: self.log(f"[ERROR] Exception: {msg}"))
             self.root.after(0, lambda: self.root.config(cursor=''))
             self.root.after(0, lambda msg=error_msg: messagebox.showerror("Error", f"Exception:\n{msg}"))
+        finally:
+            self.root.after(0, lambda: self._finish_operation_progress())
     
     def _play_preview(self, preview_file):
         """Play preview video."""
@@ -1446,8 +1496,14 @@ class CombineVideosTab:
             # Create concat file
             concat_file = self._write_concat_file()
             
-            # Use concat demuxer for lossless combination
-            cmd = f'{ffmpeg_cmd} -f concat -safe 0 -i "{concat_file}" -c copy -y "{output_file}"'
+            if self._use_external_audio():
+                self.root.after(0, lambda: self.log('[INFO] Copying video streams, encoding external audio only'))
+                cmd = ' '.join(self._build_concat_external_audio_cmd(
+                    ffmpeg_cmd, concat_file, output_file, audio_bitrate='192k',
+                ))
+            else:
+                # Use concat demuxer for lossless combination
+                cmd = f'{ffmpeg_cmd} -f concat -safe 0 -i "{concat_file}" -c copy -y "{output_file}"'
             
             result = subprocess.run(cmd, capture_output=True, text=True, cwd=self.root_dir, shell=True)
             
@@ -1461,6 +1517,10 @@ class CombineVideosTab:
                 encoding_args = self._get_video_encoding_args()
                 encoding_str = ' '.join(encoding_args)
                 reencode_cmd = f"{ffmpeg_cmd} -f concat -safe 0 -i \"{concat_file}\" {encoding_str} -c:a aac -b:a 192k -movflags +faststart -y \"{output_file}\""
+                if self._use_external_audio():
+                    reencode_cmd = ' '.join(self._build_concat_external_audio_cmd(
+                        ffmpeg_cmd, concat_file, output_file, audio_bitrate='192k',
+                    ))
                 self.root.after(0, lambda: self.log(f"[DEBUG] FFmpeg reencode command: {reencode_cmd}"))
                 retry = subprocess.run(reencode_cmd, capture_output=True, text=True, cwd=self.root_dir, shell=True)
                 if retry.returncode == 0:
@@ -1492,6 +1552,13 @@ class CombineVideosTab:
             self.log("[WARNING] No videos to combine")
             return
         
+        if not self._validate_external_audio():
+            return
+        
+        if self.is_busy:
+            messagebox.showwarning("Warning", "Operation already in progress")
+            return
+        
         if not self.check_ffmpeg():
             self.offer_ffmpeg_install()
             return
@@ -1512,6 +1579,8 @@ class CombineVideosTab:
             return
         
         self.log(f"[INFO] Starting video combination of {len(self.video_files)} videos")
+        if self._use_external_audio():
+            self.log(f"[INFO] Using external audio: {os.path.basename(self.external_audio_file)}")
         self.root.config(cursor='wait')
         self.root.update()
         
@@ -1523,6 +1592,7 @@ class CombineVideosTab:
     def _combine_videos_thread(self, output_file):
         """Combine videos in background thread."""
         concat_file = None
+        MAX_VIDEOS_PER_BATCH = 10
         try:
             ffmpeg_cmd = self.get_ffmpeg_command()
             
@@ -1530,9 +1600,27 @@ class CombineVideosTab:
             filter_complex = self._build_transition_filter(self.video_files)
             
             if filter_complex:
+                if len(self.video_files) > MAX_VIDEOS_PER_BATCH:
+                    num_batches = (len(self.video_files) + MAX_VIDEOS_PER_BATCH - 1) // MAX_VIDEOS_PER_BATCH
+                    total_steps = num_batches + 1
+                    self._start_operation_progress(
+                        total_steps,
+                        f'Combining batch 1/{num_batches}...',
+                    )
+                else:
+                    self._start_operation_progress(
+                        message='Combining videos with transitions...',
+                        indeterminate=True,
+                    )
+            else:
+                self._start_operation_progress(
+                    message='Combining videos...',
+                    indeterminate=True,
+                )
+            
+            if filter_complex:
                 # Use filter graph with transitions
                 # For large numbers of videos, use batch processing to avoid command line length limits
-                MAX_VIDEOS_PER_BATCH = 10
                 
                 if len(self.video_files) > MAX_VIDEOS_PER_BATCH:
                     # Batch processing: combine in groups, then combine the groups
@@ -1614,16 +1702,31 @@ class CombineVideosTab:
                                         pass
                                 self.root.after(0, lambda msg=error_msg: messagebox.showerror("Error", f"Failed to combine batch:\n{msg}"))
                                 return
+                        
+                        self._update_operation_progress(
+                            batch_idx + 1,
+                            num_batches + 1,
+                            f'Combining batch {batch_idx + 2}/{num_batches}...'
+                            if batch_idx + 1 < num_batches
+                            else 'Merging batch outputs...',
+                        )
                     
                     # Now combine all batch outputs
                     self.root.after(0, lambda: self.log(f"[INFO] Combining {len(batch_outputs)} batch outputs into final video"))
                     
                     # Use concat demuxer to combine batch outputs (faster and simpler)
                     final_concat = self._write_concat_file_for_batch(batch_outputs)
-                    encoding_args = self._get_video_encoding_args()
-                    final_cmd = [ffmpeg_cmd, '-f', 'concat', '-safe', '0', '-i', final_concat] + encoding_args + [
-                               '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart',
-                               '-y', output_file]
+                    final_cmd = [ffmpeg_cmd, '-f', 'concat', '-safe', '0', '-i', final_concat]
+                    if self._use_external_audio():
+                        self.root.after(0, lambda: self.log('[INFO] Final merge: copying video, encoding external audio only'))
+                        final_cmd.extend(['-i', self.external_audio_file, '-map', '0:v:0', '-map', '1:a:0', '-shortest'])
+                        final_cmd.extend(self._get_external_audio_mux_args('192k'))
+                        final_cmd.extend(['-y', output_file])
+                    else:
+                        encoding_args = self._get_video_encoding_args()
+                        final_cmd.extend(encoding_args + [
+                            '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', '-y', output_file,
+                        ])
                     
                     result = subprocess.run(final_cmd, capture_output=True, text=True, cwd=self.root_dir)
                     
@@ -1641,6 +1744,7 @@ class CombineVideosTab:
                             pass
                     
                     if result.returncode == 0:
+                        self._update_operation_progress(num_batches + 1, num_batches + 1, 'Export complete')
                         self.root.after(0, lambda: self.log(f"[SUCCESS] Combined {len(self.video_files)} videos with transitions saved: {os.path.basename(output_file)}"))
                     else:
                         error_msg = result.stderr[:4000] if result.stderr else "Unknown error"
@@ -1651,17 +1755,13 @@ class CombineVideosTab:
                     self.root.after(0, lambda: self.log(f"[INFO] Combining {len(self.video_files)} videos with transitions ({self.transition_duration}s)"))
                     
                     # Build input arguments
-                    input_args = []
-                    for vf in self.video_files:
-                        input_args.extend(['-i', vf])
+                    input_args = self._append_video_inputs(self.video_files)
                     
                     # Build command with filter complex
                     encoding_args = self._get_video_encoding_args()
                     cmd = [ffmpeg_cmd] + input_args + [
                         '-filter_complex', filter_complex,
-                        '-map', '[vout]',
-                        '-map', '[aout]'
-                    ] + encoding_args + [
+                    ] + self._get_filter_output_map_args(len(self.video_files)) + encoding_args + [
                         '-c:a', 'aac',
                         '-b:a', '192k',
                         '-movflags', '+faststart',
@@ -1673,6 +1773,7 @@ class CombineVideosTab:
                     result = subprocess.run(cmd, capture_output=True, text=True, cwd=self.root_dir)
                     
                     if result.returncode == 0:
+                        self._update_operation_progress(1, 1, 'Export complete')
                         self.root.after(0, lambda: self.log(f"[SUCCESS] Combined video with transitions saved: {os.path.basename(output_file)}"))
                     else:
                         error_msg = result.stderr[:4000] if result.stderr else "Unknown error"
@@ -1682,17 +1783,24 @@ class CombineVideosTab:
                 # Use simple concat (no transitions)
                 concat_file = self._write_concat_file()
                 
-                # Use concat demuxer
-                cmd = [ffmpeg_cmd, '-f', 'concat', '-safe', '0', '-i', concat_file, 
-                      '-c', 'copy', '-y', output_file]
-                
-                self.root.after(0, lambda: self.log(f"[DEBUG] FFmpeg command: {' '.join(cmd)}"))
-                
-                result = subprocess.run(cmd, capture_output=True, text=True, cwd=self.root_dir)
+                if self._use_external_audio():
+                    self.root.after(0, lambda: self.log('[INFO] Copying video streams, encoding external audio only'))
+                    self.root.after(0, lambda cf=concat_file: self.log(
+                        f"[DEBUG] FFmpeg command: {' '.join(self._build_concat_external_audio_cmd(ffmpeg_cmd, cf, output_file))}"
+                    ))
+                    result = self._run_concat_external_audio(
+                        ffmpeg_cmd, concat_file, output_file, audio_bitrate='192k',
+                    )
+                else:
+                    cmd = [ffmpeg_cmd, '-f', 'concat', '-safe', '0', '-i', concat_file,
+                           '-c', 'copy', '-y', output_file]
+                    self.root.after(0, lambda: self.log(f"[DEBUG] FFmpeg command: {' '.join(cmd)}"))
+                    result = subprocess.run(cmd, capture_output=True, text=True, cwd=self.root_dir)
                 
                 if result.returncode == 0:
+                    self._update_operation_progress(1, 1, 'Export complete')
                     self.root.after(0, lambda: self.log(f"[SUCCESS] Combined video saved: {os.path.basename(output_file)}"))
-                else:
+                elif not self._use_external_audio():
                     # Retry with re-encode fallback
                     error_msg = result.stderr[:2000] if result.stderr else "Unknown error"
                     self.root.after(0, lambda: self.log(f"[WARNING] Copy combine failed, retrying with re-encode..."))
@@ -1700,11 +1808,16 @@ class CombineVideosTab:
                     self.root.after(0, lambda: self.log(f"[DEBUG] FFmpeg reencode command: {reencode_cmd}"))
                     retry = subprocess.run(reencode_cmd, capture_output=True, text=True, cwd=self.root_dir, shell=True)
                     if retry.returncode == 0:
+                        self._update_operation_progress(1, 1, 'Export complete')
                         self.root.after(0, lambda: self.log(f"[SUCCESS] Combined video saved (re-encoded): {os.path.basename(output_file)}"))
                     else:
                         error_msg2 = retry.stderr[:4000] if retry.stderr else "Unknown error"
                         self.root.after(0, lambda: self.log(f"[ERROR] Failed to combine videos: {error_msg2}"))
                         self.root.after(0, lambda: messagebox.showerror("Error", f"Failed to combine videos:\n{error_msg2}"))
+                else:
+                    error_msg = result.stderr[:4000] if result.stderr else "Unknown error"
+                    self.root.after(0, lambda msg=error_msg: self.log(f"[ERROR] Failed to combine videos: {msg}"))
+                    self.root.after(0, lambda msg=error_msg: messagebox.showerror("Error", f"Failed to combine videos:\n{msg}"))
         
         except Exception as e:
             error_msg = str(e)
@@ -1719,6 +1832,7 @@ class CombineVideosTab:
                 except:
                     pass
             self.root.after(0, lambda: self.root.config(cursor=''))
+            self.root.after(0, lambda: self._finish_operation_progress())
     
     def toggle_auto_export(self):
         """Toggle auto-export last frame option."""
@@ -1790,6 +1904,171 @@ class CombineVideosTab:
             args.extend(['-b:v', '0'])
         
         return args
+    
+    def _start_operation_progress(self, maximum=1, message='', indeterminate=False):
+        self.is_busy = True
+        def _ui():
+            if indeterminate:
+                self.progress.configure(mode='indeterminate')
+                self.progress.start(10)
+            else:
+                self.progress.stop()
+                self.progress.configure(mode='determinate', maximum=max(maximum, 1), value=0)
+            self.progress_label.config(text=message)
+        self.root.after(0, _ui)
+        if indeterminate:
+            self.app.set_progress(indeterminate=True, message=message)
+        else:
+            self.app.set_progress(value=0, maximum=maximum, message=message)
+    
+    def _update_operation_progress(self, value, maximum=None, message=''):
+        def _ui():
+            self.progress.stop()
+            self.progress.configure(mode='determinate')
+            if maximum is not None:
+                self.progress['maximum'] = max(maximum, 1)
+            self.progress['value'] = value
+            if message:
+                self.progress_label.config(text=message)
+        self.root.after(0, _ui)
+        kwargs = {'value': value, 'message': message}
+        if maximum is not None:
+            kwargs['maximum'] = maximum
+        self.app.set_progress(**kwargs)
+    
+    def _finish_operation_progress(self, message=''):
+        self.is_busy = False
+        def _ui():
+            self.progress.stop()
+            self.progress.configure(mode='determinate', value=0, maximum=100)
+            self.progress_label.config(text=message)
+        self.root.after(0, _ui)
+        self.app.reset_progress()
+    
+    def _use_external_audio(self):
+        return bool(
+            self.external_audio_enabled
+            and self.external_audio_file
+            and os.path.isfile(self.external_audio_file)
+        )
+    
+    def _validate_external_audio(self):
+        if not self.external_audio_enabled:
+            return True
+        if not self.external_audio_file or not os.path.isfile(self.external_audio_file):
+            messagebox.showwarning(
+                "Warning",
+                "External audio is enabled but no valid MP3/WAV file is selected.",
+            )
+            return False
+        return True
+    
+    def _append_video_inputs(self, video_files):
+        input_args = []
+        for vf in video_files:
+            input_args.extend(['-i', vf])
+        if self._use_external_audio():
+            input_args.extend(['-i', self.external_audio_file])
+        return input_args
+    
+    def _get_filter_output_map_args(self, num_video_inputs):
+        if self._use_external_audio():
+            return ['-map', '[vout]', '-map', f'{num_video_inputs}:a:0', '-shortest']
+        return ['-map', '[vout]', '-map', '[aout]']
+    
+    def _get_external_audio_mux_args(self, audio_bitrate='192k'):
+        """Mux external audio without re-encoding video (MP3/WAV -> AAC only)."""
+        return ['-c:v', 'copy', '-c:a', 'aac', '-b:a', audio_bitrate, '-movflags', '+faststart']
+    
+    def _build_concat_external_audio_cmd(self, ffmpeg_cmd, concat_file, output_file, audio_bitrate='192k'):
+        """Build concat + external audio command using video stream copy."""
+        cmd = [
+            ffmpeg_cmd, '-f', 'concat', '-safe', '0', '-i', concat_file,
+            '-i', self.external_audio_file,
+            '-map', '0:v:0', '-map', '1:a:0', '-shortest',
+        ]
+        cmd.extend(self._get_external_audio_mux_args(audio_bitrate))
+        cmd.extend(['-y', output_file])
+        return cmd
+    
+    def _run_concat_external_audio(self, ffmpeg_cmd, concat_file, output_file, audio_bitrate='192k', shell=False):
+        """Concat with external audio: copy video, encode audio; re-encode video only on failure."""
+        cmd = self._build_concat_external_audio_cmd(ffmpeg_cmd, concat_file, output_file, audio_bitrate)
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, cwd=self.root_dir, shell=shell,
+        )
+        if result.returncode == 0:
+            return result
+        self.root.after(0, lambda: self.log('[WARNING] Video stream copy failed, retrying with video re-encode...'))
+        encoding_args = self._get_video_encoding_args()
+        retry_cmd = [
+            ffmpeg_cmd, '-f', 'concat', '-safe', '0', '-i', concat_file,
+            '-i', self.external_audio_file,
+            '-map', '0:v:0', '-map', '1:a:0', '-shortest',
+        ]
+        retry_cmd.extend(encoding_args + ['-c:a', 'aac', '-b:a', audio_bitrate, '-movflags', '+faststart', '-y', output_file])
+        return subprocess.run(retry_cmd, capture_output=True, text=True, cwd=self.root_dir, shell=shell)
+    
+    def toggle_external_audio(self):
+        self.external_audio_enabled = self.external_audio_enabled_var.get()
+        self.save_settings()
+        status = "enabled" if self.external_audio_enabled else "disabled"
+        self.log(f"[INFO] External audio track: {status}")
+    
+    def update_external_audio_label(self):
+        if not hasattr(self, 'lbl_external_audio_status'):
+            return
+        if self.external_audio_file and os.path.isfile(self.external_audio_file):
+            self.lbl_external_audio_status.config(text=os.path.basename(self.external_audio_file))
+        else:
+            self.lbl_external_audio_status.config(text="No audio file selected")
+    
+    def select_external_audio(self):
+        file_path = filedialog.askopenfilename(
+            title="Select Audio File",
+            filetypes=[
+                ("Audio Files", "*.mp3 *.wav *.m4a *.ogg *.flac"),
+                ("MP3 Files", "*.mp3"),
+                ("WAV Files", "*.wav"),
+                ("All Files", "*.*"),
+            ],
+        )
+        if file_path:
+            self.external_audio_file = file_path
+            self.external_audio_enabled_var.set(True)
+            self.external_audio_enabled = True
+            self.update_external_audio_label()
+            self.save_settings()
+            self.log(f"[INFO] External audio selected: {os.path.basename(file_path)}")
+    
+    def clear_external_audio(self):
+        self.external_audio_file = None
+        self.external_audio_enabled_var.set(False)
+        self.external_audio_enabled = False
+        self.update_external_audio_label()
+        self.save_settings()
+        self.log("[INFO] External audio cleared")
+    
+    def on_drop_external_audio(self, event):
+        import re
+        audio_extensions = {'.mp3', '.wav', '.m4a', '.ogg', '.flac'}
+        pattern = r'\{?([A-Za-z]:/[^{}]+\.(?:mp3|wav|m4a|ogg|flac))\}?'
+        matches = re.findall(pattern, event.data, flags=re.IGNORECASE)
+        files = [m for m in matches if os.path.isfile(m)]
+        if not files:
+            cleaned = event.data.strip('{}').strip()
+            if os.path.isfile(cleaned):
+                files = [cleaned]
+        for file_path in files:
+            _, ext = os.path.splitext(file_path.lower())
+            if ext in audio_extensions:
+                self.external_audio_file = file_path
+                self.external_audio_enabled_var.set(True)
+                self.external_audio_enabled = True
+                self.update_external_audio_label()
+                self.save_settings()
+                self.log(f"[INFO] External audio selected via drag and drop: {os.path.basename(file_path)}")
+                return
     
     def select_transition_types(self):
         """Open dialog to select multiple transition types."""
@@ -2172,6 +2451,8 @@ class CombineVideosTab:
                 'output_width': self.output_width,
                 'output_height': self.output_height,
                 'use_first_video_size': self.use_first_video_size,
+                'external_audio_enabled': self.external_audio_enabled,
+                'external_audio_file': self.external_audio_file,
                 'video_files': self.video_files[:10]  # Save first 10 for quick restore
             }
             
@@ -2252,6 +2533,19 @@ class CombineVideosTab:
                 # Update output size label if it exists
                 if hasattr(self, 'output_size_label'):
                     self.update_output_size_label()
+                
+                if 'external_audio_enabled' in settings:
+                    self.external_audio_enabled = settings['external_audio_enabled']
+                    if hasattr(self, 'external_audio_enabled_var'):
+                        self.external_audio_enabled_var.set(self.external_audio_enabled)
+                if 'external_audio_file' in settings:
+                    saved_audio = settings['external_audio_file']
+                    if saved_audio and os.path.isfile(saved_audio):
+                        self.external_audio_file = saved_audio
+                    else:
+                        self.external_audio_file = None
+                if hasattr(self, 'lbl_external_audio_status'):
+                    self.update_external_audio_label()
                 
                 self.log("[INFO] Settings loaded")
         
