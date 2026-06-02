@@ -171,8 +171,8 @@ While processing, the tab shows **file batch** progress and a **current file enc
 | Model | Best for |
 |-------|----------|
 | realesr-animevideov3 | AI/Grok/stylized video (default) |
-| realesr-general-x4v3 | General scenes (balanced denoise) |
-| realesr-general-wdn-x4v3 | General scenes (stronger denoise) |
+| realesrgan-x2plus | Native 2x RRDB; good when target scale is ~2x |
+| realesr-general-x4v3 | General scenes; use **General denoise** slider (0-1) |
 | realesrgan-x4plus-anime | Anime stills / art |
 | realesrgan-x4plus | Photos |
 | realesrnet-x4plus | Softer than x4plus GAN |

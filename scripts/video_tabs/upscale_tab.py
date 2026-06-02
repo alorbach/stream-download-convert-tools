@@ -12,7 +12,7 @@ try:
 except ImportError:
     DND_FILES = None
 
-from lib.realesrgan_pytorch import PYTORCH_UI_MODELS
+from lib.realesrgan_pytorch import PYTORCH_GENERAL_V3, PYTORCH_UI_MODELS
 from lib.video_utils import (
     UPSCALE_METHOD_AI,
     UPSCALE_METHOD_HIGH,
@@ -214,10 +214,38 @@ class UpscaleTab:
         )
         self.model_cb['values'] = AI_MODELS_PYTORCH
         self.model_cb.grid(row=4, column=1, sticky='w', padx=5, pady=4)
+        self.model_cb.bind('<<ComboboxSelected>>', self._on_ai_model_selected)
+
+        self.denoise_row = ttk.Frame(self.ai_frame)
+        self.denoise_row.grid(row=5, column=0, columnspan=4, sticky='ew', pady=4)
+        ttk.Label(self.denoise_row, text='General denoise:').grid(row=0, column=0, sticky='w')
+        self.ai_denoise_var = tk.DoubleVar(value=0.5)
+        self.denoise_scale = tk.Scale(
+            self.denoise_row,
+            from_=0,
+            to=100,
+            orient=tk.HORIZONTAL,
+            variable=self.ai_denoise_var,
+            command=self._on_denoise_scale,
+            length=220,
+            showvalue=False,
+        )
+        self.denoise_scale.grid(row=0, column=1, padx=5, sticky='ew')
+        self.denoise_label_var = tk.StringVar(value='0.50 (balanced)')
+        ttk.Label(self.denoise_row, textvariable=self.denoise_label_var, width=16).grid(
+            row=0, column=2, sticky='w',
+        )
+        ttk.Label(
+            self.denoise_row,
+            text='0=keep detail, 1=strong denoise (realesr-general-x4v3 only)',
+            font=('TkDefaultFont', 8),
+        ).grid(row=1, column=0, columnspan=3, sticky='w')
+        self.denoise_row.grid_columnconfigure(1, weight=1)
+
         self.ai_help_var = tk.StringVar(value='')
         ttk.Label(
             self.ai_frame, textvariable=self.ai_help_var, wraplength=520,
-        ).grid(row=5, column=0, columnspan=4, sticky='w')
+        ).grid(row=6, column=0, columnspan=4, sticky='w')
         self.ai_frame.grid_columnconfigure(1, weight=1)
 
         enc_frame = ttk.LabelFrame(self.parent, text='Encode and Output', padding=8)
@@ -327,6 +355,36 @@ class UpscaleTab:
         if self.ai_model_var.get() not in models:
             self.ai_model_var.set(models[0])
         self.model_cb['values'] = models
+        self._update_denoise_visibility()
+
+    def _denoise_strength_value(self) -> float:
+        return max(0.0, min(1.0, self.ai_denoise_var.get() / 100.0))
+
+    def _on_denoise_scale(self, _value=None) -> None:
+        d = self._denoise_strength_value()
+        if d <= 0.05:
+            hint = 'keep detail'
+        elif d >= 0.95:
+            hint = 'strong denoise'
+        else:
+            hint = 'balanced'
+        self.denoise_label_var.set(f'{d:.2f} ({hint})')
+        self.save_settings()
+
+    def _on_ai_model_selected(self, event=None) -> None:
+        self._update_denoise_visibility()
+        self.save_settings()
+
+    def _update_denoise_visibility(self) -> None:
+        show = (
+            self._backend_value() == AI_BACKEND_PYTORCH
+            and self.ai_model_var.get() == PYTORCH_GENERAL_V3
+        )
+        if show:
+            self.denoise_row.grid()
+            self._on_denoise_scale()
+        else:
+            self.denoise_row.grid_remove()
 
     def _refresh_pytorch_status(self) -> None:
         if self._backend_value() != AI_BACKEND_PYTORCH:
@@ -344,6 +402,7 @@ class UpscaleTab:
                 pass
         if is_ai:
             self._apply_ai_backend_ui()
+            self._update_denoise_visibility()
 
     def on_preset_change(self, event=None):
         name = self.preset_var.get()
@@ -663,14 +722,19 @@ class UpscaleTab:
                         gpu_id = int(self.ai_gpu_var.get().strip() or '0')
                     except ValueError:
                         gpu_id = 0
+                    model = self.ai_model_var.get()
+                    denoise = None
+                    if model == PYTORCH_GENERAL_V3:
+                        denoise = self._denoise_strength_value()
                     ok, err = upscale_video_realesrgan_pytorch(
                         ffmpeg,
                         input_path,
                         output_path,
                         tw,
                         th,
-                        ai_model=self.ai_model_var.get(),
+                        ai_model=model,
                         gpu_id=gpu_id,
+                        denoise_strength=denoise,
                         encode_opts=encode_opts,
                         remove_temp=self.remove_temp_var.get(),
                         log_callback=log_cb,
@@ -771,8 +835,14 @@ class UpscaleTab:
                     break
         if 'ai_gpu_id' in data:
             self.ai_gpu_var.set(str(data['ai_gpu_id']))
+        if 'ai_general_denoise' in data:
+            self.ai_denoise_var.set(float(data['ai_general_denoise']) * 100.0)
         if 'ai_model' in data:
             model = data['ai_model']
+            if model == 'realesr-general-wdn-x4v3':
+                model = PYTORCH_GENERAL_V3
+                if 'ai_general_denoise' not in data:
+                    self.ai_denoise_var.set(100.0)
             allowed = AI_MODELS_PYTORCH + [m for m in AI_MODELS_NCNN if m not in AI_MODELS_PYTORCH]
             if model not in allowed:
                 model = AI_MODELS_PYTORCH[0]
@@ -798,6 +868,7 @@ class UpscaleTab:
             'ai_gpu_id': self.ai_gpu_var.get(),
             'ai_exe': self.ai_exe_var.get(),
             'ai_model': self.ai_model_var.get(),
+            'ai_general_denoise': self._denoise_strength_value(),
             'remove_temp': self.remove_temp_var.get(),
         }
         self.app.set_tab_settings(self._settings_key, data)

@@ -9,16 +9,19 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 # UI model id -> config for RealESRGANer
+PYTORCH_GENERAL_V3 = 'realesr-general-x4v3'
+
 PYTORCH_UI_MODELS = [
     'realesr-animevideov3',
-    'realesr-general-x4v3',
-    'realesr-general-wdn-x4v3',
+    'realesrgan-x2plus',
+    PYTORCH_GENERAL_V3,
     'realesrgan-x4plus-anime',
     'realesrgan-x4plus',
     'realesrnet-x4plus',
 ]
 
 HEAVY_PYTORCH_UI_MODELS = frozenset({
+    'realesrgan-x2plus',
     'realesrgan-x4plus',
     'realesrgan-x4plus-anime',
     'realesrnet-x4plus',
@@ -59,7 +62,19 @@ def is_available() -> Tuple[bool, str]:
     return True, 'CPU only (CUDA not available; upscale will be very slow)'
 
 
-def _ui_model_config(ui_model: str) -> Dict[str, Any]:
+def _clamp_denoise(value: Optional[float], default: float = 0.5) -> float:
+    """UI slider: 0=keep detail, 1=strong denoise."""
+    if value is None:
+        return default
+    return max(0.0, min(1.0, float(value)))
+
+
+def _upstream_denoise(ui_denoise: float) -> float:
+    """Map UI denoise to Real-ESRGAN -dn (1=general only, 0=wdn-heavy)."""
+    return 1.0 - _clamp_denoise(ui_denoise)
+
+
+def _ui_model_config(ui_model: str, denoise_strength: Optional[float] = None) -> Dict[str, Any]:
     """Map Upscale tab model id to architecture and download URLs."""
     from basicsr.archs.rrdbnet_arch import RRDBNet
     from realesrgan.archs.srvgg_arch import SRVGGNetCompact
@@ -76,8 +91,7 @@ def _ui_model_config(ui_model: str) -> Dict[str, Any]:
             ],
             'denoise_strength': None,
         }
-    if ui_model in ('realesr-general-x4v3', 'realesr-general-wdn-x4v3'):
-        denoise = 1.0 if ui_model == 'realesr-general-wdn-x4v3' else 0.5
+    if ui_model == PYTORCH_GENERAL_V3:
         return {
             'pytorch_name': 'realesr-general-x4v3',
             'model': SRVGGNetCompact(
@@ -88,7 +102,21 @@ def _ui_model_config(ui_model: str) -> Dict[str, Any]:
                 'https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesr-general-wdn-x4v3.pth',
                 'https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesr-general-x4v3.pth',
             ],
-            'denoise_strength': denoise,
+            'denoise_strength': _upstream_denoise(
+                _clamp_denoise(denoise_strength, 0.5),
+            ),
+        }
+    if ui_model == 'realesrgan-x2plus':
+        return {
+            'pytorch_name': 'RealESRGAN_x2plus',
+            'model': RRDBNet(
+                num_in_ch=3, num_out_ch=3, num_feat=64, num_block=23, num_grow_ch=32, scale=2,
+            ),
+            'netscale': 2,
+            'urls': [
+                'https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.1/RealESRGAN_x2plus.pth',
+            ],
+            'denoise_strength': None,
         }
     if ui_model == 'realesrgan-x4plus-anime':
         return {
@@ -173,15 +201,21 @@ def get_upsampler(
     tile_pad: int = 10,
     root_dir: Optional[str] = None,
     log_callback: Optional[Callable[[str], None]] = None,
+    denoise_strength: Optional[float] = None,
 ):
     """Load or return cached RealESRGANer for a UI model id."""
     from realesrgan import RealESRGANer
 
-    cache_key = (ui_model, gpu_id, tile)
+    denoise_key = -1.0
+    if ui_model == PYTORCH_GENERAL_V3:
+        denoise_key = round(
+            _upstream_denoise(_clamp_denoise(denoise_strength, 0.5)), 3,
+        )
+    cache_key = (ui_model, gpu_id, tile, denoise_key)
     if cache_key in _UPSAMPLER_CACHE:
         return _UPSAMPLER_CACHE[cache_key]
 
-    cfg = _ui_model_config(ui_model)
+    cfg = _ui_model_config(ui_model, denoise_strength=denoise_strength)
     models_dir = weights_dir(root_dir)
     model_path, dni_weight = _resolve_model_path(cfg, models_dir, log_callback)
 
@@ -223,6 +257,7 @@ def upscale_frame_dir(
     root_dir: Optional[str] = None,
     log_callback: Optional[Callable[[str], None]] = None,
     progress_callback: Optional[Callable[[float, str], None]] = None,
+    denoise_strength: Optional[float] = None,
 ) -> Tuple[bool, str]:
     """
     Upscale PNG frames in in_dir -> out_dir (same basenames).
@@ -242,7 +277,12 @@ def upscale_frame_dir(
     os.makedirs(out_dir, exist_ok=True)
     try:
         upsampler = get_upsampler(
-            ui_model, gpu_id=gpu_id, tile=tile, root_dir=root_dir, log_callback=log_callback,
+            ui_model,
+            gpu_id=gpu_id,
+            tile=tile,
+            root_dir=root_dir,
+            log_callback=log_callback,
+            denoise_strength=denoise_strength,
         )
     except Exception as e:
         return False, f'Failed to load model: {e}'

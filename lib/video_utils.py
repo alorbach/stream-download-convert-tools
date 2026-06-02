@@ -731,6 +731,7 @@ def upscale_video_realesrgan_pytorch(
     target_h: int,
     ai_model: str = 'realesr-animevideov3',
     gpu_id: int = 0,
+    denoise_strength: Optional[float] = None,
     encode_opts: Optional[Dict[str, str]] = None,
     audio_copy: bool = True,
     remove_temp: bool = True,
@@ -741,6 +742,7 @@ def upscale_video_realesrgan_pytorch(
 ) -> Tuple[bool, str]:
     """Upscale via frame extract -> Real-ESRGAN PyTorch -> FFmpeg encode."""
     from lib.realesrgan_pytorch import (
+        PYTORCH_GENERAL_V3,
         is_available,
         pytorch_tile_attempts,
         upscale_frame_dir,
@@ -770,7 +772,13 @@ def upscale_video_realesrgan_pytorch(
     frame_count = len(ctx['frame_files'])
 
     _stage(15.0, f'AI upscaling {frame_count} frames ({ai_scale}x)...')
-    _log(f'[INFO] Extracted {frame_count} frames; running PyTorch Real-ESRGAN {ai_scale}x...')
+    _log_msg = (
+        f'[INFO] Extracted {frame_count} frames; running PyTorch Real-ESRGAN '
+        f'{ai_scale}x ({ai_model})...'
+    )
+    if ai_model == PYTORCH_GENERAL_V3 and denoise_strength is not None:
+        _log_msg += f' denoise={denoise_strength:.2f}'
+    _log(_log_msg)
 
     import torch
     cuda_ok = torch.cuda.is_available()
@@ -804,6 +812,7 @@ def upscale_video_realesrgan_pytorch(
             root_dir=root_dir,
             log_callback=_log,
             progress_callback=_ai_progress,
+            denoise_strength=denoise_strength,
         )
         if pt_ok:
             esr_ok = True
