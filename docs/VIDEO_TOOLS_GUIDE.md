@@ -18,6 +18,14 @@ Video Tools Unified combines former standalone tools into one application:
 
 **Settings:** `video_tools_unified_settings.json` in the project root. Legacy `*_settings.json` files are imported once per tab on first run.
 
+### Global video encode (Codec / Quality / Preset)
+
+Full video re-encodes (Combine export, Merge Split + Lip Sync, Split and Chunks, Format and Crop MP4) use shared settings:
+
+- **Settings** tab, or the **Video encode** row on those tabs, or **Codec** / **Quality** on Combine Videos.
+- Stored as `encode_video_codec`, `encode_video_quality`, `encode_video_preset` (e.g. `libx265`, `High Quality (CRF 18)`, `veryfast`).
+- **MP3 to Video** and **Upscale Video** keep their own tab controls.
+
 ---
 
 ## Video to MP3
@@ -36,8 +44,8 @@ Output: MP3 files in the converted folder.
 - Select images or videos.
 - Pick aspect ratio preset or custom ratio.
 - Crop position: center, top, bottom, left, right.
-- Output: JPG, PNG, or MP4 (with optional forward+reverse 1s clip).
-- **Truncate Selected** shortens video without cropping.
+- Output: JPG, PNG, or MP4 (with optional forward+reverse 1s clip). MP4 uses global **Video encode** settings.
+- **Truncate Selected** shortens video without cropping (re-encode uses global settings).
 
 ---
 
@@ -155,9 +163,13 @@ Use after **Split and Chunks** and optional LatentSync lip-sync on selected part
 
 ### Lip-sync file matching
 
-For each split file `storyboard_scene_004_000.mp4`, the tool looks in the lip-sync folder for:
+Split parts are detected as top-level MP4s named like `name_part_001.mp4`, `name_004_000.mp4`, or `name_001.mp4` (not `*combined*` or LatentSync `*__*` files).
 
-`storyboard_scene_004_000__*.mp4`
+For each split file, the tool looks in the lip-sync folder for:
+
+`{split_stem}__*.mp4`
+
+Example: `storyboard_scene_004_000.mp4` or `storyboard_scene_part_004.mp4` matches `storyboard_scene_part_004__*.mp4` or `storyboard_scene_004_000__*.mp4`
 
 If several files match (re-runs), the **newest** file (by modification time) is used. Parts with no match keep the original split MP4.
 

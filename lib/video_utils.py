@@ -1127,6 +1127,10 @@ def build_segment_command(
             '-c:v', opts['video_codec'],
             '-preset', opts['preset'],
             '-crf', opts['crf'],
+        ])
+        if opts['video_codec'] == 'libvpx-vp9':
+            cmd.extend(['-b:v', '0'])
+        cmd.extend([
             '-c:a', opts['audio_codec'],
             '-b:a', opts['audio_bitrate'],
         ])
@@ -1260,6 +1264,7 @@ def extract_segment(
     duration_sec: float,
     use_copy: bool = True,
     target_fps: Optional[float] = None,
+    encode_opts: Optional[Dict[str, str]] = None,
 ) -> Tuple[bool, str]:
     os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
     cfr_fps = target_fps
@@ -1267,7 +1272,7 @@ def extract_segment(
         cfr_fps = probe_fps(ffmpeg_cmd, input_path) or 24.0
     cmd = build_segment_command(
         ffmpeg_cmd, input_path, output_path, start_sec, duration_sec,
-        use_copy=use_copy, target_fps=cfr_fps,
+        use_copy=use_copy, target_fps=cfr_fps, encode_opts=encode_opts,
     )
     ok, err = run_ffmpeg(cmd)
     if ok and os.path.exists(output_path):
@@ -1277,7 +1282,7 @@ def extract_segment(
             cfr_fps = probe_fps(ffmpeg_cmd, input_path) or 24.0
         cmd = build_segment_command(
             ffmpeg_cmd, input_path, output_path, start_sec, duration_sec,
-            use_copy=False, target_fps=cfr_fps,
+            use_copy=False, target_fps=cfr_fps, encode_opts=encode_opts,
         )
         ok, err = run_ffmpeg(cmd)
         if ok and os.path.exists(output_path):
@@ -1370,6 +1375,7 @@ def split_fixed_interval(
     name_pattern: str = '{basename}_part_{index:03d}.mp4',
     max_chunks: Optional[int] = None,
     also_mp3: bool = True,
+    encode_opts: Optional[Dict[str, str]] = None,
 ) -> Tuple[List[str], List[str]]:
     """
     Split video into fixed-length chunks. Returns (output_paths, errors).
@@ -1401,7 +1407,7 @@ def split_fixed_interval(
         out_path = os.path.join(output_dir, out_name)
         ok, err = extract_segment(
             ffmpeg_cmd, input_path, out_path, start, seg_dur,
-            use_copy=False, target_fps=target_fps,
+            use_copy=False, target_fps=target_fps, encode_opts=encode_opts,
         )
         if ok:
             mp4_paths.append(out_path)
@@ -1430,6 +1436,7 @@ def apply_chunk_plan(
     plan: Dict[str, Any],
     output_base_dir: str,
     also_mp3: bool = True,
+    encode_opts: Optional[Dict[str, str]] = None,
 ) -> Tuple[List[str], List[str]]:
     """Apply JSON chunk plan to one video. Returns (outputs, errors)."""
     duration = probe_duration(ffmpeg_cmd, input_path)
@@ -1460,6 +1467,7 @@ def apply_chunk_plan(
         ok, err = extract_segment(
             ffmpeg_cmd, input_path, output_path,
             seg['start_sec'], seg['duration'],
+            encode_opts=encode_opts,
         )
         if ok:
             outputs.append(output_path)
@@ -1515,6 +1523,7 @@ def export_visual_segments(
     output_base_dir: str = '',
     name_pattern: str = '{basename}_{id}.mp4',
     also_mp3: bool = True,
+    encode_opts: Optional[Dict[str, str]] = None,
 ) -> Tuple[List[str], List[str]]:
     """Export cuts into a subfolder named after the source file (MP4 + MP3 per cut)."""
     if not segments:
@@ -1523,15 +1532,18 @@ def export_visual_segments(
         output_base_dir = split_output_dir(input_path)
     plan = segments_to_plan(segments, output_folder='.', name_pattern=name_pattern)
     return apply_chunk_plan(
-        ffmpeg_cmd, input_path, plan, output_base_dir, also_mp3=also_mp3,
+        ffmpeg_cmd, input_path, plan, output_base_dir,
+        also_mp3=also_mp3, encode_opts=encode_opts,
     )
 
 
 VIDEO_EXTENSIONS = {'.mp4', '.webm', '.avi', '.mov', '.mkv', '.flv', '.wmv', '.m4v'}
 
-# scene_sub: storyboard_scene_004_000.mp4
+# scene_sub: storyboard_scene_004_000.mp4 or storyboard_scene_part_001.mp4
 _SPLIT_PART_INDEX_RE = re.compile(r'_(\d+)_(\d+)(?:\.\w+)?$')
-_SPLIT_PART_FILE_RE = re.compile(r'_\d+_\d+\.', re.I)
+_SPLIT_PART_SCENE_SUB_RE = re.compile(r'_\d+_\d+\.', re.I)
+_SPLIT_PART_NAMED_RE = re.compile(r'_part_(\d+)', re.I)
+_SPLIT_PART_SINGLE_IDX_RE = re.compile(r'_(\d+)\.', re.I)
 
 
 def escape_for_concat(file_path: str) -> str:
@@ -1559,11 +1571,22 @@ def list_videos_in_folder(folder: str, recursive: bool = False) -> List[str]:
 
 
 def is_split_part_video(path: str) -> bool:
-    """True for chunk files like name_004_000.mp4 (not combined exports)."""
+    """True for chunk MP4s in a split folder (not combined or LatentSync exports)."""
     name = os.path.basename(path)
-    if 'combined' in name.lower():
+    lower = name.lower()
+    if not lower.endswith('.mp4'):
         return False
-    return bool(_SPLIT_PART_FILE_RE.search(name))
+    if 'combined' in lower or lower.startswith('out.'):
+        return False
+    if '__' in name:
+        return False
+    if _SPLIT_PART_SCENE_SUB_RE.search(name):
+        return True
+    if _SPLIT_PART_NAMED_RE.search(name):
+        return True
+    if _SPLIT_PART_SINGLE_IDX_RE.search(name):
+        return True
+    return False
 
 
 def split_part_sort_key(path: str) -> Tuple[int, int, str]:
@@ -1572,6 +1595,12 @@ def split_part_sort_key(path: str) -> Tuple[int, int, str]:
     m = _SPLIT_PART_INDEX_RE.search(stem)
     if m:
         return int(m.group(1)), int(m.group(2)), stem
+    m_part = _SPLIT_PART_NAMED_RE.search(stem)
+    if m_part:
+        return int(m_part.group(1)), 0, stem
+    m_idx = _SPLIT_PART_SINGLE_IDX_RE.search(path)
+    if m_idx:
+        return int(m_idx.group(1)), 0, stem
     nums = [int(x) for x in re.findall(r'\d+', stem)]
     if len(nums) >= 2:
         return nums[-2], nums[-1], stem

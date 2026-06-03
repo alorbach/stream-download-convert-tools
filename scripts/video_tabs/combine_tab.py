@@ -1775,12 +1775,14 @@ class CombineVideosTab:
     def update_video_codec(self):
         """Update video codec setting."""
         self.video_codec = self.video_codec_var.get()
+        self.app.save_video_encode_settings(codec=self.video_codec)
         self.save_settings()
         self.log(f"[INFO] Video codec: {self.video_codec}")
     
     def update_video_bitrate(self):
         """Update video quality/bitrate setting."""
         self.video_bitrate = self.video_bitrate_var.get()
+        self.app.save_video_encode_settings(quality=self.video_bitrate)
         self.save_settings()
         self.log(f"[INFO] Video quality: {self.video_bitrate}")
     
@@ -1804,31 +1806,13 @@ class CombineVideosTab:
             return base_crf
     
     def _get_encode_opts_dict(self):
-        """Encoding options for shared CFR concat helpers."""
-        return {
-            'video_codec': self.video_codec,
-            'crf': str(self._get_crf_value(self.video_bitrate, self.video_codec)),
-            'preset': self.video_preset,
-        }
+        """Encoding options for shared CFR concat helpers (global app settings)."""
+        return self.app.get_video_encode_opts()
 
     def _get_video_encoding_args(self):
-        """Get video encoding arguments based on current settings."""
-        args = []
-        args.extend(['-c:v', self.video_codec])
-        
-        crf_value = self._get_crf_value(self.video_bitrate, self.video_codec)
-        
-        if self.video_codec == 'libx264':
-            args.extend(['-crf', str(crf_value)])
-            args.extend(['-preset', self.video_preset])
-        elif self.video_codec == 'libx265':
-            args.extend(['-crf', str(crf_value)])
-            args.extend(['-preset', self.video_preset])
-        elif self.video_codec == 'libvpx-vp9':
-            args.extend(['-crf', str(crf_value)])
-            args.extend(['-b:v', '0'])
-        
-        return args
+        """Get video encoding arguments from global app settings."""
+        from lib.video_encode_settings import ffmpeg_video_encode_args
+        return ffmpeg_video_encode_args(self.app.get_video_encode_opts())
     
     def _start_operation_progress(self, maximum=1, message='', indeterminate=False):
         self.is_busy = True
@@ -2452,6 +2436,20 @@ class CombineVideosTab:
                 
                 if 'video_preset' in settings:
                     self.video_preset = settings['video_preset']
+
+                self.video_codec = self.app.get_setting(
+                    'encode_video_codec', self.video_codec,
+                )
+                self.video_bitrate = self.app.get_setting(
+                    'encode_video_quality', self.video_bitrate,
+                )
+                self.video_preset = self.app.get_setting(
+                    'encode_video_preset', self.video_preset,
+                )
+                if hasattr(self, 'video_codec_var'):
+                    self.video_codec_var.set(self.video_codec)
+                if hasattr(self, 'video_bitrate_var'):
+                    self.video_bitrate_var.set(self.video_bitrate)
                 
                 # Load output size settings
                 if 'use_first_video_size' in settings:

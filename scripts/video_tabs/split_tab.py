@@ -101,6 +101,10 @@ class SplitChunksTab:
         )
         self.visual_panel.pack(fill='both', expand=True)
 
+        enc_frame = ttk.LabelFrame(self.parent, text='Video encode', padding=6)
+        enc_frame.pack(fill='x', padx=10, pady=5)
+        self.app.build_encode_settings_row(enc_frame, show_preset=True)
+
         out_frame = ttk.LabelFrame(self.parent, text='Output', padding=10)
         out_frame.pack(fill='x', padx=10, pady=5)
         ttk.Label(
@@ -341,9 +345,14 @@ class SplitChunksTab:
         self.root.after(0, lambda: self.app.set_busy(False))
         self.root.after(0, lambda: self.progress_label.config(text=''))
 
+    def _encode_opts(self):
+        return self.app.get_video_encode_opts()
+
     def _do_visual(self, ffmpeg, video):
         segments = self.visual_panel.get_segments()
-        outs, errs = export_visual_segments(ffmpeg, video, segments)
+        outs, errs = export_visual_segments(
+            ffmpeg, video, segments, encode_opts=self._encode_opts(),
+        )
         for e in errs:
             self.root.after(0, lambda m=e: self.log(f'[WARN] {m}'))
         for o in outs:
@@ -358,6 +367,7 @@ class SplitChunksTab:
             ffmpeg, video, split_output_dir(video), chunk,
             name_pattern=self.interval_pattern_var.get(),
             max_chunks=max_chunks,
+            encode_opts=self._encode_opts(),
         )
         for e in errs:
             self.root.after(0, lambda m=e: self.log(f'[WARN] {m}'))
@@ -389,7 +399,9 @@ class SplitChunksTab:
         os.makedirs(out_dir, exist_ok=True)
         suffix = self.single_suffix_var.get() or '_clip'
         out = os.path.join(out_dir, f'{Path(video).stem}{suffix}.mp4')
-        ok, err = extract_segment(ffmpeg, video, out, start, seg_dur)
+        ok, err = extract_segment(
+            ffmpeg, video, out, start, seg_dur, encode_opts=self._encode_opts(),
+        )
         if not ok:
             raise ValueError(err)
         count = 1
@@ -407,7 +419,10 @@ class SplitChunksTab:
 
     def _do_json(self, ffmpeg, video):
         plan = parse_chunk_plan_json(self.json_text.get('1.0', tk.END))
-        outs, errs = apply_chunk_plan(ffmpeg, video, plan, split_output_dir(video))
+        outs, errs = apply_chunk_plan(
+            ffmpeg, video, plan, split_output_dir(video),
+            encode_opts=self._encode_opts(),
+        )
         for w in errs:
             self.root.after(0, lambda m=w: self.log(f'[WARN] {m}'))
         for o in outs:

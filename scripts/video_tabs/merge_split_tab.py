@@ -52,6 +52,10 @@ class MergeSplitTab:
             self.browse_output,
         )
 
+        enc_frame = ttk.LabelFrame(self.parent, text='Video encode', padding=6)
+        enc_frame.pack(fill='x', padx=10, pady=5)
+        self.app.build_encode_settings_row(enc_frame, show_preset=True)
+
         btn_row = ttk.Frame(self.parent)
         btn_row.pack(fill='x', padx=10, pady=5)
         ttk.Button(btn_row, text='Scan / Refresh', command=self.scan_clips).pack(side='left', padx=5)
@@ -213,6 +217,7 @@ class MergeSplitTab:
         ffmpeg = self.app.get_ffmpeg_command()
         target_fps = probe_fps(ffmpeg, video_paths[0]) or 24.0
         fps_label = int(target_fps) if abs(target_fps - round(target_fps)) < 0.01 else round(target_fps, 3)
+        encode_opts = self.app.get_video_encode_opts()
         self.root.after(0, lambda: self.log(
             f'[INFO] Merging {len(video_paths)} clip(s) at {fps_label} fps (constant) '
             f'with {os.path.basename(audio_path)}',
@@ -220,6 +225,7 @@ class MergeSplitTab:
         ok, err = concat_videos_with_external_audio(
             ffmpeg, video_paths, audio_path, output_path,
             timeout=7200, constant_fps=target_fps,
+            encode_opts=encode_opts,
         )
         if ok:
             self.root.after(0, lambda: self.log(f'[SUCCESS] Saved: {output_path}'))

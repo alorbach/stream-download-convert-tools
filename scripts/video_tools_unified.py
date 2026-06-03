@@ -20,6 +20,16 @@ except ImportError:
 
 from lib.base_gui import BaseAudioGUI
 from lib.gui_utils import LogManager
+from lib.video_encode_settings import (
+    DEFAULT_VIDEO_CODEC,
+    DEFAULT_VIDEO_PRESET,
+    DEFAULT_VIDEO_QUALITY,
+    VIDEO_CODEC_CHOICES,
+    VIDEO_PRESET_CHOICES,
+    VIDEO_QUALITY_CHOICES,
+    build_encode_opts_dict,
+    encode_settings_summary,
+)
 
 from video_tabs import (
     VideoToMp3Tab,
@@ -48,6 +58,7 @@ class VideoToolsUnifiedGUI(BaseAudioGUI):
         self._settings = {}
         self._tabs = {}
         self.load_all_settings()
+        self._migrate_encode_settings()
         self.setup_ui()
         self.root.protocol('WM_DELETE_WINDOW', self.on_closing)
 
@@ -101,11 +112,118 @@ class VideoToolsUnifiedGUI(BaseAudioGUI):
         if not self.check_ffmpeg():
             self.log('[WARNING] FFmpeg not found. Use Settings tab or install FFmpeg.')
 
+    def _migrate_encode_settings(self):
+        """Seed global encode keys from Combine tab legacy settings once."""
+        if self.get_setting('encode_video_codec'):
+            return
+        combine = self.get_tab_settings('combine')
+        if combine:
+            self._settings['encode_video_codec'] = combine.get('video_codec', DEFAULT_VIDEO_CODEC)
+            self._settings['encode_video_quality'] = combine.get('video_bitrate', DEFAULT_VIDEO_QUALITY)
+            self._settings['encode_video_preset'] = combine.get('video_preset', DEFAULT_VIDEO_PRESET)
+        else:
+            self._settings['encode_video_codec'] = DEFAULT_VIDEO_CODEC
+            self._settings['encode_video_quality'] = DEFAULT_VIDEO_QUALITY
+            self._settings['encode_video_preset'] = DEFAULT_VIDEO_PRESET
+
+    def get_video_encode_opts(self):
+        """Codec / CRF / preset used for full video re-encodes across tabs."""
+        return build_encode_opts_dict(
+            self.get_setting('encode_video_codec', DEFAULT_VIDEO_CODEC),
+            self.get_setting('encode_video_quality', DEFAULT_VIDEO_QUALITY),
+            self.get_setting('encode_video_preset', DEFAULT_VIDEO_PRESET),
+        )
+
+    def save_video_encode_settings(self, codec=None, quality=None, preset=None):
+        if codec is not None:
+            self.set_setting('encode_video_codec', codec)
+        if quality is not None:
+            self.set_setting('encode_video_quality', quality)
+        if preset is not None:
+            self.set_setting('encode_video_preset', preset)
+        self._update_encode_summary_label()
+
+    def build_encode_settings_row(self, parent, show_preset=True, on_change=None):
+        """Codec + Quality (+ optional Preset) comboboxes bound to app settings."""
+        row = ttk.Frame(parent)
+        row.pack(fill='x', pady=(0, 6))
+
+        ttk.Label(row, text='Codec:').pack(side='left', padx=(0, 2))
+        codec_var = tk.StringVar(
+            value=self.get_setting('encode_video_codec', DEFAULT_VIDEO_CODEC),
+        )
+        codec_cb = ttk.Combobox(
+            row, textvariable=codec_var,
+            values=VIDEO_CODEC_CHOICES, width=12, state='readonly',
+        )
+        codec_cb.pack(side='left', padx=(0, 8))
+
+        ttk.Label(row, text='Quality:').pack(side='left', padx=(0, 2))
+        quality_var = tk.StringVar(
+            value=self.get_setting('encode_video_quality', DEFAULT_VIDEO_QUALITY),
+        )
+        quality_cb = ttk.Combobox(
+            row, textvariable=quality_var,
+            values=VIDEO_QUALITY_CHOICES, width=22, state='readonly',
+        )
+        quality_cb.pack(side='left', padx=(0, 8))
+
+        preset_var = None
+        if show_preset:
+            ttk.Label(row, text='Preset:').pack(side='left', padx=(0, 2))
+            preset_var = tk.StringVar(
+                value=self.get_setting('encode_video_preset', DEFAULT_VIDEO_PRESET),
+            )
+            preset_cb = ttk.Combobox(
+                row, textvariable=preset_var,
+                values=VIDEO_PRESET_CHOICES, width=10, state='readonly',
+            )
+            preset_cb.pack(side='left', padx=(0, 8))
+
+        def _on_change(*_args):
+            self.save_video_encode_settings(
+                codec=codec_var.get(),
+                quality=quality_var.get(),
+                preset=preset_var.get() if preset_var else None,
+            )
+            if on_change:
+                on_change()
+
+        codec_cb.bind('<<ComboboxSelected>>', lambda _e: _on_change())
+        quality_cb.bind('<<ComboboxSelected>>', lambda _e: _on_change())
+        if preset_var is not None:
+            preset_cb.bind('<<ComboboxSelected>>', lambda _e: _on_change())
+
+        return row
+
+    def _update_encode_summary_label(self):
+        if hasattr(self, '_encode_summary_label') and self._encode_summary_label.winfo_exists():
+            self._encode_summary_label.config(
+                text=f'Full video encode: {encode_settings_summary(self.get_video_encode_opts())}',
+            )
+
     def setup_settings_tab(self):
         frame = ttk.Frame(self.tab_settings, padding=15)
         frame.pack(fill='both', expand=True)
         ttk.Label(frame, text='Video Tools Settings', font=('Arial', 12, 'bold')).pack(anchor='w', pady=(0, 10))
         ttk.Label(frame, text=f'Settings file: {self.settings_path}').pack(anchor='w')
+
+        enc_frame = ttk.LabelFrame(
+            frame,
+            text='Video encode (Combine, Merge Split, Split, Format crop MP4)',
+            padding=8,
+        )
+        enc_frame.pack(fill='x', pady=(12, 0))
+        self.build_encode_settings_row(enc_frame, show_preset=True)
+        self._encode_summary_label = ttk.Label(enc_frame, text='')
+        self._encode_summary_label.pack(anchor='w', pady=(4, 0))
+        self._update_encode_summary_label()
+        ttk.Label(
+            enc_frame,
+            text='MP3 to Video and Upscale keep their own tab settings; other tabs use these defaults.',
+            wraplength=700,
+        ).pack(anchor='w', pady=(6, 0))
+
         ttk.Label(frame, text='FFmpeg status:').pack(anchor='w', pady=(10, 0))
         status = 'Available' if self.check_ffmpeg() else 'Not found'
         ttk.Label(frame, text=status).pack(anchor='w')

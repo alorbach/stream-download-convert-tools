@@ -36,6 +36,7 @@ except ImportError:
     print("[INFO] Install with: pip install tkinterdnd2")
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
+from lib.video_encode_settings import ffmpeg_video_encode_args
 from lib.video_utils import parse_dropped_paths
 
 
@@ -116,6 +117,10 @@ class FormatCropTab:
 
     def browse_folder(self, initial=''):
         return self.app.browse_folder(initial)
+
+    def _ffmpeg_video_encode_args(self):
+        """Global Codec / Quality / Preset for MP4 re-encodes."""
+        return ffmpeg_video_encode_args(self.app.get_video_encode_opts())
     
     def setup_ui(self):
         # File selection frame
@@ -236,6 +241,13 @@ class FormatCropTab:
             variable=self.truncate_only_var
         ).pack(side='left', padx=10)
         self.video_duration_frame.grid_remove()  # Hidden by default
+
+        self.video_encode_frame = ttk.LabelFrame(
+            settings_frame, text='Video encode (MP4)', padding=6,
+        )
+        self.video_encode_frame.grid(row=8, column=0, columnspan=3, sticky='w', pady=5)
+        self.app.build_encode_settings_row(self.video_encode_frame, show_preset=True)
+        self.video_encode_frame.grid_remove()
         
         # Input format detection display
         ttk.Label(settings_frame, text="Input Format:").grid(row=6, column=0, sticky='w', pady=5)
@@ -281,8 +293,10 @@ class FormatCropTab:
         """Show/hide video mode options based on output format"""
         if self.output_format_var.get() == "MP4":
             self.video_mode_frame.grid()
+            self.video_encode_frame.grid()
         else:
             self.video_mode_frame.grid_remove()
+            self.video_encode_frame.grid_remove()
         self.update_video_duration_ui()
     
     def on_aspect_ratio_change(self, event=None):
@@ -772,8 +786,9 @@ class FormatCropTab:
                     temp_cmd = [ffmpeg_cmd, '-y', '-loop', '1', '-i', temp_img.name, '-t', '1',
                                '-filter_complex', 
                                f'[0:v]{scale_filter}[v_scaled];[0:v]{scale_filter}[v_scaled2];[v_scaled2]reverse[v_rev];[v_scaled][v_rev]concat=n=2:v=1:a=0[v_final]',
-                               '-map', '[v_final]', '-c:v', 'libx264', '-preset', 'medium', '-crf', '23',
-                               '-pix_fmt', 'yuv420p', temp_video]
+                               '-map', '[v_final]']
+                    temp_cmd.extend(self._ffmpeg_video_encode_args())
+                    temp_cmd.extend(['-pix_fmt', 'yuv420p', temp_video])
                     
                     result = subprocess.run(temp_cmd, capture_output=True, text=True, timeout=30)
                     
@@ -802,10 +817,10 @@ class FormatCropTab:
                             pass
                 else:
                     # Forward only - create 1-second video from image
-                    cmd = [ffmpeg_cmd, '-loop', '1', '-i', temp_img.name, 
-                          '-t', '1', '-vf', f'scale={output_width}:{output_height}',
-                          '-c:v', 'libx264', '-preset', 'medium', '-crf', '23',
-                          '-pix_fmt', 'yuv420p', '-y', output_path]
+                    cmd = [ffmpeg_cmd, '-loop', '1', '-i', temp_img.name,
+                          '-t', '1', '-vf', f'scale={output_width}:{output_height}']
+                    cmd.extend(self._ffmpeg_video_encode_args())
+                    cmd.extend(['-pix_fmt', 'yuv420p', '-y', output_path])
                     
                     result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
                     
@@ -915,7 +930,7 @@ class FormatCropTab:
                     temp_cmd.extend(['-filter:a', f'atrim=duration={selected_duration},asetpts=PTS-STARTPTS'])
                 temp_cmd.extend(['-map', '0:a?'])
                 
-                temp_cmd.extend(['-c:v', 'libx264', '-preset', 'medium', '-crf', '23'])
+                temp_cmd.extend(self._ffmpeg_video_encode_args())
                 temp_cmd.extend(['-c:a', 'aac', '-b:a', '192k'])
                 temp_cmd.append(temp_video)
                 
@@ -950,7 +965,7 @@ class FormatCropTab:
                     cmd.extend(['-t', str(selected_duration)])
                 
                 # Set output format and codec (videos always output as MP4)
-                cmd.extend(['-c:v', 'libx264', '-preset', 'medium', '-crf', '23'])
+                cmd.extend(self._ffmpeg_video_encode_args())
                 # Try to copy audio, fallback to AAC if copy fails
                 cmd.extend(['-c:a', 'aac', '-b:a', '192k'])
                 
@@ -981,11 +996,13 @@ class FormatCropTab:
             cmd = [
                 ffmpeg_cmd, '-y', '-i', input_path,
                 '-t', str(duration_seconds),
-                '-c:v', 'libx264', '-preset', 'medium', '-crf', '23',
+            ]
+            cmd.extend(self._ffmpeg_video_encode_args())
+            cmd.extend([
                 '-c:a', 'aac', '-b:a', '192k',
                 '-movflags', '+faststart',
-                output_path
-            ]
+                output_path,
+            ])
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
             if result.returncode == 0 and os.path.exists(output_path):
                 return True, None
