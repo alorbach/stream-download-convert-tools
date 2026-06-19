@@ -1,0 +1,95 @@
+{
+  "tabs": {
+    "format": {
+      "aspect_ratio": "9x16 (Portrait)",
+      "custom_width": "9",
+      "custom_height": "16",
+      "crop_position": "center",
+      "output_format": "MP4",
+      "video_mode": "forward",
+      "video_duration": "8",
+      "truncate_only": false
+    },
+    "mp3_video": {
+      "output_folder": "D:/AI/Personas/Sister Smoke",
+      "video_quality": "Auto (720p default)",
+      "video_codec": "libx265",
+      "video_bitrate": "Very High Quality (CRF 15)",
+      "scaling_mode": "truncate",
+      "video_source_type": "video",
+      "loop_mode": "forward",
+      "selected_image_file": null,
+      "selected_video_file": "D:/AI/Personas/Sister Smoke/camera-on-storyboard-video-package.run1/storyboard_full.mp4",
+      "image_width": null,
+      "image_height": null,
+      "video_width": 1168,
+      "video_height": 768,
+      "transition_enabled": false,
+      "transition_type": "fade",
+      "selected_transition_types": [
+        "fade"
+      ],
+      "transition_duration": 0.5
+    },
+    "combine": {
+      "grid_cols": 8,
+      "auto_export_enabled": false,
+      "transition_enabled": false,
+      "transition_type": "fade",
+      "selected_transition_types": [
+        "fade",
+        "fadeblack",
+        "fadewhite"
+      ],
+      "transition_duration": 0.5,
+      "transition_mode": "xfade",
+      "video_codec": "libx265",
+      "video_bitrate": "Very High Quality (CRF 15)",
+      "video_preset": "veryfast",
+      "output_width": 1280,
+      "output_height": 720,
+      "use_first_video_size": false,
+      "external_audio_enabled": true,
+      "external_audio_file": "D:/AI/Personas/Sister Smoke/forbidden-heaven-storyboard-video-package/song_audio.mp3",
+      "video_files": [
+        "D:/AI/Personas/Sister Smoke/forbidden-heaven-storyboard-video-package/storyboard_scene_001.mp4",
+        "D:/AI/Personas/Sister Smoke/forbidden-heaven-storyboard-video-package/storyboard_scene_002.mp4",
+        "D:/AI/Personas/Sister Smoke/forbidden-heaven-storyboard-video-package/storyboard_scene_003.mp4",
+        "D:/AI/Personas/Sister Smoke/forbidden-heaven-storyboard-video-package/storyboard_scene_004.mp4",
+        "D:/AI/Personas/Sister Smoke/forbidden-heaven-storyboard-video-package/storyboard_scene_005.mp4",
+        "D:/AI/Personas/Sister Smoke/forbidden-heaven-storyboard-video-package/storyboard_scene_006.mp4",
+        "D:/AI/Personas/Sister Smoke/forbidden-heaven-storyboard-video-package/storyboard_scene_007.mp4",
+        "D:/AI/Personas/Sister Smoke/forbidden-heaven-storyboard-video-package/storyboard_scene_008.mp4",
+        "D:/AI/Personas/Sister Smoke/forbidden-heaven-storyboard-video-package/storyboard_scene_009.mp4",
+        "D:/AI/Personas/Sister Smoke/forbidden-heaven-storyboard-video-package/storyboard_scene_010.mp4"
+      ]
+    },
+    "upscale": {
+      "target_w": 1168,
+      "target_h": 768,
+      "preset": "Grok HD (1168 x 768)",
+      "method": "ai",
+      "crf": "18",
+      "preset_enc": "slow",
+      "output_dir": "D:\\AI\\Personas\\Sister Smoke\\camera-on-storyboard-video-package",
+      "suffix": "_up",
+      "same_dir": false,
+      "ai_backend": "pytorch",
+      "ai_gpu_id": "0",
+      "ai_exe": "D:\\!cvsroot\\alorbach\\stream-download-convert-tools\\scripts\\..\\realesrgan\\realesrgan-ncnn-vulkan.exe",
+      "ai_model": "realesrgan-x4plus-anime",
+      "ai_general_denoise": 0.05,
+      "remove_temp": true
+    },
+    "merge_split": {
+      "split_dir": "D:/AI/Personas/Sister Smoke/camera-on-storyboard-video-package/split",
+      "lipsync_dir": "D:/AI/Personas/Sister Smoke/camera-on-storyboard-video-package/split/latentsync_synced",
+      "audio_mp3": "D:/AI/Personas/Sister Smoke/camera-on-storyboard-video-package/song_audio.mp3",
+      "last_output": "D:/AI/Personas/Sister Smoke/camera-on-storyboard-video-package/split/out.mp4"
+    }
+  },
+  "split_output": "chunks",
+  "encode_video_codec": "libx265",
+  "encode_video_quality": "Very High Quality (CRF 15)",
+  "encode_video_preset": "veryfast"
+}
