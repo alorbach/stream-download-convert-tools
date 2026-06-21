@@ -51,18 +51,7 @@
       "use_first_video_size": false,
       "external_audio_enabled": true,
       "external_audio_file": "D:/AI/Personas/Sister Smoke/forbidden-heaven-storyboard-video-package/song_audio.mp3",
-      "video_files": [
-        "D:/AI/Personas/Sister Smoke/forbidden-heaven-storyboard-video-package/storyboard_scene_001.mp4",
-        "D:/AI/Personas/Sister Smoke/forbidden-heaven-storyboard-video-package/storyboard_scene_002.mp4",
-        "D:/AI/Personas/Sister Smoke/forbidden-heaven-storyboard-video-package/storyboard_scene_003.mp4",
-        "D:/AI/Personas/Sister Smoke/forbidden-heaven-storyboard-video-package/storyboard_scene_004.mp4",
-        "D:/AI/Personas/Sister Smoke/forbidden-heaven-storyboard-video-package/storyboard_scene_005.mp4",
-        "D:/AI/Personas/Sister Smoke/forbidden-heaven-storyboard-video-package/storyboard_scene_006.mp4",
-        "D:/AI/Personas/Sister Smoke/forbidden-heaven-storyboard-video-package/storyboard_scene_007.mp4",
-        "D:/AI/Personas/Sister Smoke/forbidden-heaven-storyboard-video-package/storyboard_scene_008.mp4",
-        "D:/AI/Personas/Sister Smoke/forbidden-heaven-storyboard-video-package/storyboard_scene_009.mp4",
-        "D:/AI/Personas/Sister Smoke/forbidden-heaven-storyboard-video-package/storyboard_scene_010.mp4"
-      ]
+      "video_files": []
     },
     "upscale": {
       "target_w": 1168,
