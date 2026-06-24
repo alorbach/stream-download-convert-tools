@@ -101,6 +101,11 @@ def _subprocess_flags():
     return subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
 
 
+def _subprocess_text_kwargs() -> Dict[str, Any]:
+    """UTF-8 text mode for ffmpeg/ffprobe (avoids cp1252 decode errors on Windows)."""
+    return {'text': True, 'encoding': 'utf-8', 'errors': 'replace'}
+
+
 def _parse_duration_from_stderr(stderr_text: str) -> Optional[float]:
     for line in stderr_text.split('\n'):
         if 'Duration:' in line:
@@ -121,30 +126,37 @@ def _parse_duration_from_stderr(stderr_text: str) -> Optional[float]:
 
 
 def probe_duration(ffmpeg_cmd: str, input_path: str, ffprobe_cmd: Optional[str] = None) -> Optional[float]:
-    """Return video duration in seconds."""
-    if ffprobe_cmd:
+    """Return media duration in seconds (video or audio)."""
+    probe = ffprobe_cmd or resolve_ffprobe_cmd(ffmpeg_cmd)
+    if probe:
         try:
             result = subprocess.run(
                 [
-                    ffprobe_cmd, '-v', 'error', '-show_entries', 'format=duration',
-                    '-of', 'default=noprint_wrappers=1:nokey=1', input_path
+                    probe, '-v', 'error', '-show_entries', 'format=duration',
+                    '-of', 'default=noprint_wrappers=1:nokey=1', input_path,
                 ],
-                capture_output=True, text=True,
-                creationflags=_subprocess_flags(), timeout=60
+                capture_output=True,
+                creationflags=_subprocess_flags(),
+                timeout=60,
+                **_subprocess_text_kwargs(),
             )
             if result.returncode == 0 and result.stdout.strip():
-                return float(result.stdout.strip())
-        except (subprocess.TimeoutExpired, ValueError, FileNotFoundError):
+                value = float(result.stdout.strip())
+                if value > 0:
+                    return value
+        except (subprocess.TimeoutExpired, ValueError, FileNotFoundError, OSError):
             pass
 
     try:
         result = subprocess.run(
             [ffmpeg_cmd, '-i', input_path],
-            capture_output=True, text=True,
-            creationflags=_subprocess_flags(), timeout=60
+            capture_output=True,
+            creationflags=_subprocess_flags(),
+            timeout=60,
+            **_subprocess_text_kwargs(),
         )
         return _parse_duration_from_stderr(result.stderr or '')
-    except (subprocess.TimeoutExpired, FileNotFoundError):
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
         return None
 
 
@@ -1848,6 +1860,183 @@ def concat_videos_with_external_audio(
                 os.remove(concat_file)
             except OSError:
                 pass
+
+
+AUDIO_ADDED_SUBDIR = 'audio_added'
+
+
+def audio_added_output_path(video_path: str, subdir: str = AUDIO_ADDED_SUBDIR) -> str:
+    """Output path for a per-clip copy with sequential MP3 audio."""
+    return os.path.join(os.path.dirname(video_path), subdir, os.path.basename(video_path))
+
+
+def audio_added_mp3_output_path(video_path: str, subdir: str = AUDIO_ADDED_SUBDIR) -> str:
+    """MP3 snippet path alongside the audio_added video copy."""
+    return companion_mp3_path(audio_added_output_path(video_path, subdir))
+
+
+def plan_sequential_audio_segments(
+    ffmpeg_cmd: str,
+    video_paths: List[str],
+    *,
+    subdir: str = AUDIO_ADDED_SUBDIR,
+    ffprobe_cmd: Optional[str] = None,
+) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """
+    Plan per-clip MP3 slices from probed video durations.
+
+    Returns (segments, errors). Each segment dict has:
+    video_path, clip_dur, audio_start, audio_end, output_path, mp3_output_path.
+    """
+    segments: List[Dict[str, Any]] = []
+    errors: List[str] = []
+    audio_offset = 0.0
+    probe = ffprobe_cmd or resolve_ffprobe_cmd(ffmpeg_cmd)
+
+    for index, video_path in enumerate(video_paths, start=1):
+        if not os.path.isfile(video_path):
+            errors.append(f'Clip {index}: file not found: {video_path}')
+            continue
+        clip_dur = probe_duration(ffmpeg_cmd, video_path, probe)
+        if clip_dur is None or clip_dur <= 0:
+            errors.append(
+                f'Clip {index}: could not probe duration: {os.path.basename(video_path)}',
+            )
+            continue
+        segments.append({
+            'video_path': video_path,
+            'clip_dur': clip_dur,
+            'audio_start': audio_offset,
+            'audio_end': audio_offset + clip_dur,
+            'output_path': audio_added_output_path(video_path, subdir),
+            'mp3_output_path': audio_added_mp3_output_path(video_path, subdir),
+        })
+        audio_offset += clip_dur
+
+    return segments, errors
+
+
+def build_mux_audio_segment_cmd(
+    ffmpeg_cmd: str,
+    video_path: str,
+    audio_path: str,
+    audio_start_sec: float,
+    duration_sec: float,
+    output_path: str,
+    *,
+    audio_bitrate: str = '192k',
+) -> List[str]:
+    """Mux an MP3 slice onto a video copy (video stream copy, replace audio)."""
+    return [
+        ffmpeg_cmd, '-y',
+        '-i', video_path,
+        '-ss', str(audio_start_sec),
+        '-t', str(duration_sec),
+        '-i', audio_path,
+        '-map', '0:v:0',
+        '-map', '1:a:0',
+        '-c:v', 'copy',
+        '-c:a', 'aac',
+        '-b:a', audio_bitrate,
+        '-shortest',
+        '-movflags', '+faststart',
+        output_path,
+    ]
+
+
+def export_videos_with_sequential_audio(
+    ffmpeg_cmd: str,
+    video_paths: List[str],
+    audio_path: str,
+    *,
+    audio_bitrate: str = '192k',
+    subdir: str = AUDIO_ADDED_SUBDIR,
+    timeout: int = 600,
+    on_progress: Optional[Callable[[int, int, str], None]] = None,
+    log_fn: Optional[Callable[[str], None]] = None,
+) -> Tuple[int, int, str]:
+    """
+    Write per-clip copies with sequential MP3 audio into each source audio_added/ folder.
+
+    Also writes a matching .mp3 snippet (same segment) next to each exported video.
+    Timing is driven by each input video's probed duration. Returns
+    (ok_count, fail_count, error_summary).
+    """
+    if not video_paths:
+        return 0, 0, 'No video clips'
+    if not audio_path or not os.path.isfile(audio_path):
+        return 0, 0, 'Audio file not found'
+
+    segments, plan_errors = plan_sequential_audio_segments(ffmpeg_cmd, video_paths, subdir=subdir)
+    total = len(segments)
+    if not segments:
+        return 0, len(plan_errors), '; '.join(plan_errors) or 'No valid clips'
+
+    ok_count = 0
+    fail_count = len(plan_errors)
+    error_lines = list(plan_errors)
+
+    for index, seg in enumerate(segments, start=1):
+        video_path = seg['video_path']
+        output_path = seg['output_path']
+        mp3_output_path = seg['mp3_output_path']
+        audio_start = seg['audio_start']
+        clip_dur = seg['clip_dur']
+        basename = os.path.basename(video_path)
+        message = (
+            f'clip {index}/{total}: {basename} '
+            f'(audio {audio_start:.1f}-{audio_start + clip_dur:.1f}s)'
+        )
+        if on_progress:
+            on_progress(index, total, message)
+        if log_fn:
+            log_fn(
+                f'[INFO] {message} -> {output_path} + {mp3_output_path}',
+            )
+
+        try:
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        except OSError as e:
+            fail_count += 1
+            error_lines.append(f'{basename}: cannot create output folder: {e}')
+            continue
+
+        cmd = build_mux_audio_segment_cmd(
+            ffmpeg_cmd,
+            video_path,
+            audio_path,
+            audio_start,
+            clip_dur,
+            output_path,
+            audio_bitrate=audio_bitrate,
+        )
+        ok_video, err_video = run_ffmpeg(cmd, timeout=timeout)
+        video_ok = ok_video and os.path.isfile(output_path)
+
+        ok_mp3, err_mp3 = extract_segment_mp3(
+            ffmpeg_cmd,
+            audio_path,
+            mp3_output_path,
+            audio_start,
+            clip_dur,
+        )
+        mp3_ok = ok_mp3 and os.path.isfile(mp3_output_path)
+
+        if video_ok and mp3_ok:
+            ok_count += 1
+        else:
+            fail_count += 1
+            if not video_ok:
+                detail = err_video or 'Video export failed'
+                error_lines.append(f'{basename} (video): {detail}')
+            if not mp3_ok:
+                detail = err_mp3 or 'MP3 export failed'
+                error_lines.append(f'{basename} (mp3): {detail}')
+
+    summary = '; '.join(error_lines[:5])
+    if len(error_lines) > 5:
+        summary += f'; ... and {len(error_lines) - 5} more'
+    return ok_count, fail_count, summary
 
 
 def normalize_video_constant_fps(

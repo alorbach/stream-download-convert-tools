@@ -139,8 +139,11 @@ Thumbs.db
 *.tmp
 *.temp
 
-# Grok automation run logs and failure screenshots
+# Grok automation run logs (redundant when private/ ignored; kept for clarity)
 private/grok/logs/
+
+# Private automation (separate git repo; see private/README.md)
+private/
 
 # Local legal acceptance markers
 .legal_accepted
@@ -192,9 +195,6 @@ input/top100_songs_late_1960s_jimi_hendrix_style.csv
 input/top100_soul_rap_1994_2024.csv
 input/top20_viral_songs_last_3months.csv
 input/top_20_stranger_sings_songs.csv
-
-# Private local content
-private/
 
 # Script configs (local)
 scripts/cover_song_checker_config.json

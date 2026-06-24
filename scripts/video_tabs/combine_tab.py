@@ -51,7 +51,13 @@ from lib.base_gui import BaseAudioGUI
 from lib.file_utils import FileManager
 from lib.process_utils import ProcessManager
 from lib.ffmpeg_utils import FFmpegManager
-from lib.video_utils import concat_videos_cfr, resolve_target_fps
+from lib.video_utils import (
+    concat_videos_cfr,
+    export_videos_with_sequential_audio,
+    plan_sequential_audio_segments,
+    probe_duration,
+    resolve_target_fps,
+)
 
 
 class CombineVideosTab:
@@ -657,8 +663,23 @@ class CombineVideosTab:
         ).pack(side='left', padx=5)
         ttk.Button(audio_row, text="Select Audio...", command=self.select_external_audio).pack(side='left', padx=5)
         ttk.Button(audio_row, text="Clear", command=self.clear_external_audio).pack(side='left', padx=5)
+        ttk.Button(
+            audio_row,
+            text="Save Copies to audio_added/",
+            command=self.export_audio_added_copies,
+        ).pack(side='left', padx=5)
         self.lbl_external_audio_status = ttk.Label(audio_row, text="No audio file selected")
         self.lbl_external_audio_status.pack(side='left', padx=10)
+
+        ttk.Label(
+            audio_frame,
+            text=(
+                "audio_added/: one copy per clip (MP4 + matching MP3 snippet); "
+                "segment length matches each video's probed duration, in list order."
+            ),
+            wraplength=900,
+            font=('Arial', 8),
+        ).pack(anchor='w', pady=(4, 0))
         
         if DND_AVAILABLE:
             try:
@@ -1871,6 +1892,141 @@ class CombineVideosTab:
             )
             return False
         return True
+
+    def _validate_audio_added_export(self):
+        if self.is_busy:
+            return False
+        if not self.video_files:
+            messagebox.showwarning("Warning", "Add at least one video clip first.")
+            return False
+        if not self._use_external_audio():
+            messagebox.showwarning(
+                "Warning",
+                "Select and enable an external MP3/WAV file for audio_added export.",
+            )
+            return False
+        return True
+
+    def _check_audio_added_overflow(self):
+        """Warn if total video duration exceeds MP3 length."""
+        ffmpeg_cmd = self.get_ffmpeg_command()
+        segments, plan_errors = plan_sequential_audio_segments(ffmpeg_cmd, self.video_files)
+        if plan_errors:
+            messagebox.showerror(
+                "Error",
+                "Could not plan audio segments:\n" + "\n".join(plan_errors[:8]),
+            )
+            return False
+        if not segments:
+            messagebox.showwarning("Warning", "No valid video clips to export.")
+            return False
+
+        audio_dur = probe_duration(ffmpeg_cmd, self.external_audio_file)
+        if audio_dur is None or audio_dur <= 0:
+            messagebox.showwarning(
+                "Warning",
+                "Could not probe external audio duration.\n\n"
+                f"File: {self.external_audio_file}\n\n"
+                "Check that the file exists and FFmpeg/ffprobe can read it.",
+            )
+            return False
+
+        total_video_dur = segments[-1]['audio_end']
+        if total_video_dur <= audio_dur + 0.05:
+            return True
+
+        truncated = []
+        for seg in segments:
+            if seg['audio_start'] >= audio_dur - 0.05:
+                truncated.append(os.path.basename(seg['video_path']))
+            elif seg['audio_end'] > audio_dur + 0.05:
+                truncated.append(
+                    f"{os.path.basename(seg['video_path'])} (partial)",
+                )
+        detail = "\n".join(truncated[:12])
+        if len(truncated) > 12:
+            detail += f"\n... and {len(truncated) - 12} more"
+        return messagebox.askyesno(
+            "Audio shorter than videos",
+            (
+                f"MP3 duration is {audio_dur:.1f}s but clips total {total_video_dur:.1f}s.\n"
+                f"These clips will get truncated or silent audio:\n{detail}\n\n"
+                "Continue anyway?"
+            ),
+        )
+
+    def export_audio_added_copies(self):
+        if not self._validate_audio_added_export():
+            return
+        if not self._check_audio_added_overflow():
+            return
+
+        self.log(
+            f"[INFO] Saving {len(self.video_files)} clip(s) to audio_added/ "
+            f"with sequential audio from {os.path.basename(self.external_audio_file)}",
+        )
+        thread = threading.Thread(target=self._export_audio_added_thread, daemon=True)
+        thread.start()
+
+    def _export_audio_added_thread(self):
+        self._start_operation_progress(
+            maximum=len(self.video_files),
+            message='Saving audio_added copies...',
+        )
+        try:
+            ffmpeg_cmd = self.get_ffmpeg_command()
+
+            def on_progress(index, total, message):
+                self._update_operation_progress(
+                    index,
+                    total,
+                    f'audio_added: {message}',
+                )
+
+            def log_fn(message):
+                self.root.after(0, lambda m=message: self.log(m))
+
+            ok_count, fail_count, summary = export_videos_with_sequential_audio(
+                ffmpeg_cmd,
+                list(self.video_files),
+                self.external_audio_file,
+                on_progress=on_progress,
+                log_fn=log_fn,
+            )
+
+            def _finish():
+                self._finish_operation_progress()
+                if fail_count == 0:
+                    example = ''
+                    if self.video_files:
+                        example_dir = os.path.join(
+                            os.path.dirname(self.video_files[0]),
+                            'audio_added',
+                        )
+                        example = f"\nExample folder:\n{example_dir}"
+                    messagebox.showinfo(
+                        "audio_added export complete",
+                        f"Saved {ok_count} clip(s) with sequential audio.{example}",
+                    )
+                    self.log(f"[SUCCESS] audio_added export: {ok_count} clip(s) saved")
+                else:
+                    messagebox.showwarning(
+                        "audio_added export finished with errors",
+                        f"Saved {ok_count} clip(s), {fail_count} failed.\n{summary}",
+                    )
+                    self.log(
+                        f"[WARNING] audio_added export: {ok_count} ok, "
+                        f"{fail_count} failed: {summary}",
+                    )
+
+            self.root.after(0, _finish)
+        except Exception as e:
+            def _error():
+                self._finish_operation_progress()
+                messagebox.showerror("Error", f"audio_added export failed:\n{e}")
+                self.log(f"[ERROR] audio_added export failed: {e}")
+
+            self.root.after(0, _error)
     
     def _append_video_inputs(self, video_files):
         input_args = []
