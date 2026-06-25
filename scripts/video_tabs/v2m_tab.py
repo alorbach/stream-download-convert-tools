@@ -30,7 +30,7 @@ class VideoToMp3Tab:
 
   def setup_ui(self):
     top_frame = ttk.LabelFrame(self.parent, text='File Selection', padding=10)
-    top_frame.pack(fill='both', expand=True, padx=10, pady=10)
+    top_frame.pack(fill='x', padx=10, pady=10)
 
     btn_frame = ttk.Frame(top_frame)
     btn_frame.pack(fill='x', pady=5)
@@ -40,19 +40,18 @@ class VideoToMp3Tab:
     self.lbl_status.pack(side='left', padx=10)
 
     list_frame = ttk.Frame(top_frame)
-    list_frame.pack(fill='both', expand=True)
+    list_frame.pack(fill='x')
     sy = ttk.Scrollbar(list_frame, orient='vertical')
     sx = ttk.Scrollbar(list_frame, orient='horizontal')
     self.file_listbox = tk.Listbox(
       list_frame, yscrollcommand=sy.set, xscrollcommand=sx.set,
-      height=8, selectmode=tk.EXTENDED,
+      height=6, selectmode=tk.EXTENDED,
     )
     sy.config(command=self.file_listbox.yview)
     sx.config(command=self.file_listbox.xview)
-    self.file_listbox.grid(row=0, column=0, sticky='nsew')
+    self.file_listbox.grid(row=0, column=0, sticky='ew')
     sy.grid(row=0, column=1, sticky='ns')
     sx.grid(row=1, column=0, sticky='ew')
-    list_frame.grid_rowconfigure(0, weight=1)
     list_frame.grid_columnconfigure(0, weight=1)
     if DND_FILES:
       try:

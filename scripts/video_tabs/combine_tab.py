@@ -53,10 +53,17 @@ from lib.process_utils import ProcessManager
 from lib.ffmpeg_utils import FFmpegManager
 from lib.video_utils import (
     concat_videos_cfr,
+    detect_fps_mismatch,
+    detect_resolution_mismatch,
     export_videos_with_sequential_audio,
+    format_fps_label,
     plan_sequential_audio_segments,
+    prepare_clips_for_combine,
+    probe_clips_fps,
+    probe_clips_resolution,
     probe_duration,
-    resolve_target_fps,
+    probe_fps,
+    resolve_combine_target_fps,
 )
 
 
@@ -94,6 +101,13 @@ class CombineVideosTab:
         self.output_width = None  # None means use first video's width
         self.output_height = None  # None means use first video's height
         self.use_first_video_size = True  # Default: use first video's size
+
+        # Output frame rate settings
+        self.use_first_video_fps = True
+        self.output_fps = 24
+
+        # Cached probed fps per clip path (grid display)
+        self.video_fps_cache = {}
         
         # Output quality settings
         self.video_codec = "libx264"  # libx264, libx265, libvpx-vp9
@@ -138,6 +152,8 @@ class CombineVideosTab:
             self.update_transition_selection_label()
         if hasattr(self, 'output_size_label'):
             self.update_output_size_label()
+        if hasattr(self, 'output_fps_label'):
+            self.update_output_fps_label()
         self.check_ffmpeg_availability()
     
 
@@ -546,90 +562,99 @@ class CombineVideosTab:
         
         self.auto_export_var = tk.BooleanVar(value=self.auto_export_enabled)
         
-        # Toolbar
+        # Toolbar (multi-row; avoids one very wide horizontal strip)
         toolbar = ttk.Frame(main_frame)
         toolbar.pack(fill='x', pady=(0, 10))
-        
-        ttk.Button(toolbar, text="Add Videos", command=self.add_videos).pack(side='left', padx=5)
-        ttk.Button(toolbar, text="Remove Selected", command=self.remove_selected).pack(side='left', padx=5)
-        ttk.Button(toolbar, text="Clear All", command=self.clear_all).pack(side='left', padx=5)
-        ttk.Button(toolbar, text="Save Project", command=self.save_project).pack(side='left', padx=5)
-        ttk.Button(toolbar, text="Load Project", command=self.load_project).pack(side='left', padx=5)
-        
-        ttk.Separator(toolbar, orient='vertical').pack(side='left', fill='y', padx=10)
-        
-        ttk.Button(toolbar, text="Preview Combined Video", command=self.preview_combined_video).pack(side='left', padx=5)
-        ttk.Button(toolbar, text="Export Combined Video", command=self.export_combined_video).pack(side='left', padx=5)
-        
-        ttk.Separator(toolbar, orient='vertical').pack(side='left', fill='y', padx=10)
-        
-        ttk.Label(toolbar, text="Grid Columns:").pack(side='left', padx=5)
+
+        row_clips = ttk.Frame(toolbar)
+        row_clips.pack(fill='x', pady=(0, 4))
+        row_options = ttk.Frame(toolbar)
+        row_options.pack(fill='x', pady=(0, 4))
+        row_encode = ttk.Frame(toolbar)
+        row_encode.pack(fill='x')
+
+        ttk.Button(row_clips, text="Add Videos", command=self.add_videos).pack(side='left', padx=(0, 4))
+        ttk.Button(row_clips, text="Remove", command=self.remove_selected).pack(side='left', padx=(0, 4))
+        ttk.Button(row_clips, text="Clear All", command=self.clear_all).pack(side='left', padx=(0, 12))
+        ttk.Button(row_clips, text="Save Project", command=self.save_project).pack(side='left', padx=(0, 4))
+        ttk.Button(row_clips, text="Load Project", command=self.load_project).pack(side='left', padx=(0, 12))
+        ttk.Button(row_clips, text="Preview", command=self.preview_combined_video).pack(side='left', padx=(0, 4))
+        ttk.Button(row_clips, text="Export Combined", command=self.export_combined_video).pack(side='left', padx=(0, 4))
+
+        self.status_var = tk.StringVar(value="Ready")
+        ttk.Label(row_clips, textvariable=self.status_var).pack(side='right', padx=4)
+
+        ttk.Label(row_options, text="Grid cols:").pack(side='left', padx=(0, 2))
         self.grid_cols_var = tk.StringVar(value=str(self.grid_cols))
-        grid_spin = ttk.Spinbox(toolbar, from_=1, to=20, textvariable=self.grid_cols_var, width=5)
-        grid_spin.pack(side='left', padx=5)
+        grid_spin = ttk.Spinbox(row_options, from_=1, to=20, textvariable=self.grid_cols_var, width=4)
+        grid_spin.pack(side='left', padx=(0, 12))
         grid_spin.bind('<Return>', lambda e: self.update_grid())
-        grid_spin.bind('<FocusOut>', lambda e: self.update_grid())  # Update when focus leaves spinbox
-        grid_spin.bind('<ButtonRelease-1>', lambda e: self.update_grid())  # Update when using spinbox arrows
-        
-        ttk.Separator(toolbar, orient='vertical').pack(side='left', fill='y', padx=10)
-        
-        self.auto_export_checkbox = ttk.Checkbutton(toolbar, text="Auto-export Last Frame", 
-                                                    variable=self.auto_export_var,
-                                                    command=self.toggle_auto_export)
-        self.auto_export_checkbox.pack(side='left', padx=5)
-        
-        ttk.Separator(toolbar, orient='vertical').pack(side='left', fill='y', padx=10)
-        
-        # Transition controls
-        ttk.Label(toolbar, text="Transitions:").pack(side='left', padx=5)
+        grid_spin.bind('<FocusOut>', lambda e: self.update_grid())
+        grid_spin.bind('<ButtonRelease-1>', lambda e: self.update_grid())
+
+        self.auto_export_checkbox = ttk.Checkbutton(
+            row_options, text="Auto-export last frame",
+            variable=self.auto_export_var,
+            command=self.toggle_auto_export,
+        )
+        self.auto_export_checkbox.pack(side='left', padx=(0, 16))
+
+        ttk.Label(row_options, text="Transitions:").pack(side='left', padx=(0, 2))
         self.transition_enabled_var = tk.BooleanVar(value=self.transition_enabled)
-        ttk.Checkbutton(toolbar, text="Enable", variable=self.transition_enabled_var,
-                        command=self.toggle_transitions).pack(side='left', padx=2)
-        
-        ttk.Button(toolbar, text="Select Types...", command=self.select_transition_types,
-                  width=12).pack(side='left', padx=2)
-        
-        # Label showing selected count
-        self.transition_selection_label = ttk.Label(toolbar, text="(0 selected)", 
-                                                     font=('Arial', 8))
-        self.transition_selection_label.pack(side='left', padx=2)
-        
-        ttk.Label(toolbar, text="Duration:").pack(side='left', padx=(5, 2))
+        ttk.Checkbutton(
+            row_options, text="On", variable=self.transition_enabled_var,
+            command=self.toggle_transitions,
+        ).pack(side='left', padx=(0, 4))
+        ttk.Button(
+            row_options, text="Types...", command=self.select_transition_types, width=8,
+        ).pack(side='left', padx=(0, 2))
+        self.transition_selection_label = ttk.Label(row_options, text="(0 selected)", font=('Arial', 8))
+        self.transition_selection_label.pack(side='left', padx=(0, 8))
+
+        ttk.Label(row_options, text="Dur:").pack(side='left', padx=(0, 2))
         self.transition_duration_var = tk.StringVar(value=str(self.transition_duration))
-        duration_spin = ttk.Spinbox(toolbar, from_=0.1, to=5.0, increment=0.1,
-                                    textvariable=self.transition_duration_var, width=6)
-        duration_spin.pack(side='left', padx=2)
+        duration_spin = ttk.Spinbox(
+            row_options, from_=0.1, to=5.0, increment=0.1,
+            textvariable=self.transition_duration_var, width=5,
+        )
+        duration_spin.pack(side='left', padx=(0, 8))
         duration_spin.bind('<Return>', lambda e: self.update_transition_duration())
-        
-        ttk.Label(toolbar, text="Mode:").pack(side='left', padx=(5, 2))
+
+        ttk.Label(row_options, text="Mode:").pack(side='left', padx=(0, 2))
         self.transition_mode_var = tk.StringVar(value=self.transition_mode)
-        mode_combo = ttk.Combobox(toolbar, textvariable=self.transition_mode_var, 
-                                  values=["xfade", "overlay"], width=8, state="readonly")
-        mode_combo.pack(side='left', padx=2)
+        mode_combo = ttk.Combobox(
+            row_options, textvariable=self.transition_mode_var,
+            values=["xfade", "overlay"], width=8, state="readonly",
+        )
+        mode_combo.pack(side='left', padx=(0, 4))
         mode_combo.bind('<<ComboboxSelected>>', lambda e: self.update_transition_mode())
-        
-        ttk.Separator(toolbar, orient='vertical').pack(side='left', fill='y', padx=10)
-        
-        # Output size controls
-        ttk.Label(toolbar, text="Output Size:").pack(side='left', padx=5)
-        ttk.Button(toolbar, text="Configure...", command=self.configure_output_size,
-                  width=10).pack(side='left', padx=2)
-        self.output_size_label = ttk.Label(toolbar, text="(auto)", font=('Arial', 8))
-        self.output_size_label.pack(side='left', padx=2)
-        
-        ttk.Separator(toolbar, orient='vertical').pack(side='left', fill='y', padx=10)
-        
-        # Output quality controls
-        ttk.Label(toolbar, text="Codec:").pack(side='left', padx=(5, 2))
+
+        ttk.Label(row_encode, text="Size:").pack(side='left', padx=(0, 2))
+        ttk.Button(row_encode, text="Configure...", command=self.configure_output_size, width=10).pack(
+            side='left', padx=(0, 2),
+        )
+        self.output_size_label = ttk.Label(row_encode, text="(auto)", font=('Arial', 8))
+        self.output_size_label.pack(side='left', padx=(0, 12))
+
+        ttk.Label(row_encode, text="FPS:").pack(side='left', padx=(0, 2))
+        ttk.Button(row_encode, text="Configure...", command=self.configure_output_fps, width=10).pack(
+            side='left', padx=(0, 2),
+        )
+        self.output_fps_label = ttk.Label(row_encode, text="(auto)", font=('Arial', 8))
+        self.output_fps_label.pack(side='left', padx=(0, 12))
+
+        ttk.Label(row_encode, text="Codec:").pack(side='left', padx=(0, 2))
         self.video_codec_var = tk.StringVar(value=self.video_codec)
-        codec_combo = ttk.Combobox(toolbar, textvariable=self.video_codec_var, 
-                                  values=('libx264', 'libx265', 'libvpx-vp9'), width=10, state='readonly')
-        codec_combo.pack(side='left', padx=2)
+        codec_combo = ttk.Combobox(
+            row_encode, textvariable=self.video_codec_var,
+            values=('libx264', 'libx265', 'libvpx-vp9'), width=9, state='readonly',
+        )
+        codec_combo.pack(side='left', padx=(0, 8))
         codec_combo.bind('<<ComboboxSelected>>', lambda e: self.update_video_codec())
-        
-        ttk.Label(toolbar, text="Quality:").pack(side='left', padx=(5, 2))
+
+        ttk.Label(row_encode, text="Quality:").pack(side='left', padx=(0, 2))
         self.video_bitrate_var = tk.StringVar(value=self.video_bitrate)
-        bitrate_combo = ttk.Combobox(toolbar, textvariable=self.video_bitrate_var, width=20, state='readonly')
+        bitrate_combo = ttk.Combobox(row_encode, textvariable=self.video_bitrate_var, width=18, state='readonly')
         bitrate_combo['values'] = (
             'Very High Quality (CRF 15)',
             'High Quality (CRF 18)',
@@ -637,15 +662,8 @@ class CombineVideosTab:
             'Low Quality (CRF 28)',
             'Maximum Compression (CRF 32)'
         )
-        bitrate_combo.pack(side='left', padx=2)
+        bitrate_combo.pack(side='left', padx=(0, 4))
         bitrate_combo.bind('<<ComboboxSelected>>', lambda e: self.update_video_bitrate())
-        
-        ttk.Separator(toolbar, orient='vertical').pack(side='left', fill='y', padx=10)
-        
-        # Status bar
-        self.status_var = tk.StringVar(value="Ready")
-        status_label = ttk.Label(toolbar, textvariable=self.status_var)
-        status_label.pack(side='right', padx=10)
         
         # External audio track (optional)
         audio_frame = ttk.LabelFrame(main_frame, text="External Audio Track (optional)", padding=5)
@@ -657,27 +675,27 @@ class CombineVideosTab:
         self.external_audio_enabled_var = tk.BooleanVar(value=self.external_audio_enabled)
         ttk.Checkbutton(
             audio_row,
-            text="Use external MP3/WAV instead of clip audio",
+            text="Use external MP3/WAV",
             variable=self.external_audio_enabled_var,
             command=self.toggle_external_audio,
-        ).pack(side='left', padx=5)
-        ttk.Button(audio_row, text="Select Audio...", command=self.select_external_audio).pack(side='left', padx=5)
-        ttk.Button(audio_row, text="Clear", command=self.clear_external_audio).pack(side='left', padx=5)
+        ).pack(side='left', padx=(0, 4))
+        ttk.Button(audio_row, text="Select Audio...", command=self.select_external_audio).pack(side='left', padx=(0, 4))
+        ttk.Button(audio_row, text="Clear", command=self.clear_external_audio).pack(side='left', padx=(0, 8))
         ttk.Button(
             audio_row,
-            text="Save Copies to audio_added/",
+            text="Save to audio_added/",
             command=self.export_audio_added_copies,
-        ).pack(side='left', padx=5)
-        self.lbl_external_audio_status = ttk.Label(audio_row, text="No audio file selected")
-        self.lbl_external_audio_status.pack(side='left', padx=10)
+        ).pack(side='left', padx=(0, 8))
+        self.lbl_external_audio_status = ttk.Label(audio_row, text="No audio file selected", font=('Arial', 8))
+        self.lbl_external_audio_status.pack(side='left', padx=4)
 
         ttk.Label(
             audio_frame,
             text=(
-                "audio_added/: one copy per clip (MP4 + matching MP3 snippet); "
-                "segment length matches each video's probed duration, in list order."
+                "audio_added/: one MP4 + MP3 snippet per clip; length follows each video's duration. "
+                "Uses Output FPS above; re-encodes only when source fps differs."
             ),
-            wraplength=900,
+            wraplength=720,
             font=('Arial', 8),
         ).pack(anchor='w', pady=(4, 0))
         
@@ -828,6 +846,15 @@ class CombineVideosTab:
             info_label = ttk.Label(video_frame, text=filename[:30] + ("..." if len(filename) > 30 else ""), 
                                    font=('Arial', 8))
             info_label.pack()
+
+            cached_fps = self.video_fps_cache.get(video_file)
+            if cached_fps is not None:
+                info_label.config(
+                    text=f"{filename[:30]}{'...' if len(filename) > 30 else ''} "
+                         f"({format_fps_label(cached_fps)} fps)",
+                )
+            else:
+                self._probe_fps_async(video_file, info_label)
             
             # Position label
             pos_label = ttk.Label(video_frame, text=f"Position: {i+1}", 
@@ -876,6 +903,31 @@ class CombineVideosTab:
             self.canvas.drop_target_register(DND_FILES)
             self.canvas.dnd_bind('<<Drop>>', self.on_file_drop)
     
+    def _probe_fps_async(self, video_file, info_label):
+        """Probe clip fps in background and update grid label."""
+        def _probe():
+            try:
+                ffmpeg_cmd = self.get_ffmpeg_command()
+                fps = probe_fps(ffmpeg_cmd, video_file)
+                if not fps or fps <= 0:
+                    return
+                if abs(fps - round(fps)) < 0.05:
+                    fps = float(int(round(fps)))
+                self.video_fps_cache[video_file] = fps
+                filename = os.path.basename(video_file)
+                short_name = filename[:30] + ("..." if len(filename) > 30 else "")
+                label_text = f"{short_name} ({format_fps_label(fps)} fps)"
+
+                def _update():
+                    if info_label.winfo_exists():
+                        info_label.config(text=label_text)
+
+                self.root.after(0, _update)
+            except Exception:
+                pass
+
+        threading.Thread(target=_probe, daemon=True).start()
+
     def load_thumbnail(self, video_file, label):
         """Load thumbnail from video in background thread."""
         def _load():
@@ -1276,18 +1328,38 @@ class CombineVideosTab:
     def _preview_videos_thread(self, preview_file):
         """Create preview video in background thread."""
         concat_file = None
+        cleanup_prepare = None
         try:
             ffmpeg_cmd = self.get_ffmpeg_command()
-            
+            encode_opts = {**self._get_encode_opts_dict(), 'preset': 'ultrafast', 'crf': '28'}
+            self._start_operation_progress(
+                maximum=len(self.video_files),
+                message='Preparing clips...',
+            )
+            try:
+                prepared_paths, target_fps, cleanup_prepare = self._prepare_videos_for_export(
+                    ffmpeg_cmd, self.video_files, encode_opts,
+                )
+            except RuntimeError as e:
+                error_msg = str(e)
+                self.root.after(0, lambda msg=error_msg: self.log(f'[ERROR] Fps normalize failed: {msg}'))
+                self.root.after(0, lambda: self.root.config(cursor=''))
+                self.root.after(0, lambda msg=error_msg: messagebox.showerror(
+                    'Error', f'Failed to normalize frame rates:\n{msg}',
+                ))
+                return
+
+            cfr_args = self._get_cfr_output_args(target_fps)
+
             # Check if transitions are enabled
-            filter_complex = self._build_transition_filter(self.video_files)
+            filter_complex = self._build_transition_filter(prepared_paths)
             
             if filter_complex:
                 # Use filter graph with transitions for preview
                 self.root.after(0, lambda: self.log(f"[INFO] Creating preview with {self.transition_type} transitions ({self.transition_duration}s)"))
                 
                 # Build input arguments
-                input_args = self._append_video_inputs(self.video_files)
+                input_args = self._append_video_inputs(prepared_paths)
                 
                 # Build command with filter complex (faster encoding for preview)
                 # For preview, use faster preset but still respect codec choice
@@ -1297,7 +1369,7 @@ class CombineVideosTab:
                 preview_encoding.extend(['-preset', 'ultrafast', '-crf', '28'])
                 cmd = [ffmpeg_cmd] + input_args + [
                     '-filter_complex', filter_complex,
-                ] + self._get_filter_output_map_args(len(self.video_files)) + preview_encoding + [
+                ] + self._get_filter_output_map_args(len(prepared_paths)) + preview_encoding + cfr_args + [
                     '-c:a', 'aac',
                     '-b:a', '128k',
                     '-y', preview_file
@@ -1320,6 +1392,7 @@ class CombineVideosTab:
                 preview_opts = {**self._get_encode_opts_dict(), 'preset': 'ultrafast', 'crf': '28'}
                 ok, err = self._run_concat_cfr(
                     ffmpeg_cmd, preview_file, audio_bitrate='128k', encode_opts=preview_opts,
+                    video_paths=prepared_paths, target_fps=target_fps,
                 )
                 result = type('R', (), {'returncode': 0 if ok else 1, 'stderr': err})()
                 
@@ -1340,6 +1413,8 @@ class CombineVideosTab:
             self.root.after(0, lambda: self.root.config(cursor=''))
             self.root.after(0, lambda msg=error_msg: messagebox.showerror("Error", f"Exception:\n{msg}"))
         finally:
+            if cleanup_prepare:
+                cleanup_prepare()
             self.root.after(0, lambda: self._finish_operation_progress())
     
     def _play_preview(self, preview_file):
@@ -1556,16 +1631,35 @@ class CombineVideosTab:
     def _combine_videos_thread(self, output_file):
         """Combine videos in background thread."""
         concat_file = None
+        cleanup_prepare = None
         MAX_VIDEOS_PER_BATCH = 10
         try:
             ffmpeg_cmd = self.get_ffmpeg_command()
-            
+            encode_opts = self._get_encode_opts_dict()
+            self._start_operation_progress(
+                maximum=len(self.video_files),
+                message='Preparing clips...',
+            )
+            try:
+                prepared_paths, target_fps, cleanup_prepare = self._prepare_videos_for_export(
+                    ffmpeg_cmd, self.video_files, encode_opts,
+                )
+            except RuntimeError as e:
+                error_msg = str(e)
+                self.root.after(0, lambda msg=error_msg: self.log(f'[ERROR] Fps normalize failed: {msg}'))
+                self.root.after(0, lambda msg=error_msg: messagebox.showerror(
+                    'Error', f'Failed to normalize frame rates:\n{msg}',
+                ))
+                return
+
+            cfr_args = self._get_cfr_output_args(target_fps)
+
             # Check if transitions are enabled
-            filter_complex = self._build_transition_filter(self.video_files)
+            filter_complex = self._build_transition_filter(prepared_paths)
             
             if filter_complex:
-                if len(self.video_files) > MAX_VIDEOS_PER_BATCH:
-                    num_batches = (len(self.video_files) + MAX_VIDEOS_PER_BATCH - 1) // MAX_VIDEOS_PER_BATCH
+                if len(prepared_paths) > MAX_VIDEOS_PER_BATCH:
+                    num_batches = (len(prepared_paths) + MAX_VIDEOS_PER_BATCH - 1) // MAX_VIDEOS_PER_BATCH
                     total_steps = num_batches + 1
                     self._start_operation_progress(
                         total_steps,
@@ -1586,17 +1680,17 @@ class CombineVideosTab:
                 # Use filter graph with transitions
                 # For large numbers of videos, use batch processing to avoid command line length limits
                 
-                if len(self.video_files) > MAX_VIDEOS_PER_BATCH:
+                if len(prepared_paths) > MAX_VIDEOS_PER_BATCH:
                     # Batch processing: combine in groups, then combine the groups
-                    self.root.after(0, lambda: self.log(f"[INFO] Combining {len(self.video_files)} videos in batches of {MAX_VIDEOS_PER_BATCH}"))
+                    self.root.after(0, lambda: self.log(f"[INFO] Combining {len(prepared_paths)} videos in batches of {MAX_VIDEOS_PER_BATCH}"))
                     
                     batch_outputs = []
-                    num_batches = (len(self.video_files) + MAX_VIDEOS_PER_BATCH - 1) // MAX_VIDEOS_PER_BATCH
+                    num_batches = (len(prepared_paths) + MAX_VIDEOS_PER_BATCH - 1) // MAX_VIDEOS_PER_BATCH
                     
                     for batch_idx in range(num_batches):
                         start_idx = batch_idx * MAX_VIDEOS_PER_BATCH
-                        end_idx = min(start_idx + MAX_VIDEOS_PER_BATCH, len(self.video_files))
-                        batch_videos = self.video_files[start_idx:end_idx]
+                        end_idx = min(start_idx + MAX_VIDEOS_PER_BATCH, len(prepared_paths))
+                        batch_videos = prepared_paths[start_idx:end_idx]
                         
                         self.root.after(0, lambda idx=batch_idx+1, total=num_batches, count=len(batch_videos): 
                                       self.log(f"[INFO] Processing batch {idx}/{total} ({count} videos)"))
@@ -1619,7 +1713,7 @@ class CombineVideosTab:
                                 '-filter_complex', batch_filter,
                                 '-map', '[vout]',
                                 '-map', '[aout]'
-                            ] + encoding_args + [
+                            ] + encoding_args + cfr_args + [
                                 '-c:a', 'aac',
                                 '-b:a', '192k',
                                 '-movflags', '+faststart',
@@ -1644,7 +1738,7 @@ class CombineVideosTab:
                             # No transitions, use concat
                             batch_concat = self._write_concat_file_for_batch(batch_videos)
                             encoding_args = self._get_video_encoding_args()
-                            batch_cmd = [ffmpeg_cmd, '-f', 'concat', '-safe', '0', '-i', batch_concat] + encoding_args + [
+                            batch_cmd = [ffmpeg_cmd, '-f', 'concat', '-safe', '0', '-i', batch_concat] + encoding_args + cfr_args + [
                                        '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart',
                                        '-y', batch_output]
                             result = subprocess.run(batch_cmd, capture_output=True, text=True, cwd=self.root_dir)
@@ -1678,32 +1772,36 @@ class CombineVideosTab:
                     # Now combine all batch outputs
                     self.root.after(0, lambda: self.log(f"[INFO] Combining {len(batch_outputs)} batch outputs into final video"))
                     
-                    # Use concat demuxer to combine batch outputs (faster and simpler)
-                    final_concat = self._write_concat_file_for_batch(batch_outputs)
-                    final_cmd = [ffmpeg_cmd, '-f', 'concat', '-safe', '0', '-i', final_concat]
                     if self._use_external_audio():
+                        final_concat = self._write_concat_file_for_batch(batch_outputs)
+                        final_cmd = [ffmpeg_cmd, '-f', 'concat', '-safe', '0', '-i', final_concat]
                         self.root.after(0, lambda: self.log('[INFO] Final merge: copying video, encoding external audio only'))
                         final_cmd.extend(['-i', self.external_audio_file, '-map', '0:v:0', '-map', '1:a:0', '-shortest'])
                         final_cmd.extend(self._get_external_audio_mux_args('192k'))
                         final_cmd.extend(['-y', output_file])
+                        result = subprocess.run(final_cmd, capture_output=True, text=True, cwd=self.root_dir)
+                        if final_concat:
+                            try:
+                                os.remove(final_concat)
+                            except:
+                                pass
                     else:
-                        encoding_args = self._get_video_encoding_args()
-                        final_cmd.extend(encoding_args + [
-                            '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', '-y', output_file,
-                        ])
-                    
-                    result = subprocess.run(final_cmd, capture_output=True, text=True, cwd=self.root_dir)
+                        ok, err = concat_videos_cfr(
+                            ffmpeg_cmd,
+                            batch_outputs,
+                            output_file,
+                            constant_fps=target_fps,
+                            encode_opts=encode_opts,
+                            audio_bitrate='192k',
+                            timeout=7200,
+                        )
+                        result = type('R', (), {'returncode': 0 if ok else 1, 'stderr': err})()
                     
                     # Clean up batch files
                     for temp_file in batch_outputs:
                         try:
                             if os.path.exists(temp_file):
                                 os.remove(temp_file)
-                        except:
-                            pass
-                    if final_concat:
-                        try:
-                            os.remove(final_concat)
                         except:
                             pass
                     
@@ -1716,16 +1814,16 @@ class CombineVideosTab:
                         self.root.after(0, lambda msg=error_msg: messagebox.showerror("Error", f"Failed to combine batch outputs:\n{msg}"))
                 else:
                     # Small number of videos, use original method
-                    self.root.after(0, lambda: self.log(f"[INFO] Combining {len(self.video_files)} videos with transitions ({self.transition_duration}s)"))
+                    self.root.after(0, lambda: self.log(f"[INFO] Combining {len(prepared_paths)} videos with transitions ({self.transition_duration}s)"))
                     
                     # Build input arguments
-                    input_args = self._append_video_inputs(self.video_files)
+                    input_args = self._append_video_inputs(prepared_paths)
                     
                     # Build command with filter complex
                     encoding_args = self._get_video_encoding_args()
                     cmd = [ffmpeg_cmd] + input_args + [
                         '-filter_complex', filter_complex,
-                    ] + self._get_filter_output_map_args(len(self.video_files)) + encoding_args + [
+                    ] + self._get_filter_output_map_args(len(prepared_paths)) + encoding_args + cfr_args + [
                         '-c:a', 'aac',
                         '-b:a', '192k',
                         '-movflags', '+faststart',
@@ -1744,7 +1842,10 @@ class CombineVideosTab:
                         self.root.after(0, lambda msg=error_msg: self.log(f"[ERROR] Failed to combine videos with transitions: {msg}"))
                         self.root.after(0, lambda msg=error_msg: messagebox.showerror("Error", f"Failed to combine videos:\n{msg}"))
             else:
-                ok, err = self._run_concat_cfr(ffmpeg_cmd, output_file, audio_bitrate='192k')
+                ok, err = self._run_concat_cfr(
+                    ffmpeg_cmd, output_file, audio_bitrate='192k',
+                    video_paths=prepared_paths, target_fps=target_fps,
+                )
                 if ok:
                     self._update_operation_progress(1, 1, 'Export complete')
                     self.root.after(0, lambda: self.log(
@@ -1763,6 +1864,8 @@ class CombineVideosTab:
             self.root.after(0, lambda msg=error_msg: messagebox.showerror("Error", f"Exception:\n{msg}"))
         
         finally:
+            if cleanup_prepare:
+                cleanup_prepare()
             # Clean up concat file if used
             if concat_file:
                 try:
@@ -1829,6 +1932,92 @@ class CombineVideosTab:
     def _get_encode_opts_dict(self):
         """Encoding options for shared CFR concat helpers (global app settings)."""
         return self.app.get_video_encode_opts()
+
+    def _resolve_export_target_fps(self, ffmpeg_cmd, video_paths):
+        """Target CFR for combine export based on tab settings."""
+        return resolve_combine_target_fps(
+            ffmpeg_cmd,
+            video_paths,
+            use_first_video_fps=self.use_first_video_fps,
+            explicit_fps=self.output_fps if not self.use_first_video_fps else None,
+        )
+
+    def _prepare_videos_for_export(self, ffmpeg_cmd, video_paths, encode_opts, report_progress=True):
+        """
+        Probe fps/size, log mismatches, normalize clips before concat.
+
+        Returns (prepared_paths, target_fps, cleanup_callback).
+        """
+        clip_fps = probe_clips_fps(ffmpeg_cmd, video_paths)
+        fps_values = [fps for _, fps in clip_fps]
+        target_fps = self._resolve_export_target_fps(ffmpeg_cmd, video_paths)
+        target_width, target_height = self._get_output_resolution(video_paths)
+        clip_res = probe_clips_resolution(ffmpeg_cmd, video_paths)
+        res_values = [res for _, res in clip_res]
+
+        if clip_fps:
+            summary = ', '.join(
+                f'{os.path.basename(path)}={format_fps_label(fps)}'
+                for path, fps in clip_fps
+            )
+            self.root.after(0, lambda s=summary: self.log(f'[INFO] Clip fps: {s}'))
+
+        if clip_res:
+            res_summary = ', '.join(
+                f'{os.path.basename(path)}={w}x{h}'
+                for path, (w, h) in clip_res
+            )
+            self.root.after(0, lambda s=res_summary: self.log(f'[INFO] Clip size: {s}'))
+
+        if detect_fps_mismatch(fps_values):
+            if self.use_first_video_fps:
+                mode_text = 'first clip'
+            else:
+                mode_text = 'configured'
+            fps_text = format_fps_label(target_fps)
+            self.root.after(0, lambda: self.log(
+                f'[WARNING] Mixed frame rates detected; normalizing to {fps_text} fps ({mode_text})',
+            ))
+
+        if detect_resolution_mismatch(res_values):
+            size_text = f'{target_width}x{target_height}'
+            if self.use_first_video_size:
+                size_mode = 'first clip'
+            else:
+                size_mode = 'configured'
+            self.root.after(0, lambda: self.log(
+                f'[WARNING] Mixed resolutions detected; normalizing to {size_text} ({size_mode})',
+            ))
+
+        def on_progress(index, total, message):
+            if not report_progress:
+                return
+            self._update_operation_progress(
+                index, total, f'Prep {index}/{total}: {message}',
+            )
+
+        def log_fn(message):
+            self.root.after(0, lambda m=message: self.log(m))
+
+        temp_dir = os.path.join(self.root_dir, 'combine_fps_tmp')
+        prepared, cleanup = prepare_clips_for_combine(
+            ffmpeg_cmd,
+            video_paths,
+            target_fps,
+            encode_opts=encode_opts,
+            temp_dir=temp_dir,
+            target_width=target_width,
+            target_height=target_height,
+            on_progress=on_progress,
+            log_fn=log_fn,
+        )
+        return prepared, target_fps, cleanup
+
+    def _get_cfr_output_args(self, target_fps):
+        """Output CFR flags for transition/filter-graph exports."""
+        from lib.video_utils import _format_fps_for_ffmpeg
+        fps_str = _format_fps_for_ffmpeg(target_fps)
+        return ['-r', fps_str, '-fps_mode', 'cfr']
 
     def _get_video_encoding_args(self):
         """Get video encoding arguments from global app settings."""
@@ -1965,6 +2154,17 @@ class CombineVideosTab:
             f"[INFO] Saving {len(self.video_files)} clip(s) to audio_added/ "
             f"with sequential audio from {os.path.basename(self.external_audio_file)}",
         )
+        target_fps = self._resolve_export_target_fps(
+            self.get_ffmpeg_command(), self.video_files,
+        )
+        if self.use_first_video_fps:
+            fps_desc = f'auto ({format_fps_label(target_fps)} fps, first clip)'
+        else:
+            fps_desc = f'{format_fps_label(target_fps)} fps (configured)'
+        self.log(
+            f'[INFO] audio_added target fps: {fps_desc} '
+            f'(re-encode per clip only when source fps differs)',
+        )
         thread = threading.Thread(target=self._export_audio_added_thread, daemon=True)
         thread.start()
 
@@ -1975,6 +2175,8 @@ class CombineVideosTab:
         )
         try:
             ffmpeg_cmd = self.get_ffmpeg_command()
+            target_fps = self._resolve_export_target_fps(ffmpeg_cmd, self.video_files)
+            encode_opts = self._get_encode_opts_dict()
 
             def on_progress(index, total, message):
                 self._update_operation_progress(
@@ -1992,6 +2194,8 @@ class CombineVideosTab:
                 self.external_audio_file,
                 on_progress=on_progress,
                 log_fn=log_fn,
+                target_fps=target_fps,
+                encode_opts=encode_opts,
             )
 
             def _finish():
@@ -2056,29 +2260,50 @@ class CombineVideosTab:
         cmd.extend(['-y', output_file])
         return cmd
     
-    def _run_concat_cfr(self, ffmpeg_cmd, output_file, audio_bitrate='192k', encode_opts=None):
+    def _run_concat_cfr(
+        self,
+        ffmpeg_cmd,
+        output_file,
+        audio_bitrate='192k',
+        encode_opts=None,
+        video_paths=None,
+        target_fps=None,
+    ):
         """Concat clips at constant fps (avoids ~23.9 fps drift from stream copy)."""
-        target_fps = resolve_target_fps(ffmpeg_cmd, self.video_files[0])
-        fps_label = int(target_fps) if abs(target_fps - round(target_fps)) < 0.01 else round(target_fps, 3)
-        n = len(self.video_files)
+        paths = video_paths if video_paths is not None else self.video_files
+        opts = encode_opts if encode_opts is not None else self._get_encode_opts_dict()
+        cleanup_prepare = None
+        if video_paths is None:
+            try:
+                paths, target_fps, cleanup_prepare = self._prepare_videos_for_export(
+                    ffmpeg_cmd, paths, opts,
+                )
+            except RuntimeError as e:
+                return False, str(e)
+        target_fps = target_fps or self._resolve_export_target_fps(ffmpeg_cmd, paths)
+        fps_label = format_fps_label(target_fps)
+        n = len(paths)
         ext_name = os.path.basename(self.external_audio_file) if self._use_external_audio() else ''
         self.root.after(0, lambda: self.log(
             f'[INFO] Combining {n} clips at {fps_label} fps (constant, re-encode video)',
         ))
         if self._use_external_audio():
             self.root.after(0, lambda: self.log(f'[INFO] External audio: {ext_name}'))
-        opts = encode_opts if encode_opts is not None else self._get_encode_opts_dict()
         ext_audio = self.external_audio_file if self._use_external_audio() else None
-        return concat_videos_cfr(
-            ffmpeg_cmd,
-            self.video_files,
-            output_file,
-            external_audio_path=ext_audio,
-            constant_fps=target_fps,
-            encode_opts=opts,
-            audio_bitrate=audio_bitrate,
-            timeout=7200,
-        )
+        try:
+            return concat_videos_cfr(
+                ffmpeg_cmd,
+                paths,
+                output_file,
+                external_audio_path=ext_audio,
+                constant_fps=target_fps,
+                encode_opts=opts,
+                audio_bitrate=audio_bitrate,
+                timeout=7200,
+            )
+        finally:
+            if cleanup_prepare:
+                cleanup_prepare()
     
     def toggle_external_audio(self):
         self.external_audio_enabled = self.external_audio_enabled_var.get()
@@ -2355,6 +2580,99 @@ class CombineVideosTab:
             self.output_size_label.config(text="(auto)")
         else:
             self.output_size_label.config(text=f"{self.output_width}x{self.output_height}")
+
+    def configure_output_fps(self):
+        """Configure output video frame rate."""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Configure Output Frame Rate")
+        dialog.geometry("400x280")
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        first_fps = None
+        if self.video_files:
+            ffmpeg_cmd = self.get_ffmpeg_command()
+            first_fps = probe_fps(ffmpeg_cmd, self.video_files[0])
+
+        ttk.Label(dialog, text="Output Video Frame Rate", font=('Arial', 10, 'bold')).pack(pady=10)
+
+        use_first_var = tk.BooleanVar(value=self.use_first_video_fps)
+        use_first_cb = ttk.Checkbutton(
+            dialog, text="Use first video's frame rate (auto)", variable=use_first_var,
+        )
+        use_first_cb.pack(pady=5)
+
+        if first_fps:
+            ttk.Label(
+                dialog,
+                text=f"First video: {format_fps_label(first_fps)} fps",
+                font=('Arial', 8),
+                foreground='gray',
+            ).pack()
+
+        ttk.Separator(dialog, orient='horizontal').pack(fill='x', padx=20, pady=10)
+
+        fps_frame = ttk.Frame(dialog)
+        fps_frame.pack(pady=10)
+
+        ttk.Label(fps_frame, text="Target FPS:").grid(row=0, column=0, padx=5, pady=5, sticky='e')
+        fps_var = tk.StringVar(value=str(self.output_fps))
+        fps_spin = ttk.Spinbox(
+            fps_frame, from_=1, to=120, increment=1,
+            textvariable=fps_var, width=10,
+            state='disabled' if self.use_first_video_fps else 'normal',
+        )
+        fps_spin.grid(row=0, column=1, padx=5, pady=5)
+
+        def toggle_custom_fps():
+            state = 'normal' if not use_first_var.get() else 'disabled'
+            fps_spin.config(state=state)
+
+        use_first_cb.config(command=toggle_custom_fps)
+
+        preset_frame = ttk.Frame(dialog)
+        preset_frame.pack(pady=5)
+
+        for preset_name, preset_fps in (("24p", 24), ("25p", 25), ("30p", 30), ("60p", 60)):
+            def set_preset(value=preset_fps):
+                use_first_var.set(False)
+                fps_var.set(str(value))
+                toggle_custom_fps()
+
+            ttk.Button(preset_frame, text=preset_name, command=set_preset, width=8).pack(side='left', padx=2)
+
+        btn_frame = ttk.Frame(dialog)
+        btn_frame.pack(pady=20)
+
+        def apply_fps():
+            try:
+                self.use_first_video_fps = use_first_var.get()
+                if not self.use_first_video_fps:
+                    self.output_fps = float(fps_var.get())
+                    if self.output_fps <= 0 or self.output_fps > 120:
+                        messagebox.showerror("Error", "FPS must be between 1 and 120")
+                        return
+                    if abs(self.output_fps - round(self.output_fps)) < 0.05:
+                        self.output_fps = float(int(round(self.output_fps)))
+                self.update_output_fps_label()
+                self.save_settings()
+                if self.use_first_video_fps:
+                    self.log("[INFO] Output fps: auto (first video)")
+                else:
+                    self.log(f"[INFO] Output fps: {format_fps_label(self.output_fps)}")
+                dialog.destroy()
+            except ValueError:
+                messagebox.showerror("Error", "Invalid fps value")
+
+        ttk.Button(btn_frame, text="Apply", command=apply_fps).pack(side='left', padx=5)
+        ttk.Button(btn_frame, text="Cancel", command=dialog.destroy).pack(side='left', padx=5)
+
+    def update_output_fps_label(self):
+        """Update the output fps label."""
+        if self.use_first_video_fps:
+            self.output_fps_label.config(text="(auto)")
+        else:
+            self.output_fps_label.config(text=f"{format_fps_label(self.output_fps)} fps")
     
     def set_grid_columns(self):
         """Set grid columns."""
@@ -2522,6 +2840,8 @@ class CombineVideosTab:
                 'output_width': self.output_width,
                 'output_height': self.output_height,
                 'use_first_video_size': self.use_first_video_size,
+                'use_first_video_fps': self.use_first_video_fps,
+                'output_fps': self.output_fps,
                 'external_audio_enabled': self.external_audio_enabled,
                 'external_audio_file': self.external_audio_file,
                 'video_files': self.video_files[:10]  # Save first 10 for quick restore
@@ -2618,6 +2938,13 @@ class CombineVideosTab:
                 # Update output size label if it exists
                 if hasattr(self, 'output_size_label'):
                     self.update_output_size_label()
+
+                if 'use_first_video_fps' in settings:
+                    self.use_first_video_fps = settings['use_first_video_fps']
+                if 'output_fps' in settings:
+                    self.output_fps = settings['output_fps']
+                if hasattr(self, 'output_fps_label'):
+                    self.update_output_fps_label()
                 
                 if 'external_audio_enabled' in settings:
                     self.external_audio_enabled = settings['external_audio_enabled']

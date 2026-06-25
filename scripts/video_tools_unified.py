@@ -53,7 +53,8 @@ LEGACY_SETTINGS = {
 class VideoToolsUnifiedGUI(BaseAudioGUI):
     def __init__(self, root):
         super().__init__(root, 'Video Tools - Unified')
-        self.root.geometry('1280x950')
+        self.root.geometry('1440x820')
+        self.root.minsize(1440, 820)
         self.settings_path = os.path.join(self.root_dir, SETTINGS_FILE)
         self._settings = {}
         self._tabs = {}
@@ -105,8 +106,8 @@ class VideoToolsUnifiedGUI(BaseAudioGUI):
 
         log_frame = ttk.LabelFrame(main, text='Log', padding=5)
         log_frame.pack(fill='x', pady=(5, 0))
-        self.log_text = scrolledtext.ScrolledText(log_frame, height=8)
-        self.log_text.pack(fill='both', expand=True)
+        self.log_text = scrolledtext.ScrolledText(log_frame, height=5)
+        self.log_text.pack(fill='x')
         self.log_manager = LogManager(self.log_text)
 
         if not self.check_ffmpeg():

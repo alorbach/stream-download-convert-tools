@@ -1684,6 +1684,363 @@ def resolve_target_fps(ffmpeg_cmd: str, reference_path: str) -> float:
     return fps
 
 
+def format_fps_label(fps: float) -> str:
+    """Human-readable fps label (e.g. 24, 29.97)."""
+    if fps <= 0:
+        return '?'
+    if abs(fps - round(fps)) < 0.01:
+        return str(int(round(fps)))
+    return f'{fps:.3f}'.rstrip('0').rstrip('.')
+
+
+def probe_clips_fps(
+    ffmpeg_cmd: str,
+    paths: List[str],
+    ffprobe_cmd: Optional[str] = None,
+) -> List[Tuple[str, float]]:
+    """Probe nominal fps for each clip path."""
+    result: List[Tuple[str, float]] = []
+    for path in paths:
+        if not path or not os.path.isfile(path):
+            continue
+        fps = probe_fps(ffmpeg_cmd, path, ffprobe_cmd) or 24.0
+        if abs(fps - round(fps)) < 0.05:
+            fps = float(int(round(fps)))
+        result.append((path, fps))
+    return result
+
+
+def detect_fps_mismatch(fps_values: List[float], tolerance: float = 0.1) -> bool:
+    """Return True when fps values differ by more than tolerance."""
+    if len(fps_values) < 2:
+        return False
+    reference = fps_values[0]
+    return any(abs(fps - reference) > tolerance for fps in fps_values[1:])
+
+
+def probe_clips_resolution(
+    ffmpeg_cmd: str,
+    paths: List[str],
+    ffprobe_cmd: Optional[str] = None,
+) -> List[Tuple[str, Tuple[int, int]]]:
+    """Probe (width, height) for each clip's primary video stream."""
+    probe = ffprobe_cmd or resolve_ffprobe_cmd(ffmpeg_cmd)
+    result: List[Tuple[str, Tuple[int, int]]] = []
+    for path in paths:
+        if not path or not os.path.isfile(path):
+            continue
+        res = probe_resolution(ffmpeg_cmd, path, probe)
+        if res:
+            result.append((path, res))
+    return result
+
+
+def detect_resolution_mismatch(
+    resolutions: List[Tuple[int, int]],
+) -> bool:
+    """Return True when clip resolutions differ."""
+    if len(resolutions) < 2:
+        return False
+    reference = resolutions[0]
+    return any(res != reference for res in resolutions[1:])
+
+
+def probe_video_start_time(
+    ffmpeg_cmd: str,
+    input_path: str,
+    ffprobe_cmd: Optional[str] = None,
+) -> float:
+    """Return start_time of the primary video stream (0.0 if unknown)."""
+    probe = ffprobe_cmd or resolve_ffprobe_cmd(ffmpeg_cmd)
+    if not probe:
+        return 0.0
+    try:
+        result = subprocess.run(
+            [
+                probe, '-v', 'error', '-select_streams', 'v:0',
+                '-show_entries', 'stream=start_time',
+                '-of', 'default=noprint_wrappers=1:nokey=1',
+                input_path,
+            ],
+            capture_output=True, text=True,
+            creationflags=_subprocess_flags(), timeout=60,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return float(result.stdout.strip())
+    except (subprocess.TimeoutExpired, ValueError, FileNotFoundError):
+        pass
+    return 0.0
+
+
+def probe_has_extra_video_streams(
+    ffmpeg_cmd: str,
+    input_path: str,
+    ffprobe_cmd: Optional[str] = None,
+) -> bool:
+    """True when file has attached_pic or more than one video stream."""
+    probe = ffprobe_cmd or resolve_ffprobe_cmd(ffmpeg_cmd)
+    if not probe:
+        return False
+    try:
+        result = subprocess.run(
+            [
+                probe, '-v', 'error', '-show_streams', '-select_streams', 'v',
+                '-of', 'json', input_path,
+            ],
+            capture_output=True, text=True,
+            creationflags=_subprocess_flags(), timeout=60,
+        )
+        if result.returncode != 0 or not result.stdout.strip():
+            return False
+        data = json.loads(result.stdout)
+        streams = data.get('streams') or []
+        if len(streams) > 1:
+            return True
+        for stream in streams:
+            disposition = stream.get('disposition') or {}
+            if int(disposition.get('attached_pic', 0)):
+                return True
+    except (subprocess.TimeoutExpired, ValueError, FileNotFoundError, json.JSONDecodeError):
+        pass
+    return False
+
+
+def clip_needs_combine_normalize(
+    *,
+    probed_fps: float,
+    probed_width: int,
+    probed_height: int,
+    start_time: float,
+    target_fps: float,
+    target_width: int,
+    target_height: int,
+    fps_tolerance: float = 0.1,
+    start_tolerance: float = 0.01,
+) -> bool:
+    """True when a clip must be re-encoded before concat demuxer merge."""
+    if abs(probed_fps - target_fps) > fps_tolerance:
+        return True
+    tw, th = align_even(target_width, target_height)
+    pw, ph = align_even(probed_width, probed_height)
+    if pw != tw or ph != th:
+        return True
+    if start_time > start_tolerance:
+        return True
+    return False
+
+
+def normalize_clip_for_combine(
+    ffmpeg_cmd: str,
+    input_path: str,
+    output_path: str,
+    target_fps: float,
+    target_width: int,
+    target_height: int,
+    encode_opts: Optional[Dict[str, str]] = None,
+    timeout: int = 600,
+) -> Tuple[bool, str]:
+    """Re-encode clip to target CFR, resolution, and zero-based timestamps."""
+    fps_str = _format_fps_for_ffmpeg(target_fps)
+    width, height = align_even(target_width, target_height)
+    opts = {**DEFAULT_ENCODE_OPTS, **(encode_opts or {})}
+    vf = (
+        f'fps={fps_str},'
+        f'scale={width}:{height}:force_original_aspect_ratio=decrease,'
+        f'pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,'
+        f'setsar=1,setpts=PTS-STARTPTS'
+    )
+    cmd = [
+        ffmpeg_cmd, '-y', '-i', input_path,
+        '-map', '0:v:0', '-map', '0:a?',
+        '-vf', vf,
+        '-af', 'asetpts=PTS-STARTPTS',
+        '-r', fps_str, '-fps_mode', 'cfr',
+        '-c:v', opts['video_codec'],
+        '-preset', opts['preset'],
+        '-crf', opts['crf'],
+        '-c:a', opts['audio_codec'],
+        '-b:a', opts['audio_bitrate'],
+        '-movflags', '+faststart',
+        output_path,
+    ]
+    return run_ffmpeg(cmd, timeout=timeout)
+
+
+def resolve_combine_target_fps(
+    ffmpeg_cmd: str,
+    paths: List[str],
+    *,
+    mode: str = 'first',
+    explicit_fps: Optional[float] = None,
+    use_first_video_fps: bool = True,
+    ffprobe_cmd: Optional[str] = None,
+) -> float:
+    """Target CFR for combine export (first clip, highest, or explicit fps)."""
+    if not use_first_video_fps and explicit_fps and explicit_fps > 0:
+        fps = explicit_fps
+        if abs(fps - round(fps)) < 0.05:
+            return float(int(round(fps)))
+        return fps
+    probed = probe_clips_fps(ffmpeg_cmd, paths, ffprobe_cmd)
+    if not probed:
+        return 24.0
+    fps_values = [fps for _, fps in probed]
+    if mode == 'highest':
+        target = max(fps_values)
+    else:
+        target = fps_values[0]
+    if abs(target - round(target)) < 0.05:
+        return float(int(round(target)))
+    return target
+
+
+def prepare_clips_for_combine(
+    ffmpeg_cmd: str,
+    paths: List[str],
+    target_fps: float,
+    encode_opts: Optional[Dict[str, str]] = None,
+    temp_dir: Optional[str] = None,
+    tolerance: float = 0.1,
+    timeout: int = 3600,
+    target_width: Optional[int] = None,
+    target_height: Optional[int] = None,
+    on_progress: Optional[Callable[[int, int, str], None]] = None,
+    log_fn: Optional[Callable[[str], None]] = None,
+) -> Tuple[List[str], Callable[[], None]]:
+    """
+    Re-encode clips that do not match target fps/size/timestamps before concat.
+
+    When any clip in the batch differs, ALL clips are normalized so the concat
+    demuxer receives uniform sources (avoids freeze after the first clip).
+
+    Returns (prepared_paths, cleanup_callback).
+    """
+    if not paths:
+        return [], lambda: None
+
+    if len(paths) > 10:
+        timeout = max(timeout, 1200)
+
+    work_dir = temp_dir
+    owns_temp_dir = False
+    if not work_dir:
+        work_dir = tempfile.mkdtemp(prefix='combine_prep_')
+        owns_temp_dir = True
+    else:
+        os.makedirs(work_dir, exist_ok=True)
+
+    temp_files: List[str] = []
+    prepared: List[str] = []
+    ffprobe = resolve_ffprobe_cmd(ffmpeg_cmd)
+    fps_by_path = {path: fps for path, fps in probe_clips_fps(ffmpeg_cmd, paths, ffprobe)}
+    normalize_size = target_width is not None and target_height is not None
+    if normalize_size:
+        target_width, target_height = align_even(target_width, target_height)
+
+    def _clip_needs_prep(path: str) -> bool:
+        if not path or not os.path.isfile(path):
+            return False
+        probed_fps = fps_by_path.get(path, target_fps)
+        needs = abs(probed_fps - target_fps) > tolerance
+        if probe_has_extra_video_streams(ffmpeg_cmd, path, ffprobe):
+            needs = True
+        if normalize_size:
+            res = probe_resolution(ffmpeg_cmd, path, ffprobe)
+            if not res:
+                return True
+            probed_width, probed_height = res
+            start_time = probe_video_start_time(ffmpeg_cmd, path, ffprobe)
+            if clip_needs_combine_normalize(
+                probed_fps=probed_fps,
+                probed_width=probed_width,
+                probed_height=probed_height,
+                start_time=start_time,
+                target_fps=target_fps,
+                target_width=target_width,
+                target_height=target_height,
+                fps_tolerance=tolerance,
+            ):
+                needs = True
+        return needs
+
+    normalize_all = any(_clip_needs_prep(path) for path in paths)
+    valid_paths = [p for p in paths if p and os.path.isfile(p)]
+    reencode_count = len(valid_paths) if normalize_all else sum(
+        1 for path in valid_paths if _clip_needs_prep(path)
+    )
+    pass_count = len(valid_paths) - reencode_count
+
+    if log_fn:
+        log_fn(
+            f'[INFO] Prep plan: {len(valid_paths)} clips, '
+            f'{reencode_count} to re-encode, {pass_count} pass-through',
+        )
+        if normalize_all and normalize_size:
+            log_fn(
+                f'[INFO] Normalizing all {len(valid_paths)} clips to '
+                f'{target_width}x{target_height} @ {format_fps_label(target_fps)} fps '
+                f'(batch has mixed sources)',
+            )
+        elif normalize_all:
+            log_fn(
+                f'[INFO] Normalizing all {len(valid_paths)} clips to '
+                f'{format_fps_label(target_fps)} fps (batch has mixed sources)',
+            )
+
+    def _cleanup() -> None:
+        for temp_path in temp_files:
+            try:
+                if os.path.isfile(temp_path):
+                    os.remove(temp_path)
+            except OSError:
+                pass
+        if owns_temp_dir and work_dir and os.path.isdir(work_dir):
+            try:
+                shutil.rmtree(work_dir)
+            except OSError:
+                pass
+
+    total = len(paths)
+    for index, path in enumerate(paths):
+        if not path or not os.path.isfile(path):
+            prepared.append(path)
+            continue
+        needs_normalize = _clip_needs_prep(path)
+        if not needs_normalize and not normalize_all:
+            prepared.append(path)
+            continue
+
+        basename = os.path.basename(path)
+        if on_progress:
+            on_progress(index + 1, total, f'normalizing {basename}')
+
+        base = os.path.splitext(basename)[0]
+        safe_base = re.sub(r'[^\w.\-]+', '_', base)[:80]
+        out_path = os.path.join(work_dir, f'{index:04d}_{safe_base}_prep.mp4')
+        if normalize_size:
+            ok, err = normalize_clip_for_combine(
+                ffmpeg_cmd, path, out_path,
+                target_fps=target_fps,
+                target_width=target_width,
+                target_height=target_height,
+                encode_opts=encode_opts, timeout=timeout,
+            )
+        else:
+            ok, err = normalize_video_constant_fps(
+                ffmpeg_cmd, path, out_path,
+                target_fps=target_fps, encode_opts=encode_opts, timeout=timeout,
+            )
+        if not ok:
+            _cleanup()
+            raise RuntimeError(
+                err or f'Failed to normalize clip {index + 1}/{total}: {basename}',
+            )
+        temp_files.append(out_path)
+        prepared.append(out_path)
+
+    return prepared, _cleanup
+
+
 def _concat_external_audio_cmd(
     ffmpeg_cmd: str,
     concat_file: str,
@@ -1717,6 +2074,49 @@ def _concat_external_audio_cmd(
         ])
     cmd.extend(['-y', output_path])
     return cmd
+
+
+def _concat_video_only_an_cmd(
+    ffmpeg_cmd: str,
+    concat_file: str,
+    output_path: str,
+    target_fps: float,
+    encode_opts: Optional[Dict[str, str]] = None,
+) -> List[str]:
+    """Concat demuxer to CFR MP4 with no audio (for external-audio mux step)."""
+    opts = {**DEFAULT_ENCODE_OPTS, **(encode_opts or {})}
+    fps_str = _format_fps_for_ffmpeg(target_fps)
+    return [
+        ffmpeg_cmd, '-f', 'concat', '-safe', '0', '-i', concat_file,
+        '-vf', f'fps={fps_str}', '-r', fps_str, '-fps_mode', 'cfr',
+        '-an',
+        '-c:v', opts['video_codec'],
+        '-crf', opts['crf'],
+        '-preset', opts['preset'],
+        '-movflags', '+faststart',
+        '-y', output_path,
+    ]
+
+
+def _mux_external_audio_cmd(
+    ffmpeg_cmd: str,
+    video_path: str,
+    audio_path: str,
+    output_path: str,
+    *,
+    audio_bitrate: str = '192k',
+) -> List[str]:
+    """Mux external audio onto a video-only MP4."""
+    return [
+        ffmpeg_cmd, '-y',
+        '-i', video_path,
+        '-i', audio_path,
+        '-map', '0:v:0', '-map', '1:a:0',
+        '-c:v', 'copy',
+        '-c:a', 'aac', '-b:a', audio_bitrate,
+        '-shortest', '-movflags', '+faststart',
+        output_path,
+    ]
 
 
 def _concat_video_only_cfr_cmd(
@@ -1829,15 +2229,31 @@ def concat_videos_with_external_audio(
     try:
         write_concat_list(video_paths, concat_file)
         if constant_fps is not None:
-            cmd = _concat_external_audio_cmd(
-                ffmpeg_cmd, concat_file, audio_path, output_path,
-                copy_video=False, audio_bitrate=audio_bitrate, target_fps=target_fps,
-                encode_opts=encode_opts,
-            )
-            ok, err = run_ffmpeg(cmd, timeout=timeout)
-            if ok and os.path.isfile(output_path):
-                return True, ''
-            return False, err or 'Merge export failed'
+            fd, temp_video = tempfile.mkstemp(suffix='_concat_video.mp4', prefix='combine_')
+            os.close(fd)
+            cleanup_temp_video = True
+            try:
+                cmd_video = _concat_video_only_an_cmd(
+                    ffmpeg_cmd, concat_file, temp_video, constant_fps,
+                    encode_opts=encode_opts,
+                )
+                ok, err = run_ffmpeg(cmd_video, timeout=timeout)
+                if not ok or not os.path.isfile(temp_video):
+                    return False, err or 'Video concat failed'
+                cmd_mux = _mux_external_audio_cmd(
+                    ffmpeg_cmd, temp_video, audio_path, output_path,
+                    audio_bitrate=audio_bitrate,
+                )
+                ok2, err2 = run_ffmpeg(cmd_mux, timeout=timeout)
+                if ok2 and os.path.isfile(output_path):
+                    return True, ''
+                return False, err2 or 'External audio mux failed'
+            finally:
+                if cleanup_temp_video and os.path.isfile(temp_video):
+                    try:
+                        os.remove(temp_video)
+                    except OSError:
+                        pass
         cmd = _concat_external_audio_cmd(
             ffmpeg_cmd, concat_file, audio_path, output_path,
             copy_video=True, audio_bitrate=audio_bitrate,
@@ -1925,9 +2341,12 @@ def build_mux_audio_segment_cmd(
     output_path: str,
     *,
     audio_bitrate: str = '192k',
+    target_fps: Optional[float] = None,
+    encode_opts: Optional[Dict[str, str]] = None,
+    reencode_video: bool = False,
 ) -> List[str]:
-    """Mux an MP3 slice onto a video copy (video stream copy, replace audio)."""
-    return [
+    """Mux an MP3 slice onto a video (stream copy or CFR re-encode when requested)."""
+    cmd = [
         ffmpeg_cmd, '-y',
         '-i', video_path,
         '-ss', str(audio_start_sec),
@@ -1935,13 +2354,28 @@ def build_mux_audio_segment_cmd(
         '-i', audio_path,
         '-map', '0:v:0',
         '-map', '1:a:0',
-        '-c:v', 'copy',
+    ]
+    if reencode_video and target_fps and target_fps > 0:
+        fps_str = _format_fps_for_ffmpeg(target_fps)
+        opts = {**DEFAULT_ENCODE_OPTS, **(encode_opts or {})}
+        cmd.extend([
+            '-vf', f'fps={fps_str}',
+            '-r', fps_str,
+            '-fps_mode', 'cfr',
+            '-c:v', opts['video_codec'],
+            '-preset', opts['preset'],
+            '-crf', opts['crf'],
+        ])
+    else:
+        cmd.extend(['-c:v', 'copy'])
+    cmd.extend([
         '-c:a', 'aac',
         '-b:a', audio_bitrate,
         '-shortest',
         '-movflags', '+faststart',
         output_path,
-    ]
+    ])
+    return cmd
 
 
 def export_videos_with_sequential_audio(
@@ -1952,6 +2386,9 @@ def export_videos_with_sequential_audio(
     audio_bitrate: str = '192k',
     subdir: str = AUDIO_ADDED_SUBDIR,
     timeout: int = 600,
+    target_fps: Optional[float] = None,
+    encode_opts: Optional[Dict[str, str]] = None,
+    fps_tolerance: float = 0.1,
     on_progress: Optional[Callable[[int, int, str], None]] = None,
     log_fn: Optional[Callable[[str], None]] = None,
 ) -> Tuple[int, int, str]:
@@ -1959,8 +2396,12 @@ def export_videos_with_sequential_audio(
     Write per-clip copies with sequential MP3 audio into each source audio_added/ folder.
 
     Also writes a matching .mp3 snippet (same segment) next to each exported video.
-    Timing is driven by each input video's probed duration. Returns
-    (ok_count, fail_count, error_summary).
+    Timing is driven by each input video's probed duration.
+
+    When target_fps is set, video is re-encoded to that CFR only if the source clip's
+    probed fps differs (within fps_tolerance). Otherwise video stream copy is used.
+
+    Returns (ok_count, fail_count, error_summary).
     """
     if not video_paths:
         return 0, 0, 'No video clips'
@@ -1983,9 +2424,21 @@ def export_videos_with_sequential_audio(
         audio_start = seg['audio_start']
         clip_dur = seg['clip_dur']
         basename = os.path.basename(video_path)
+        source_fps = probe_fps(ffmpeg_cmd, video_path)
+        reencode_video = False
+        if target_fps and target_fps > 0:
+            if source_fps is None or source_fps <= 0:
+                reencode_video = True
+            elif abs(source_fps - target_fps) > fps_tolerance:
+                reencode_video = True
+
+        fps_note = ''
+        if reencode_video and target_fps:
+            src_label = format_fps_label(source_fps) if source_fps else '?'
+            fps_note = f', video {src_label}->{format_fps_label(target_fps)} fps'
         message = (
             f'clip {index}/{total}: {basename} '
-            f'(audio {audio_start:.1f}-{audio_start + clip_dur:.1f}s)'
+            f'(audio {audio_start:.1f}-{audio_start + clip_dur:.1f}s{fps_note})'
         )
         if on_progress:
             on_progress(index, total, message)
@@ -2009,6 +2462,9 @@ def export_videos_with_sequential_audio(
             clip_dur,
             output_path,
             audio_bitrate=audio_bitrate,
+            target_fps=target_fps,
+            encode_opts=encode_opts,
+            reencode_video=reencode_video,
         )
         ok_video, err_video = run_ffmpeg(cmd, timeout=timeout)
         video_ok = ok_video and os.path.isfile(output_path)

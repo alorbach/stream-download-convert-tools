@@ -69,6 +69,10 @@ Output: MP3 files in the converted folder.
 
 Simple concat (no transitions) **re-encodes video at constant frame rate** from the first clip (usually 24 fps), then muxes clip or external audio. Stream copy is no longer used for export, because many short clips otherwise show ~23.9 fps average in the combined file.
 
+**Mixed frame rates:** When clips differ (e.g. 24p then 30p), export probes each clip and normalizes mismatched clips to the target fps before merge. Default target is the **first clip's fps** (same pattern as resolution). Use **Output FPS > Configure...** to pick a fixed rate (24/25/30/60). Frame resampling preserves duration and audio sync; 30p down to 24p may look slightly less smooth. Transitions use the same normalization so xfade timing stays correct.
+
+**Mixed resolutions or codecs:** Upscaled clips (e.g. HEVC 1376x928 after H.264 1168x768) are re-encoded to the output size (auto = first clip) before concat. When the batch mixes codecs, sizes, or frame rates, **all** clips are normalized (not only the mismatched ones) so concat stays reliable. Without this step, concat can drop video from later clips while audio continues (frozen last frame). External-audio exports concat video-only first, then mux the MP3.
+
 ---
 
 ## Split and Chunks
